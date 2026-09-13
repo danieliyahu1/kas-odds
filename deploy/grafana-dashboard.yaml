@@ -34,7 +34,7 @@ data:
           "id": 1,
           "title": "HTTP request rate by route",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
           "targets": [
@@ -45,7 +45,7 @@ data:
           "id": 2,
           "title": "HTTP error rate by status",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
           "targets": [
@@ -56,7 +56,7 @@ data:
           "id": 3,
           "title": "HTTP request p95 latency",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
           "targets": [
@@ -67,7 +67,7 @@ data:
           "id": 4,
           "title": "Kaspa wRPC calls by outcome",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
           "targets": [
@@ -78,7 +78,7 @@ data:
           "id": 5,
           "title": "Backend store operations by outcome",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
           "targets": [
@@ -89,7 +89,7 @@ data:
           "id": 6,
           "title": "Matchmaking backlog and relay entries",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": {}, "overrides": [] },
           "targets": [
@@ -101,7 +101,7 @@ data:
           "id": 7,
           "title": "Resident memory",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
           "targets": [
@@ -112,7 +112,7 @@ data:
           "id": 8,
           "title": "Game lifecycle events",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": {}, "overrides": [] },
           "targets": [
@@ -123,7 +123,7 @@ data:
           "id": 9,
           "title": "Games by current state",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": { "unit": "games" }, "overrides": [] },
           "targets": [
