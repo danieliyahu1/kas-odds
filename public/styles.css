@@ -130,8 +130,10 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .result.winner .primary { background: var(--teal-deep); color: var(--teal); }
 .result.winner .primary:hover { background: #0a302b; color: var(--teal-bright); }
 
-.feedback-button { display: inline-flex; align-items: center; padding: 7px 14px; border: 1px solid rgba(112,199,186,.5); border-radius: 999px; background: rgba(112,199,186,.14); color: var(--teal); font-size: 12px; font-weight: 800; letter-spacing: .01em; transition: background .15s ease, border-color .15s ease, color .15s ease; }
-.feedback-button:hover { border-color: var(--teal-bright); background: rgba(112,199,186,.24); color: var(--teal-bright); }
+.feedback-button, .telegram-button { display: inline-flex; align-items: center; padding: 7px 14px; border: 1px solid rgba(112,199,186,.5); border-radius: 999px; background: rgba(112,199,186,.14); color: var(--teal); font-size: 12px; font-weight: 800; letter-spacing: .01em; transition: background .15s ease, border-color .15s ease, color .15s ease; }
+.feedback-button:hover, .telegram-button:hover { border-color: var(--teal-bright); background: rgba(112,199,186,.24); color: var(--teal-bright); }
+a.telegram-button { text-decoration: none; padding: 7px; }
+a.telegram-button svg { display: block; width: 16px; height: 16px; }
 .feedback-dialog { width: min(100% - 32px, 440px); max-height: min(100% - 48px, 520px); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); padding: 0; }
 .feedback-dialog::backdrop { background: rgba(4, 8, 10, .75); }
 .feedback-form { padding: 28px; }
