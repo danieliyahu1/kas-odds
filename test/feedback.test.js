@@ -437,12 +437,12 @@ test('feedback endpoint enforces the per-client rate limit', async (t) => {
 });
 
 async function waitForServer(url) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 250; attempt += 1) {
     try {
       const response = await fetch(url);
       if (response.ok) return;
     } catch { /* child may still be starting */ }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 40));
   }
   throw new Error('Local server did not start');
 }

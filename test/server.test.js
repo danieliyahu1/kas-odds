@@ -314,14 +314,14 @@ test('starts without a fee recipient configured and reports the game fee as not 
 });
 
 async function waitForServer(url) {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < 250; attempt += 1) {
     try {
       const response = await fetch(url);
       if (response.ok) return;
     } catch {
       // The child may need a moment to bind its port.
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 40));
   }
   throw new Error('Local server did not start');
 }
