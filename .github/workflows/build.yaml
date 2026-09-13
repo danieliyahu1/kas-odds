@@ -157,4 +157,22 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add deploy/deployment.yaml
           git commit -m "deploy: sha-${GITHUB_SHA}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          # Pushing the manifest can race a concurrent run's identical commit,
+          # which GitHub surfaces as "fatal error in commit_refs". Rebase onto
+          # whatever advanced main and retry a few times; if another run really
+          # owns the next manifest, defer to it instead of failing.
+          for attempt in 1 2 3 4; do
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            echo "push attempt ${attempt} was rejected; rebasing and retrying"
+            git fetch origin "${GITHUB_REF_NAME}"
+            if git pull --rebase origin "${GITHUB_REF_NAME}"; then
+              git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "origin/${GITHUB_REF_NAME} conflicts; a concurrent run owns deployment"
+              exit 0
+            fi
+          done
+          exit 1
