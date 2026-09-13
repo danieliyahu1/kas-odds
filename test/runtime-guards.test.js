@@ -9,7 +9,8 @@ test('metrics render valid Prometheus text with bounded labels and no identities
   metrics.recordHttp({ method: 'POST', route: '/api/matchmaking/:id/:action', status: 502, durationSeconds: 0.2 });
   metrics.recordRpc({ operation: 'submitSafeJson', outcome: 'error', durationSeconds: 1.5 });
   metrics.setMatchmakingWaiting(2);
-  metrics.setGameStatusCounts({ broadcast: 3, joined: 1, settled: 2 });
+  metrics.recordPageVisit();
+  metrics.recordPageVisit();
 
   const text = metrics.render();
   assert.match(text, /# TYPE kaspa_http_requests_total counter/);
@@ -19,9 +20,8 @@ test('metrics render valid Prometheus text with bounded labels and no identities
   assert.match(text, /kaspa_http_request_duration_seconds_bucket\{le="\+Inf",.*\} 1/);
   assert.match(text, /kaspa_rpc_requests_total\{operation="submitSafeJson",outcome="error"\} 1/);
   assert.match(text, /kaspa_matchmaking_waiting 2/);
-  assert.match(text, /kaspa_games_total\{status="broadcast"\} 3/);
-  assert.match(text, /kaspa_games_total\{status="joined"\} 1/);
-  assert.match(text, /kaspa_games_total\{status="settled"\} 2/);
+  assert.match(text, /kaspa_page_visits_total 2/);
+  assert.doesNotMatch(text, /kaspa_games_total/);
   // No wallet addresses, game ids, transaction ids, or raw URLs may leak.
   assert.doesNotMatch(text, /kaspatest:|[0-9a-f]{64}/);
 });

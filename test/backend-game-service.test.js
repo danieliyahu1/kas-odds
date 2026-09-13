@@ -149,22 +149,18 @@ test('network status is served without touching the node or exposing a browser w
   assert.equal(status.wrpcUrl, undefined);
 });
 
-test('refreshTelemetry publishes game state and matchmaking gauges', async (t) => {
+test('refreshTelemetry publishes the matchmaking backlog gauge and no game-state gauge', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   const metrics = new Metrics();
   const service = new BackendGameService({ rpc: {}, store, metrics, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
-  await store.saveGame({ gameId: 'a'.repeat(64), status: 'broadcast' });
-  await store.saveGame({ gameId: 'b'.repeat(64), status: 'waiting_for_player_b' });
-  await store.saveGame({ gameId: 'c'.repeat(64), status: 'settled' });
+  await service.joinMatchmaking({ address: 'kaspatest:first', publicKey: 'a'.repeat(64) });
   await service.refreshTelemetry();
 
   const text = metrics.render();
-  assert.match(text, /kaspa_games_total\{status="broadcast"\} 1/);
-  assert.match(text, /kaspa_games_total\{status="waiting_for_player_b"\} 1/);
-  assert.match(text, /kaspa_games_total\{status="settled"\} 1/);
-  assert.doesNotMatch(text, /kaspa_games_total\{status="settled"\} 2/);
+  assert.match(text, /kaspa_matchmaking_waiting 1/);
+  assert.doesNotMatch(text, /kaspa_games_total/);
 });
 
 async function matchRoles(service, matchId) {

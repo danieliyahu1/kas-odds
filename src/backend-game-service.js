@@ -819,23 +819,14 @@ const candidates = fundingCandidates(ordinary, targetSompi);
     }
   }
 
-  async #recordGameStatusCounts() {
-    try {
-      this.metrics.setGameStatusCounts(await this.store.countGamesByStatus());
-    } catch {
-      // Backlog is best-effort telemetry; never let it affect a request.
-    }
-  }
-
   async #saveGame(record) {
     await this.store.saveGame(record);
-    await this.#recordGameStatusCounts();
   }
 
-  // Recompute the matchmaking and game-state gauges from the store. Called on
-  // startup and periodically so the gauges stay correct across restarts.
+  // Recompute the matchmaking gauge from the store. Called on startup and
+  // periodically so the gauge stays correct across restarts.
   async refreshTelemetry() {
-    await Promise.all([this.#recordMatchmakingBacklog(), this.#recordGameStatusCounts()]);
+    await this.#recordMatchmakingBacklog();
   }
 
   #matchPlayer(match, address) {

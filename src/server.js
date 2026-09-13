@@ -235,6 +235,7 @@ async function routeRequest(req, res, pathname) {
   }
 
   if (req.method === 'GET' && (pathname === '/' || pathname === '/host' || pathname === '/rival' || pathname === '/join' || pathname === '/game')) {
+    if (pathname === '/') metrics.recordPageVisit();
     return serveFile(publicRoot, 'index.html', res);
   }
   if (req.method === 'GET' && /^\/(app|styles)\.\w+$/.test(pathname)) {

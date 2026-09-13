@@ -76,25 +76,6 @@ test('persists games and transaction preparations', async (t) => {
   assert.equal(await store.loadPrepared('missing'), null);
 });
 
-test('counts games by their current status', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-count-'));
-  const filePath = join(directory, 'games.json');
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const store = new BackendGameStore(filePath);
-
-  await store.saveGame({ gameId: 'a'.repeat(64), status: 'broadcast' });
-  await store.saveGame({ gameId: 'b'.repeat(64), status: 'waiting_for_player_b' });
-  await store.saveGame({ gameId: 'c'.repeat(64), status: 'waiting_for_player_b' });
-  await store.saveGame({ gameId: 'd'.repeat(64), status: 'settled' });
-
-  assert.deepEqual(await store.countGamesByStatus(), {
-    broadcast: 1,
-    waiting_for_player_b: 2,
-    settled: 1,
-  });
-  assert.deepEqual(await store.countGamesByStatus(), await store.countGamesByStatus(), 'a scan is stable across reads');
-});
-
 test('reloads stored data from disk after a new instance', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-store-'));
   const filePath = join(directory, 'games.json');
