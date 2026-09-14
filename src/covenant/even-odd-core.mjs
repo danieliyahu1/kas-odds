@@ -12,7 +12,7 @@ import { blake2b256 } from '../hashes/blake2b.mjs';
 import { blake3 } from '../hashes/blake3.mjs';
 import { bech32Encode, bech32Decode } from '../hashes/bech32.mjs';
 import { hexToBytes, bytesToHex } from '../hashes/hex.mjs';
-import { ProtocolError } from '../protocol.js';
+import { MIN_STAKE_SOMPI, ProtocolError } from '../protocol.js';
 
 export { hexToBytes, bytesToHex };
 
@@ -118,8 +118,8 @@ function buildStateScript(game) {
   const creatorCommit = normalizeBytes(game.creatorCommit, 32, 'creatorCommit');
   const joinerPubkey = game.joinerPubkey === undefined ? null : normalizeBytes(game.joinerPubkey, 32, 'joinerPubkey');
   const joinerCommit = game.joinerCommit === undefined ? ZERO32 : normalizeBytes(game.joinerCommit, 32, 'joinerCommit');
-  if (typeof game.stakeSompi !== 'bigint' || game.stakeSompi <= 0n) {
-    throw new ProtocolError('INVALID_STATE', 'stakeSompi must be a positive bigint');
+  if (typeof game.stakeSompi !== 'bigint' || game.stakeSompi < MIN_STAKE_SOMPI) {
+    throw new ProtocolError('INVALID_STATE', 'stakeSompi must be at least 1 KAS');
   }
   if (typeof game.deadlineDaa !== 'bigint' || game.deadlineDaa <= 0n) {
     throw new ProtocolError('INVALID_STATE', 'deadlineDaa must be a positive bigint');

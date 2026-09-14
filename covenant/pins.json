@@ -8,10 +8,10 @@
   },
   "covenant": {
     "source": "covenant/even_odd.sil",
-    "sourceSha256": "6df64c3c5a4cdf800f3b5dff5b09eceee9379d50618a5c28c3328b7f439dd24e",
+    "sourceSha256": "4d15a3236dcf1b4929c02cb6e2c13305288d0f3cfc7e794569841e1e4a680850",
     "artifact": "covenant/even_odd.template.artifact.json",
-    "artifactSha256": "44e6f9360cd6947727d4d6f182f8b539e0aa0e251d00d5c53ed668e97adea752",
-    "templateHash": "51e3313a139ddbb6ef70438513c3e9b89ee582800f59759344bbcdd70e040c38",
+    "artifactSha256": "5ccea5edcc53c58656d4055d70333c94b49d32411901f07a0c66e5d2f0bd33ae",
+    "templateHash": "305aa97a90264b315ec19d6096bd9c4984c4d235596dbb5926fe4e423f61bae5",
     "constructorArgs": "covenant/constructor-args.json",
     "constructorArgsSha256": "ac523c6e2a6b512d2eb70de9bdce7c7557ed7d4d826df8734c75357f6cd40dd5"
   },

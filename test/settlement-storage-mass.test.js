@@ -50,7 +50,7 @@ function gameRecord() {
   const request = serializedRequest();
   return {
     gameId: 'ff'.repeat(32),
-    protocolVersion: 'EO/v4',
+    protocolVersion: 'EO/v5',
     status: 'first_revealed',
     request,
     join: {

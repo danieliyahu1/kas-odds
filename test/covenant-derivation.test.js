@@ -31,10 +31,10 @@ test('blake2b-256 multi-block matches the covenant-oracle digest', () => {
   const creatorPubkey = new Array(32).fill(7);
   const creatorCommit = new Array(32).fill(9);
   const inst = deriveGameInstance({ creatorPubkey, creatorCommit, stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash });
-  assert.equal(inst.redeemScript.length, 1595);
+   assert.equal(inst.redeemScript.length, 1640);
   assert.equal(
     Buffer.from(blake2b256(Uint8Array.from(inst.redeemScript))).toString('hex'),
-    '1e817cb9795b1dbf0343a5be4184b428625311c5d413cf582ea7e953ca91b5b7'
+     'ac8f307576f0b57341ba3611d7bd77abed8436e0b2b0fdc588ebfb807d330ec2'
   );
 });
 
@@ -69,9 +69,9 @@ test('bech32 decode round-trips and rejects a corrupt checksum', () => {
 test('pinned template hash verifies against the compiled artifact', () => {
   const v = verifyTemplateHash();
   assert.equal(v.computed, EVEN_ODD_TEMPLATE.templateHash);
-  assert.equal(v.computed, '51e3313a139ddbb6ef70438513c3e9b89ee582800f59759344bbcdd70e040c38');
+   assert.equal(v.computed, '305aa97a90264b315ec19d6096bd9c4984c4d235596dbb5926fe4e423f61bae5');
   assert.equal(v.prefixLen, 1);
-  assert.equal(v.suffixLen, 1342);
+   assert.equal(v.suffixLen, 1387);
   assert.equal(v.state.length, 252);
 });
 
@@ -98,10 +98,10 @@ test('per-game instance matches the covenant-oracle P2SH address', () => {
   const inst = deriveGameInstance({ creatorPubkey, creatorCommit, stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash });
   // Governed by the Rust covenant-oracle: encode_runtime_state_script + script_parts
   // + Address::new(Testnet, ScriptHash, blake2b256(instance)).
-  assert.equal(inst.address, 'kaspatest:pq0gzl9e09d3m0crgwjmusvyks5xy5c3ch2p8n6c96n7j572jx6mwtk3vz2gq');
+   assert.equal(inst.address, 'kaspatest:pzkg7vr4wmct2u6phgmpr4aaw747mppkuzetplw93r4lhqraxv8vyaawuw6mv');
   assert.equal(
     inst.p2shScript.toString('hex'),
-    'aa201e817cb9795b1dbf0343a5be4184b428625311c5d413cf582ea7e953ca91b5b787'
+     'aa20ac8f307576f0b57341ba3611d7bd77abed8436e0b2b0fdc588ebfb807d330ec287'
   );
   assert.equal(inst.templateHash, EVEN_ODD_TEMPLATE.templateHash);
   assert.equal(inst.address.startsWith('kaspatest:'), true);
@@ -118,6 +118,7 @@ test('different game state produces a different covenant address', () => {
 test('rejects invalid game state', () => {
   assert.throws(() => deriveGameInstance({ creatorPubkey: [1, 2, 3], creatorCommit: new Array(32).fill(9), stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash }));
   assert.throws(() => deriveGameInstance({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: -1n, deadlineDaa: 500000000000n, gameWalletHash }));
+  assert.throws(() => deriveGameInstance({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 99999999n, deadlineDaa: 500000000000n, gameWalletHash }), { code: 'INVALID_STATE' });
 });
 
 function sha256(relativePath) {

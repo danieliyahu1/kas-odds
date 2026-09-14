@@ -26,7 +26,7 @@ test('computes the Rusty Kaspa v2.0.1 covenant-id oracle vector', () => {
   // escrow value, authorizing outpoint txid=0x11*32 index 2.
   const output = {
      value: '100000000',
-     scriptPublicKey: '0000aa201e817cb9795b1dbf0343a5be4184b428625311c5d413cf582ea7e953ca91b5b787',
+     scriptPublicKey: '0000aa20ac8f307576f0b57341ba3611d7bd77abed8436e0b2b0fdc588ebfb807d330ec287',
     covenant: null,
   };
   assert.equal(
@@ -34,7 +34,7 @@ test('computes the Rusty Kaspa v2.0.1 covenant-id oracle vector', () => {
       { transactionId: '11'.repeat(32), index: 2 },
       [{ index: 0, output }],
     ),
-     '7b3408bbc974a97c9e135e2917255c863a3de1acf57d10600e98b423b7f1952b',
+     'b23d429f1b2687673eeb0435521d3f6f0503d1db36d1f39fdec657ea092a52e2',
   );
 });
 
@@ -42,10 +42,10 @@ test('constructs output zero with exact escrow, P2SH, and genesis binding', () =
   const output = createGenesisGameOutput({ request, authorizingInput: 0, authorizingOutpoint: input() });
   assert.deepEqual(output, {
     value: '100000000',
-    scriptPublicKey: '0000aa20f95895ffe92b72057fda2d6c0af2cbf2055a17fe6b886718581e6c79cdc58a1f87',
+     scriptPublicKey: '0000aa2059f141713a835b62fa2a9b863a0ba3f3cbe9040bf96ae3ff4aeca5096000a94c87',
     covenant: {
       authorizingInput: 0,
-      covenantId: '18667006075af6c75c0c5755f211d2035e936f73b91e1391d0d8d73929677a91',
+       covenantId: '9aa23d19a044c258da777994ece7e6b9f7e992f50ff2cce904562b9127734f63',
     },
   });
 });

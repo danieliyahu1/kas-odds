@@ -79,7 +79,7 @@ from SilverScript `v1.0.0` (whose emitted artifact/compiler identifier remains
 `0.1.0`) from `covenant/even_odd.sil` into
 `covenant/even_odd.template.artifact.json`:
 
-- **contract**: `EvenOdd`, template hash `51e3313a…e040c38`
+- **contract**: `EvenOdd`, template hash `305aa97a…f61bae5`
 - **state span**: `offset 1, len 252` (12 fields: `creator_hash`,
   `joiner_hash`, `creator_commit`, `joiner_commit`, `stake`, `deadline_daa`,
   `creator_even`, `creator_choice`, `joiner_choice`, `first_revealer_hash`,

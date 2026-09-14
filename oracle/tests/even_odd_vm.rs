@@ -14,7 +14,7 @@ use kaspa_txscript_errors::TxScriptError;
 use secp256k1::{Keypair, Secp256k1, SecretKey};
 use silverscript_abi::{ArtifactValue, SilAbiArtifact, encode_contract_entry_sig_script, encode_runtime_state_script};
 
-// Protocol v4 economics: each player locks stake, settled games pay the winner
+// Protocol v5 economics: each player locks stake, settled games pay the winner
 // 2*stake - 1% of the total pot (index 0) and the game wallet that 1% (index 1),
 // canceled or no-reveal games refund the full lock.
 const STAKE: u64 = 100_000_000;

@@ -30,6 +30,11 @@ test('converts KAS to exact sompi without floating point', () => {
   assert.throws(() => stakeToSompi(1_000_001), { code: 'INVALID_STAKE' });
 });
 
+test('rejects a per-player stake below 1 KAS', () => {
+  assert.throws(() => playerLockSompi(99_999_999n), { code: 'INVALID_STAKE' });
+  assert.equal(playerLockSompi(100_000_000n), 100_000_000n);
+});
+
 test('uses the full stake as each lock and charges one fee on the total pot', () => {
   const stake = 100_000_000n;
   assert.equal(playerLockSompi(stake), stake);
@@ -71,8 +76,8 @@ test('rejects wrong network and incomplete covenant state', () => {
 test('serializes and parses an invite with only version and game id', () => {
   const gameId = 'b'.repeat(64);
   const invite = serializeInvite({ gameId, origin: 'https://example.test/create' });
-  assert.equal(invite, `https://example.test/join?v=EO%2Fv4&game=${gameId}`);
-  assert.deepEqual(parseInvite(invite, 'https://example.test'), { protocolVersion: 'EO/v4', network: 'testnet-10', gameId, creation: null });
+  assert.equal(invite, `https://example.test/join?v=EO%2Fv5&game=${gameId}`);
+  assert.deepEqual(parseInvite(invite, 'https://example.test'), { protocolVersion: 'EO/v5', network: 'testnet-10', gameId, creation: null });
   assert.throws(() => parseInvite(`${invite}&secret=do-not-accept`, 'https://example.test'), { code: 'INVALID_INVITE' });
 });
 

@@ -1,12 +1,13 @@
 import { bech32Decode } from './hashes/bech32.mjs';
 
-export const PROTOCOL_VERSION = 'EO/v4';
+export const PROTOCOL_VERSION = 'EO/v5';
 export const NETWORK = 'testnet-10';
 export const ADDRESS_PREFIX = 'kaspatest';
 export const MIN_STAKE_KAS = 1;
 export const MAX_STAKE_KAS = 1_000_000;
 export const SOMPI_PER_KAS = 100_000_000n;
-// Protocol v4: the entered stake IS the complete per-player lock — no extra fee
+export const MIN_STAKE_SOMPI = BigInt(MIN_STAKE_KAS) * SOMPI_PER_KAS;
+// Protocol v5: the entered stake IS the complete per-player lock — no extra fee
 // is added on top. Both players fund `stake`, so the joined covenant holds
 // `grossPot = stake * 2`. When a winner exists (second reveal or fallback claim)
 // a single 1% fee of the total pot goes to the game wallet and the winner
@@ -39,7 +40,11 @@ export function stakeToSompi(stakeKas) {
 
 // Complete per-player lock escrowed into the covenant: the entered stake.
 export function playerLockSompi(stakeSompi) {
-  return assertStakeSompi(stakeSompi);
+  const stake = assertStakeSompi(stakeSompi);
+  if (stake < MIN_STAKE_SOMPI) {
+    throw new ProtocolError('INVALID_STAKE', `Stake must be at least ${MIN_STAKE_KAS} KAS`);
+  }
+  return stake;
 }
 
 // Gross pot held by the joined covenant: both players' locks.
