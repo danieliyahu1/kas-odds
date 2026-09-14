@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: kaspa-even-odd
   annotations:
-    kaspa-even-odd/source-revision: sha-2c6a4bba5fcb97516b1c59568a0429fdf54fe7cf
+    kaspa-even-odd/source-revision: sha-60a0ed204019d1d520511a6f651b90602b8ec5dd
 spec:
   replicas: 1
   # The game store is a single JSON file with process-local write locking, so two
@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: kaspa-even-odd
-          image: ghcr.io/danieliyahu1/kaspa-even-odd/kaspa-even-odd@sha256:3eecca57d9e82f2af8133a110820091916316d5d819fcd0fb2b2ea97db403a70
+          image: ghcr.io/danieliyahu1/kaspa-even-odd/kaspa-even-odd@sha256:f188e7b5dccdde33e5d86d03bd52865710c7f96872f8e78002ea53ae9ab8657c
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
