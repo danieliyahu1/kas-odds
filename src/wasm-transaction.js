@@ -1,9 +1,10 @@
 import { blake2b256 } from './hashes/blake2b.mjs';
 import { bytesToHex } from './hashes/hex.mjs';
 import { playerLockSompi, ProtocolError } from './protocol.js';
-import { DEFAULT_RELAY_FLOOR_RATE, computeBudgetMass } from './fee-policy.js';
+import { DEFAULT_RELAY_FLOOR_RATE } from './fee-policy.js';
 import { loadWasmSdk } from './wasm-loader.mjs';
 import { describeTransactionChanges } from './transaction-diagnostics.js';
+import { estimateSignedTransactionMass } from './transaction-mass.js';
 
 export { loadWasmSdk };
 
@@ -31,17 +32,17 @@ export function createWasmGenesisSafeJson({ request, authorizingInput, inputs, c
   const changePreference = change ? validateChangeScript(change.scriptPublicKey) : normalizedInputs[0].scriptPublicKey;
   const inputTotal = normalizedInputs.reduce((sum, entry) => sum + entry.amount, 0n);
 
-  // The fee follows from the WASM-authoritative consensus mass (structural
-  // size only); the local relay floor guarantees the fee also covers the v1
-  // compute cost a schnorr-signed input requires.
+  // Price the final signed size, including the wallet signatures that are not
+  // present until after KasWare receives the prepared transaction.
   const rate = Math.max(Number(feerate ?? 0), Number(relayFloorRate ?? DEFAULT_RELAY_FLOOR_RATE));
 
   const buildAndFee = (outputs) => {
     const transaction = buildWasmTransaction(wasm, authorizingIndex, normalizedInputs, outputs);
-    const mass = Number(wasm.calculateTransactionMass(request.network, transaction)) + computeBudgetMass(normalizedInputs);
+    const transactionJson = JSON.parse(transaction.serializeToSafeJSON());
+    const { mass, assumedSignedInputs } = estimateSignedTransactionMass(request.network, transactionJson);
     const fee = BigInt(Math.ceil(mass * rate));
     const changeValue = inputTotal - playerLockSompi(request.stakeSompi) - fee;
-    return { transaction, mass, fee, changeValue };
+    return { transaction, mass, fee, changeValue, assumedSignedInputs };
   };
 
   const stakeOutput = () => ({ value: String(playerLockSompi(request.stakeSompi)), scriptPublicKey: stakeScript });
@@ -59,6 +60,7 @@ export function createWasmGenesisSafeJson({ request, authorizingInput, inputs, c
   let finalTx = noChange.transaction;
   let fee = noChange.fee;
   let mass = noChange.mass;
+  let assumedSignedInputs = noChange.assumedSignedInputs;
   let changeValue = noChange.changeValue;
   let withChange = false;
   if (noChange.changeValue > 0n) {
@@ -76,6 +78,7 @@ export function createWasmGenesisSafeJson({ request, authorizingInput, inputs, c
     finalTx = built.transaction;
     fee = built.fee;
     mass = built.mass;
+    assumedSignedInputs = built.assumedSignedInputs;
   }
 
   // Guarantee consistency: the tx change output must equal inputTotal - lock - fee.
@@ -108,6 +111,7 @@ export function createWasmGenesisSafeJson({ request, authorizingInput, inputs, c
     covenantId: parsed.outputs[0].covenant.covenantId,
     feeSompi: fee,
     mass,
+    assumedSignedInputs,
     changeValue,
     inputTotal,
   });

@@ -3,7 +3,7 @@ import { normalizePublicKey, prepareCreateGame } from './create-game.js';
 import { verifySignedCreationSafeJson } from './genesis-transaction.js';
 import { deriveGameInstance } from './covenant/even-odd.mjs';
 import { verifySignedJoinTransaction } from './join-transactions.js';
-import { selectOrdinaryUtxos } from './fee-policy.js';
+import { DEFAULT_RELAY_FLOOR_RATE, selectOrdinaryUtxos } from './fee-policy.js';
 import { prepareRevealTransaction, prepareTerminalTransaction, serializeTerminalTransaction, verifySignedTerminalTransaction } from './terminal-transactions.js';
 import { parityOutcome, verifyRevealPreimage } from './reveal.js';
 import { blake2b256 } from './hashes/blake2b.mjs';
@@ -15,6 +15,7 @@ import { KaspaChainAdapter } from './chain-adapter.js';
 import { logger } from './logger.js';
 import { loadWasmSdk } from './wasm-transaction.js';
 import { prepareWithDynamicFee } from './transaction-fee.js';
+import { assertSignedTransactionFee } from './transaction-mass.js';
 
 const MAX_TERMINAL_STORAGE_MASS = 500_000;
 // A broadcast transaction that has not been observed on-chain yet keeps the
@@ -100,6 +101,7 @@ export class BackendGameService {
     });
     this.#logPlayer('creation_prepare', request.creatorAddress, { matchId: input.matchId ?? null });
     const prepared = await this.#chain(request).prepareCreation(request);
+    logPreparedTransaction('creation', prepared);
     await this.store.savePrepared({
       preparedHash: prepared.preparedHash,
       request: serializeRequest(request),
@@ -120,7 +122,7 @@ export class BackendGameService {
       throw new ProtocolError('MATCH_NOT_READY', 'This creation does not belong to the matchmaking session');
     }
     verifySignedCreationSafeJson({ preparedTxJson: prepared.txJson, signedTxJson, request, policy: prepared.policy });
-    const transactionId = validateGameId(await this.rpc.submitSafeJson(signedTxJson));
+    const transactionId = await this.#submitSignedTransaction('creation', signedTxJson, prepared.feerate);
     this.#logPlayer('creation_submit', request.creatorAddress, { gameId: transactionId, matchId: matchId ?? null });
     await this.#saveGame({
       gameId: transactionId,
@@ -188,6 +190,7 @@ export class BackendGameService {
         continuationCovenant: { authorizingInput: 0, covenantId: creation.covenantId },
       },
     });
+    logPreparedTransaction('join', prepared);
     await this.store.saveJoinPrepared({
       preparedHash: prepared.preparedHash,
       gameId: id,
@@ -196,6 +199,7 @@ export class BackendGameService {
       joinerCommitment,
       txJson: prepared.txJson,
       feeSompi: String(prepared.feeSompi),
+      priorityFeerate: prepared.feerate,
       joinedAddress: joined.address,
       joinedScriptPublicKey: `0000${joined.p2shScript.toString('hex')}`,
       joinedRedeemScript: joined.redeemScript.toString('hex'),
@@ -219,7 +223,7 @@ export class BackendGameService {
     const creation = deserializePrepared(gameRecord.prepared);
     await this.#openCreationUtxo(id, request, creation);
     verifySignedJoinTransaction({ preparedTxJson: prepared.txJson, signedTxJson });
-    const transactionId = validateGameId(await this.rpc.submitSafeJson(signedTxJson));
+    const transactionId = await this.#submitSignedTransaction('join', signedTxJson, prepared.priorityFeerate);
     this.#logPlayer('join_submit', prepared.joinerAddress, { gameId: id, transactionId });
     await this.#saveGame({
       ...gameRecord,
@@ -275,7 +279,7 @@ export class BackendGameService {
       continuationScriptPublicKey: continuation ? `0000${continuation.p2shScript.toString('hex')}` : undefined,
       continuationCovenant: continuation ? { authorizingInput: 0, covenantId: gameRecord.join.covenantId } : undefined,
       recipientScriptPublicKey: winner ? playerScriptPublicKey(winner === 'creator' ? request.creatorPublicKey : gameRecord.join.joinerPublicKey) : undefined,
-      feeScriptPublicKey: playerScriptPublicKey(request.gameFeePublicKey),
+      feeScriptPublicKey: gameFeeSompi(request.stakeSompi) > 0n ? playerScriptPublicKey(request.gameFeePublicKey) : undefined,
       walletPublicKey: request.gameFeePublicKey,
       feeInputs: funding.inputs,
       feeSompi: funding.feeSompi,
@@ -287,6 +291,7 @@ export class BackendGameService {
     const prepared = build(funding);
     const txJson = serializeTerminalTransaction(prepared);
     const preparedHash = Buffer.from(blake2b256(new TextEncoder().encode(txJson))).toString('hex');
+    logPreparedTransaction('reveal', { ...funding, txJson });
     this.ephemeral.save({
       preparedHash,
       action: 'reveal',
@@ -297,6 +302,7 @@ export class BackendGameService {
       txJson,
       transaction: prepared.transaction,
       feeSompi: String(funding.feeSompi),
+      priorityFeerate: funding.priorityFeerate,
       continuationAddress: continuation?.address,
       continuationScriptPublicKey: continuation ? `0000${continuation.p2shScript.toString('hex')}` : undefined,
       continuationRedeemScript: continuation?.redeemScript.toString('hex'),
@@ -315,7 +321,7 @@ export class BackendGameService {
     const gameRecord = await this.store.loadGame(id);
     if (!gameRecord?.join) throw new ProtocolError('GAME_NOT_JOINED', 'Player B has not joined this game');
     verifySignedTerminalTransaction({ prepared: { transaction: prepared.transaction }, signedTxJson });
-    const transactionId = validateGameId(await this.rpc.submitSafeJson(signedTxJson));
+    const transactionId = await this.#submitSignedTransaction('reveal', signedTxJson, prepared.priorityFeerate);
     const reveal = {
       transactionId,
       preparedHash,
@@ -413,7 +419,9 @@ export class BackendGameService {
     if (action === 'fallback_claim') {
       preparedPayout = winnerPayoutSompi(request.stakeSompi);
       preparedArgs = [publicKey, request.gameFeePublicKey];
-      preparedExtraOutputs = [{ value: gameFeeSompi(request.stakeSompi), scriptPublicKey: playerScriptPublicKey(request.gameFeePublicKey) }];
+      preparedExtraOutputs = gameFeeSompi(request.stakeSompi) > 0n
+        ? [{ value: gameFeeSompi(request.stakeSompi), scriptPublicKey: playerScriptPublicKey(request.gameFeePublicKey) }]
+        : [];
     }
     const build = (funding) => prepareTerminalTransaction({
       action: covenantEntry,
@@ -432,9 +440,10 @@ export class BackendGameService {
     const prepared = build(funding);
     const txJson = serializeTerminalTransaction(prepared);
     const preparedHash = Buffer.from(blake2b256(new TextEncoder().encode(txJson))).toString('hex');
+    logPreparedTransaction(action, { ...funding, txJson });
     await this.store.saveActionPrepared({
       preparedHash, action, gameId: id, playerAddress: player.address, role: player.role,
-      txJson, transaction: prepared.transaction, feeSompi: String(funding.feeSompi),
+      txJson, transaction: prepared.transaction, feeSompi: String(funding.feeSompi), priorityFeerate: funding.priorityFeerate,
       continuationAddress: continuation?.address,
       continuationScriptPublicKey: continuation ? `0000${continuation.p2shScript.toString('hex')}` : undefined,
       continuationRedeemScript: continuation?.redeemScript.toString('hex'),
@@ -451,7 +460,7 @@ export class BackendGameService {
     if (!prepared || prepared.gameId !== id || prepared.action !== action) throw new ProtocolError('PREPARATION_NOT_FOUND', 'Action preparation was not found');
     const gameRecord = await this.store.loadGame(id);
     verifySignedTerminalTransaction({ prepared: { transaction: prepared.transaction }, signedTxJson });
-    const transactionId = validateGameId(await this.rpc.submitSafeJson(signedTxJson));
+    const transactionId = await this.#submitSignedTransaction(action, signedTxJson, prepared.priorityFeerate);
     this.#logPlayer(`${action}_submit`, prepared.playerAddress, { gameId: id, transactionId, role: prepared.role });
     const terminal = {
       action, transactionId, preparedHash, playerAddress: prepared.playerAddress, role: prepared.role,
@@ -746,6 +755,9 @@ export class BackendGameService {
           best = {
             inputs,
             feeSompi: repriced.feeSompi,
+            mass: repriced.mass,
+            assumedSignedInputs: repriced.assumedSignedInputs,
+            priorityFeerate,
             change: total > repriced.feeSompi
               ? { value: total - repriced.feeSompi, scriptPublicKey: changeScriptPublicKey }
               : undefined,
@@ -944,6 +956,24 @@ export class BackendGameService {
     if (process.env.LOG_WALLET_ADDRESSES !== '1') return;
     logger.info(event, { address, ...fields });
   }
+
+  async #submitSignedTransaction(action, signedTxJson, priorityFeerate) {
+    let diagnostics;
+    try {
+      diagnostics = assertSignedTransactionFee({ network: NETWORK, signedTxJson, priorityFeerate });
+    } catch (error) {
+      logger.warn('signed_transaction_fee_rejected', { action, ...feeLogFields(error.transactionDiagnostics) });
+      throw error;
+    }
+    const fields = { action, ...feeLogFields(diagnostics) };
+    logger.info('signed_transaction_fee_validated', fields);
+    try {
+      return validateGameId(await this.rpc.submitSafeJson(signedTxJson));
+    } catch (error) {
+      error.transactionDiagnostics = fields;
+      throw error;
+    }
+  }
 }
 
 function normalizeHex(value, bytes, name) {
@@ -974,6 +1004,32 @@ function deserializeRequest(request) {
 
 function serializePrepared(prepared) {
   return JSON.parse(JSON.stringify(prepared, (_, value) => typeof value === 'bigint' ? String(value) : value));
+}
+
+function logPreparedTransaction(action, prepared) {
+  const transaction = JSON.parse(prepared.txJson);
+  logger.info('transaction_prepared', {
+    action,
+    mass: prepared.mass,
+    feeSompi: String(prepared.feeSompi),
+    effectiveFeeRate: Math.max(Number(prepared.priorityFeerate ?? prepared.feerate ?? 0), DEFAULT_RELAY_FLOOR_RATE),
+    inputCount: transaction.inputs.length,
+    outputCount: transaction.outputs.length,
+    assumedSignedInputs: prepared.assumedSignedInputs,
+  });
+}
+
+function feeLogFields(diagnostics) {
+  if (!diagnostics) return {};
+  return {
+    mass: diagnostics.mass,
+    effectiveFeeRate: diagnostics.effectiveFeeRate,
+    paidFeeSompi: String(diagnostics.paidFeeSompi),
+    requiredFeeSompi: String(diagnostics.requiredFeeSompi),
+    inputCount: diagnostics.inputCount,
+    outputCount: diagnostics.outputCount,
+    signedInputCount: diagnostics.signedInputCount,
+  };
 }
 
 function terminalStorageMass(transaction) {

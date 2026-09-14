@@ -54,6 +54,7 @@ export class KaspaChainAdapter {
       scriptPublicKey: parseScriptHex(prepared.txJson),
       feeSompi: prepared.feeSompi,
       mass: prepared.mass,
+      assumedSignedInputs: prepared.assumedSignedInputs,
       feerate,
     });
   }
@@ -111,6 +112,7 @@ export class KaspaChainAdapter {
       preparedHash: Buffer.from(blake2b256(new TextEncoder().encode(txJson))).toString('hex'),
       feeSompi: repriced.feeSompi,
       mass: repriced.mass,
+      assumedSignedInputs: repriced.assumedSignedInputs,
       feerate,
       gameId: request.gameId,
     });

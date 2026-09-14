@@ -67,6 +67,13 @@ test('logger preserves a bounded sanitized node rejection', () => {
   assert.doesNotMatch(safe.nodeMessage, /a{64}|kaspatest:/);
 });
 
+test('logger removes signatures embedded in node rejection messages', () => {
+  const signature = `41${'ab'.repeat(65)}`;
+  const safe = sanitizeFields({ nodeMessage: `rejected signatureScript ${signature}` });
+  assert.equal(safe.nodeMessage, 'rejected signatureScript <hex>');
+  assert.doesNotMatch(safe.nodeMessage, /ab{20}/);
+});
+
 test('logger reveals wallet addresses only when redactAddresses is disabled', () => {
   const { lines, stream } = capture();
   const logger = createLogger({ level: 'info', stream, now: () => new Date('2026-01-01T00:00:00.000Z'), redactAddresses: false });

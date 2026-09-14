@@ -62,7 +62,9 @@ export function sanitizeFields(fields = {}, { redactAddresses = true } = {}) {
 function sanitizeValue(value, fieldName) {
   if (typeof value === 'string') {
     const sanitized = fieldName === 'nodeMessage'
-      ? value.replace(/kaspatest:[a-z0-9]+/gi, '<address>').replace(/\b[0-9a-f]{64}\b/gi, '<txid>')
+      ? value.replace(/kaspatest:[a-z0-9]+/gi, '<address>')
+        .replace(/\b[0-9a-f]{64}\b/gi, '<txid>')
+        .replace(/\b[0-9a-f]{65,}\b/gi, '<hex>')
       : value;
     const maxLength = fieldName === 'nodeMessage' ? MAX_NODE_MESSAGE_LENGTH : MAX_VALUE_LENGTH;
     return sanitized.length > maxLength ? `${sanitized.slice(0, maxLength)}\u2026` : sanitized;

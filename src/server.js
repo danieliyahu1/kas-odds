@@ -55,7 +55,7 @@ const metrics = new Metrics();
 metrics.setProductInfo(PROTOCOL_VERSION);
 const chainClient = new WrpcClient({ network: configuredNetwork });
 const rpc = withRpcMetrics(chainClient, metrics);
-const store = new BackendGameStore(process.env.GAME_STORE_PATH ?? '.data/games.json', { metrics });
+const store = new BackendGameStore(process.env.GAME_STORE_PATH ?? '.data/games-v6.json', { metrics });
 const gameService = new BackendGameService({ rpc, store, metrics, gameFeePublicKey });
 
 // Optional, untrusted relay: clients publish non-secret game state here so the
@@ -302,6 +302,7 @@ function sendError(res, error, context = {}) {
       route: context.route,
       path: context.pathname,
       nodeMessage: error.cause?.message ?? String(error.cause),
+      ...error.transactionDiagnostics,
     });
   } else if (!clientError) {
     logger.error('server_error', { code, message: error?.message, stack: error?.stack });
@@ -391,7 +392,7 @@ logger.info('server_started', {
   metricsPort,
   network: configuredNetwork,
   gameFeePublicKey,
-  storePath: process.env.GAME_STORE_PATH ?? '.data/games.json',
+  storePath: process.env.GAME_STORE_PATH ?? '.data/games-v6.json',
   feedbackTelegram: feedbackDeliverer.enabled,
   feedbackSpillPath: process.env.FEEDBACK_SPILL_PATH ?? join('.data', 'feedback-spill.json'),
   logLevel: logger.level,
