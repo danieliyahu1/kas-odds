@@ -161,7 +161,7 @@ Runtime details:
 - Required runtime secrets: none beyond the fee wallet identity. The app holds
   no private key — `GAME_FEE_ADDRESS` is a public wallet address — so it is
   never a literal in this repository. In the cluster the Deployment reads it
-  from the `kaspa-even-odd-fee` Secret (`address` key) via
+  from the `kaspa-even-odd-fee-address` Secret (`address` key) via
   `valueFrom.secretKeyRef`; locally it is set with `--env-file=.env` (the
   `.env` file is gitignored). Wallet private keys never leave the browser.
 - Required network: `KASPA_NETWORK=testnet-10` (the process fails closed for
@@ -182,7 +182,7 @@ directly, so the server decodes the address at startup and bakes that key
   `INVALID_GAME_FEE` until it is configured — so a misconfigured pod never
   serves a game without a fee recipient. Create the cluster Secret out-of-band
   (its value never lives in Git):
-  `kubectl create secret generic kaspa-even-odd-fee --from-literal=address=kaspatest:...`
+  `kubectl create secret generic kaspa-even-odd-fee-address --from-literal=address=kaspatest:...`
   The Deployment references it with `valueFrom.secretKeyRef`, so the pod also
   fails to be created when the Secret is missing.
 - Required persistent storage: the `kaspa-even-odd-state` PVC mounted at

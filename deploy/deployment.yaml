@@ -53,7 +53,7 @@ spec:
             - name: GAME_FEE_ADDRESS
               valueFrom:
                 secretKeyRef:
-                  name: kaspa-even-odd-fee
+                  name: kaspa-even-odd-fee-address
                   key: address
             - name: FEEDBACK_SPILL_PATH
               value: /var/lib/kaspa-even-odd/feedback-spill.json
