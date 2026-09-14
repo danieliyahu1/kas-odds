@@ -1,7 +1,7 @@
 import { blake2b256 } from './hashes/blake2b.mjs';
 import { bytesToHex } from './hashes/hex.mjs';
 import { playerLockSompi, ProtocolError } from './protocol.js';
-import { DEFAULT_RELAY_FLOOR_RATE } from './fee-policy.js';
+import { DEFAULT_RELAY_FLOOR_RATE, computeBudgetMass } from './fee-policy.js';
 import { loadWasmSdk } from './wasm-loader.mjs';
 import { describeTransactionChanges } from './transaction-diagnostics.js';
 
@@ -38,7 +38,7 @@ export function createWasmGenesisSafeJson({ request, authorizingInput, inputs, c
 
   const buildAndFee = (outputs) => {
     const transaction = buildWasmTransaction(wasm, authorizingIndex, normalizedInputs, outputs);
-    const mass = Number(wasm.calculateTransactionMass(request.network, transaction));
+    const mass = Number(wasm.calculateTransactionMass(request.network, transaction)) + computeBudgetMass(normalizedInputs);
     const fee = BigInt(Math.ceil(mass * rate));
     const changeValue = inputTotal - playerLockSompi(request.stakeSompi) - fee;
     return { transaction, mass, fee, changeValue };

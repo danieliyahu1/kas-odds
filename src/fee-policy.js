@@ -5,6 +5,23 @@ import { ProtocolError } from './protocol.js';
 // schnorr-signed v1 input requires, well above any idle live feerate.
 export const DEFAULT_RELAY_FLOOR_RATE = 100;
 export const DEFAULT_MIN_FEE_SOMPI = 0n;
+// Consensus charges 100 grams of compute mass per committed compute-budget
+// unit on every version-1 input. The wallet-side WASM `calculateTransactionMass`
+// ignores the v1 `compute_budget` field (see its "TODO: Add support for v1
+// transactions"), so callers must add this term themselves or covenant spends
+// whose storage mass is small get under-priced and rejected by the node.
+export const GRAMS_PER_COMPUTE_BUDGET_UNIT = 100;
+
+// Sums the consensus compute-mass contribution of the v1 compute budgets on a
+// transaction's inputs. Inputs without a budget (v0) contribute nothing.
+export function computeBudgetMass(inputs) {
+  if (!Array.isArray(inputs)) return 0;
+  const units = inputs.reduce((sum, input) => {
+    const budget = Number(input?.computeBudget ?? input?.utxo?.computeBudget ?? 0);
+    return Number.isFinite(budget) && budget > 0 ? sum + budget : sum;
+  }, 0);
+  return units * GRAMS_PER_COMPUTE_BUDGET_UNIT;
+}
 // Conservative upper bound (grams) used to select fee UTXOs before the WASM
 // SDK reports the authoritative mass. Empirical SDK mass for a create tx with
 // 1-3 funding inputs is ~34k-41k grams; 42k keeps selection safe without

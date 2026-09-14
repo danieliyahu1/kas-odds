@@ -1,9 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { estimateCreationFee, selectOrdinaryUtxos } from '../src/fee-policy.js';
+import { computeBudgetMass, estimateCreationFee, selectOrdinaryUtxos } from '../src/fee-policy.js';
 
 const MIN_STAKE = 1n * 1_0000_0000n;
 const ord = (txid, index, amount) => ({ transactionId: txid, index, amount });
+
+test('adds the consensus v1 compute-budget mass the WASM calculator omits', () => {
+  assert.equal(computeBudgetMass([{ computeBudget: 50 }, { computeBudget: 50 }]), 10_000);
+  assert.equal(computeBudgetMass([{ computeBudget: 50 }, { computeBudget: 50 }, { computeBudget: 50 }]), 15_000);
+  assert.equal(computeBudgetMass([{ computeBudget: 0 }]), 0);
+  assert.equal(computeBudgetMass([]), 0);
+  assert.equal(computeBudgetMass(undefined), 0);
+});
 
 test('selects ordinary UTXOs deterministic largest-first to meet the target', () => {
   const utxos = [

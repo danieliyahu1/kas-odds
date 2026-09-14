@@ -1,5 +1,5 @@
 import { ProtocolError } from './protocol.js';
-import { DEFAULT_RELAY_FLOOR_RATE } from './fee-policy.js';
+import { DEFAULT_RELAY_FLOOR_RATE, computeBudgetMass } from './fee-policy.js';
 import { loadWasmSdk } from './wasm-transaction.js';
 
 const MAX_REPRICING_ROUNDS = 8;
@@ -19,7 +19,7 @@ export function prepareWithDynamicFee({ network, priorityFeerate, fundingSompi, 
     const wasm = loadWasmSdk();
     const transaction = wasm.Transaction.deserializeFromSafeJSON(JSON.stringify(prepared.transaction));
     transaction.finalize();
-    const mass = Number(wasm.calculateTransactionMass(network, transaction));
+    const mass = Number(wasm.calculateTransactionMass(network, transaction)) + computeBudgetMass(prepared.transaction.inputs);
     const repricedFee = BigInt(Math.ceil(mass * rate));
     if (repricedFee === feeSompi) return Object.freeze({ ...prepared, feeSompi, mass, priorityFeerate, relayFloorRate: DEFAULT_RELAY_FLOOR_RATE });
     feeSompi = repricedFee;
