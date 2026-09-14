@@ -14,8 +14,8 @@ import { EphemeralPreparations } from './ephemeral-preparations.js';
 import { KaspaChainAdapter } from './chain-adapter.js';
 import { logger } from './logger.js';
 import { loadWasmSdk } from './wasm-transaction.js';
+import { prepareWithDynamicFee } from './transaction-fee.js';
 
-const TERMINAL_FEE_SOMPI = 4_200_000n;
 const MAX_TERMINAL_STORAGE_MASS = 500_000;
 
 // Application use cases for the Even/Odd game.
@@ -186,7 +186,6 @@ export class BackendGameService {
         joinerAddress: input.joinerAddress,
         joinerPublicKey,
         joinerCommitment,
-        feeSompi: TERMINAL_FEE_SOMPI,
       },
       game: {
         stakeSompi: request.stakeSompi,
@@ -290,12 +289,12 @@ export class BackendGameService {
       feeScriptPublicKey: playerScriptPublicKey(request.gameFeePublicKey),
       walletPublicKey: request.gameFeePublicKey,
       feeInputs: funding.inputs,
-      feeSompi: TERMINAL_FEE_SOMPI,
+      feeSompi: funding.feeSompi,
       change: funding.change,
       publicKey,
       payoutPublicKey: winner === 'creator' ? request.creatorPublicKey : winner === 'joiner' ? gameRecord.join.joinerPublicKey : publicKey,
     });
-    const funding = await this.#actionFunding(player.address, TERMINAL_FEE_SOMPI, build);
+    const funding = await this.#actionFunding(player.address, build);
     const prepared = build(funding);
     const txJson = serializeTerminalTransaction(prepared);
     const preparedHash = Buffer.from(blake2b256(new TextEncoder().encode(txJson))).toString('hex');
@@ -308,7 +307,7 @@ export class BackendGameService {
       choice,
       txJson,
       transaction: prepared.transaction,
-      feeSompi: String(TERMINAL_FEE_SOMPI),
+      feeSompi: String(funding.feeSompi),
       continuationAddress: continuation?.address,
       continuationScriptPublicKey: continuation ? `0000${continuation.p2shScript.toString('hex')}` : undefined,
       continuationRedeemScript: continuation?.redeemScript.toString('hex'),
@@ -317,7 +316,7 @@ export class BackendGameService {
       createdAt: new Date().toISOString(),
     });
     this.metrics.recordGameEvent('reveal_prepared');
-    return { gameId: id, preparedHash, txJson, feeSompi: String(TERMINAL_FEE_SOMPI), stage: first ? 'settlement' : 'first_reveal' };
+    return { gameId: id, preparedHash, txJson, feeSompi: String(funding.feeSompi), stage: first ? 'settlement' : 'first_reveal' };
   }
 
   async submitReveal(gameId, { preparedHash, signedTxJson }) {
@@ -328,7 +327,6 @@ export class BackendGameService {
     if (!gameRecord?.join) throw new ProtocolError('GAME_NOT_JOINED', 'Player B has not joined this game');
     verifySignedTerminalTransaction({ prepared: { transaction: prepared.transaction }, signedTxJson });
     const transactionId = validateGameId(await this.rpc.submitSafeJson(signedTxJson));
-    this.#logPlayer('reveal_submit', prepared.playerAddress, { gameId: id, transactionId, role: prepared.role });
     const reveal = {
       transactionId,
       preparedHash,
@@ -343,6 +341,7 @@ export class BackendGameService {
       payoutAddress: prepared.payoutAddress,
       submittedAt: new Date().toISOString(),
     };
+    this.#logPlayer('reveal_submit', prepared.playerAddress, { gameId: id, transactionId, role: prepared.role });
     await this.#saveGame({ ...gameRecord, status: prepared.winner ? 'settlement_broadcast' : 'reveal_broadcast', reveals: [...(gameRecord.reveals ?? []), reveal] });
     this.metrics.recordGameEvent('reveal_submitted');
     return { gameId: id, transactionId, status: prepared.winner ? 'settlement_broadcast' : 'reveal_broadcast' };
@@ -435,16 +434,16 @@ export class BackendGameService {
       recipientScriptPublicKey: playerScriptPublicKey(publicKey),
       extraOutputs: preparedExtraOutputs,
       feeInputs: funding.inputs,
-      feeSompi: TERMINAL_FEE_SOMPI,
+      feeSompi: funding.feeSompi,
       change: funding.change,
     });
-    const funding = await this.#actionFunding(player.address, TERMINAL_FEE_SOMPI, build);
+    const funding = await this.#actionFunding(player.address, build);
     const prepared = build(funding);
     const txJson = serializeTerminalTransaction(prepared);
     const preparedHash = Buffer.from(blake2b256(new TextEncoder().encode(txJson))).toString('hex');
     await this.store.saveActionPrepared({
       preparedHash, action, gameId: id, playerAddress: player.address, role: player.role,
-      txJson, transaction: prepared.transaction, feeSompi: String(TERMINAL_FEE_SOMPI),
+      txJson, transaction: prepared.transaction, feeSompi: String(funding.feeSompi),
       continuationAddress: continuation?.address,
       continuationScriptPublicKey: continuation ? `0000${continuation.p2shScript.toString('hex')}` : undefined,
       continuationRedeemScript: continuation?.redeemScript.toString('hex'),
@@ -452,7 +451,7 @@ export class BackendGameService {
       createdAt: new Date().toISOString(),
     });
     this.metrics.recordGameEvent(`${action}_prepared`);
-    return { gameId: id, preparedHash, txJson, feeSompi: String(TERMINAL_FEE_SOMPI), action };
+    return { gameId: id, preparedHash, txJson, feeSompi: String(funding.feeSompi), action };
   }
 
   async submitSafetyAction(gameId, action, { preparedHash, signedTxJson }) {
@@ -685,34 +684,60 @@ export class BackendGameService {
     return { status: currentDaaScore >= BigInt(entry.blockDaaScore) + 1n ? 'confirmed' : 'observed' };
   }
 
-  async #actionFunding(address, feeSompi, measure) {
+  async #actionFunding(address, measure) {
     const response = await this.rpc.getUtxosByAddresses([address]);
     const entries = response.entries ?? response;
-    const targetSompi = feeSompi + 1n;
     const ordinary = entries.filter((entry) => !entry.covenantId);
     if (ordinary.length === 0) {
-      selectOrdinaryUtxos({ utxos: entries, targetSompi });
+      selectOrdinaryUtxos({ utxos: entries, targetSompi: 1n });
     }
-const candidates = fundingCandidates(ordinary, targetSompi);
-    if (candidates.length === 0) selectOrdinaryUtxos({ utxos: entries, targetSompi });
+    const candidates = fundingCandidates(ordinary, 1n);
+    if (candidates.length === 0) selectOrdinaryUtxos({ utxos: entries, targetSompi: 1n });
+    const priorityFeerate = await this.#readPriorityFeerate();
     let best;
     let bestMass = Number.POSITIVE_INFINITY;
+    let sawMassFailure = false;
+    let lastFundingError;
     for (const inputs of candidates) {
       const total = inputs.reduce((sum, entry) => sum + BigInt(entry.amount), 0n);
-      const funding = { inputs, change: { value: total - feeSompi, scriptPublicKey: inputs[0].scriptPublicKey } };
       try {
-        const prepared = measure ? measure(funding) : null;
-        const mass = prepared ? terminalStorageMass(prepared.transaction) : 0;
+        const changeScriptPublicKey = inputs[0].scriptPublicKey ?? inputs[0].utxo?.scriptPublicKey;
+        const repriced = prepareWithDynamicFee({
+          network: NETWORK,
+          priorityFeerate,
+          fundingSompi: total,
+          changeScriptPublicKey,
+          build: ({ feeSompi, change }) => measure({ inputs, feeSompi, change }),
+        });
+        const mass = terminalStorageMass(repriced.transaction);
         if (mass <= MAX_TERMINAL_STORAGE_MASS && mass < bestMass) {
-          best = funding;
+          best = {
+            inputs,
+            feeSompi: repriced.feeSompi,
+            change: total > repriced.feeSompi
+              ? { value: total - repriced.feeSompi, scriptPublicKey: changeScriptPublicKey }
+              : undefined,
+          };
           bestMass = mass;
+        } else {
+          sawMassFailure = true;
         }
       } catch (error) {
         if (!(error instanceof ProtocolError)) throw error;
+        lastFundingError = error;
       }
     }
     if (best) return best;
+    if (!sawMassFailure && lastFundingError) throw lastFundingError;
     throw new ProtocolError('STORAGE_MASS_EXCEEDED', `No fee UTXO combination keeps this transaction below the ${MAX_TERMINAL_STORAGE_MASS} storage-mass limit`);
+  }
+
+  async #readPriorityFeerate() {
+    if (typeof this.rpc.getFeeEstimate !== 'function') return 0;
+    const response = await this.rpc.getFeeEstimate();
+    const buckets = response?.estimate?.priorityBucket ?? response?.estimate?.buckets ?? [];
+    const bucket = buckets[0];
+    return typeof bucket?.feerate === 'number' && bucket.feerate >= 0 ? bucket.feerate : 0;
   }
 
   async #safetyReadiness(record, request, safetyAction) {

@@ -5,6 +5,7 @@ import { estimateFunding } from './funding.mjs';
 import { createWasmGenesisSafeJson } from './wasm-transaction.js';
 import { blake2b256 } from './hashes/blake2b.mjs';
 import { prepareJoinTransaction, serializeJoinTransaction } from './join-transactions.js';
+import { prepareWithDynamicFee } from './transaction-fee.js';
 
 const DEFAULT_PRIORITY_BUCKET = 0;
 
@@ -76,33 +77,41 @@ export class KaspaChainAdapter {
   async prepareJoin({ request, game }) {
     const utxos = await readAddressUtxos({ rpc: this.rpc, addresses: [request.joinerAddress] });
     const entries = Array.isArray(utxos) ? utxos : utxos?.entries ?? [];
-    const feeSompi = request.feeSompi ?? 0n;
     const stakeSompi = BigInt(game.stakeSompi ?? game.potSompi);
     const lock = playerLockSompi(stakeSompi);
-    const selected = selectOrdinaryUtxos({ utxos: entries, targetSompi: lock + feeSompi }).selected;
+    const feerate = await this.#readPriorityFeerate();
+    const initialFee = BigInt(Math.ceil(Math.max(feerate, 100) * 100_000));
+    const selected = selectOrdinaryUtxos({ utxos: entries, targetSompi: lock + initialFee }).selected;
     const selectedEntries = entries.filter((entry) => selected.some((item) => (entry.transactionId ?? entry.outpoint?.transactionId)?.toLowerCase() === item.transactionId && (entry.index ?? entry.outpoint?.index) === item.index));
     const total = selectedEntries.reduce((sum, entry) => sum + BigInt(entry.amount ?? entry.utxo?.amount), 0n);
-    const change = total > lock + feeSompi
-      ? { value: total - lock - feeSompi, scriptPublicKey: request.changeScriptPublicKey ?? selectedEntries[0]?.scriptPublicKey ?? selectedEntries[0]?.utxo?.scriptPublicKey }
-      : undefined;
-    const transaction = prepareJoinTransaction({
-      game,
-      joinerPublicKey: request.joinerPublicKey,
-      joinerCommitment: request.joinerCommitment,
-      gameInput: game.currentInput,
-      feeInputs: selectedEntries,
-      feeSompi,
-      change,
-      continuationScriptPublicKey: request.continuationScriptPublicKey ?? game.continuationScriptPublicKey,
-      continuationCovenant: request.continuationCovenant ?? game.continuationCovenant,
+    const changeScriptPublicKey = request.changeScriptPublicKey ?? selectedEntries[0]?.scriptPublicKey ?? selectedEntries[0]?.utxo?.scriptPublicKey;
+    const repriced = prepareWithDynamicFee({
+      network: request.network,
+      priorityFeerate: feerate,
+      fundingSompi: total,
+      reservedSompi: lock,
+      changeScriptPublicKey,
+      build: ({ feeSompi, change }) => prepareJoinTransaction({
+        game,
+        joinerPublicKey: request.joinerPublicKey,
+        joinerCommitment: request.joinerCommitment,
+        gameInput: game.currentInput,
+        feeInputs: selectedEntries,
+        feeSompi,
+        change,
+        continuationScriptPublicKey: request.continuationScriptPublicKey ?? game.continuationScriptPublicKey,
+        continuationCovenant: request.continuationCovenant ?? game.continuationCovenant,
+      }),
     });
-    const txJson = serializeJoinTransaction(transaction);
+    const txJson = serializeJoinTransaction(repriced);
     return Object.freeze({
       network: request.network,
       joinerAddress: request.joinerAddress,
       txJson,
       preparedHash: Buffer.from(blake2b256(new TextEncoder().encode(txJson))).toString('hex'),
-      feeSompi,
+      feeSompi: repriced.feeSompi,
+      mass: repriced.mass,
+      feerate,
       gameId: request.gameId,
     });
   }
