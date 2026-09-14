@@ -6,6 +6,12 @@ import { noopMetrics } from './metrics.js';
 
 const MATCH_WAIT_TIMEOUT_MS = 30_000;
 const DEFAULT_LIMIT_KAS = 1;
+// Windows can briefly lock a file being replaced by an atomic rename (antivirus,
+// search indexing, another reader). These are transient, so retry a few times
+// before surfacing a storage error.
+const RENAME_RETRIES = 3;
+const RENAME_BACKOFF_MS = 20;
+const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 // Durable persistence for the backend game engine. Matchmaking sessions, game
 // records, and non-secret transaction preparations are written atomically to a
@@ -154,7 +160,7 @@ export class BackendGameStore {
       await mkdir(dirname(this.filePath), { recursive: true });
       const temporary = `${this.filePath}.${process.pid}.tmp`;
       await writeFile(temporary, JSON.stringify(data, null, 2));
-      await rename(temporary, this.filePath);
+      await renameWithRetry(temporary, this.filePath);
       return clone(result);
     }));
     this.writeQueue = operation.then(() => undefined, () => undefined);
@@ -185,6 +191,17 @@ export class BackendGameStore {
       throw error;
     } finally {
       this.metrics.recordStorage({ operation, outcome, durationSeconds: (performance.now() - startedAt) / 1000 });
+    }
+  }
+}
+
+async function renameWithRetry(from, to) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await rename(from, to);
+    } catch (error) {
+      if (attempt >= RENAME_RETRIES || !TRANSIENT_RENAME_CODES.has(error?.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, RENAME_BACKOFF_MS * (attempt + 1)));
     }
   }
 }
