@@ -17,10 +17,11 @@ export const GAME_FEE_DENOMINATOR = 100n;
 export const GAME_FEE_NUMERATOR = 1n;
 
 export class ProtocolError extends Error {
-  constructor(code, message) {
+  constructor(code, message, options = {}) {
     super(message);
     this.name = 'ProtocolError';
     this.code = code;
+    if (options.cause) this.cause = options.cause;
   }
 }
 

@@ -12,6 +12,7 @@ const LEVELS = Object.freeze({ debug: 10, info: 20, warn: 30, error: 40 });
 const SECRET_FIELD = /(nonce|key|signature|private|secret|txjson|preparedhash|commitment|body|ip)/i;
 const ADDRESS_FIELD = /address/i;
 const MAX_VALUE_LENGTH = 200;
+const MAX_NODE_MESSAGE_LENGTH = 2000;
 
 export function createLogger({
   level = process.env.LOG_LEVEL ?? 'info',
@@ -53,17 +54,23 @@ export function sanitizeFields(fields = {}, { redactAddresses = true } = {}) {
       safe[name] = '<redacted>';
       continue;
     }
-    safe[name] = sanitizeValue(value);
+    safe[name] = sanitizeValue(value, name);
   }
   return safe;
 }
 
-function sanitizeValue(value) {
-  if (typeof value === 'string') return value.length > MAX_VALUE_LENGTH ? `${value.slice(0, MAX_VALUE_LENGTH)}\u2026` : value;
+function sanitizeValue(value, fieldName) {
+  if (typeof value === 'string') {
+    const sanitized = fieldName === 'nodeMessage'
+      ? value.replace(/kaspatest:[a-z0-9]+/gi, '<address>').replace(/\b[0-9a-f]{64}\b/gi, '<txid>')
+      : value;
+    const maxLength = fieldName === 'nodeMessage' ? MAX_NODE_MESSAGE_LENGTH : MAX_VALUE_LENGTH;
+    return sanitized.length > maxLength ? `${sanitized.slice(0, maxLength)}\u2026` : sanitized;
+  }
   if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return value;
   if (value instanceof Error) return value.message;
   try {
-    return sanitizeValue(JSON.stringify(value));
+    return sanitizeValue(JSON.stringify(value), fieldName);
   } catch {
     return '<unserializable>';
   }

@@ -235,7 +235,8 @@ function renderMatchmaking() {
   function showMatchStartError(error) {
     started = false;
     logError('match_start_failed', { code: error.code, message: error.message });
-    content.innerHTML = `<div class="notice error"><strong>Game was not started.</strong>${escapeHtml(error.message)}</div><div class="actions"><button type="button" class="primary" id="match-retry">Try again</button></div>`;
+    const copy = actionErrorCopy(error);
+    content.innerHTML = `<div class="notice error"><strong>${escapeHtml(copy.title)}</strong>${escapeHtml(copy.message)}</div><div class="actions"><button type="button" class="primary" id="match-retry">Try again</button></div>`;
     document.querySelector('#match-retry').addEventListener('click', () => {
       started = true;
       if (match.role === 'creator') void startCreation();
@@ -578,7 +579,7 @@ function bindReveal(gameId) {
       } else if (error.code === 'INVALID_REVEAL') {
         showNotice('#reveal-notice', 'Reveal did not match', 'The saved number no longer matches the locked commitment. You may have started this game in another browser.', 'error');
       } else {
-        showNotice('#reveal-notice', error.message, '', 'error');
+        showActionError('#reveal-notice', error);
       }
     }
   });
@@ -665,9 +666,26 @@ function bindSafety(gameId, game) {
       safetyButton.disabled = false;
       logError('safety_action_failed', { code: error.code, message: error.message });
       if (guardKaswareShortfall('#game-safety', error)) return;
-      showNotice('#game-safety', error.message, '', 'error');
+      showActionError('#game-safety', error);
     }
   });
+}
+
+function showActionError(selector, error) {
+  const copy = actionErrorCopy(error);
+  showNotice(selector, copy.title, copy.message, 'error');
+}
+
+function actionErrorCopy(error) {
+  const copy = {
+    STORAGE_MASS_EXCEEDED: ['Transaction not ready', 'Your wallet needs a smaller available coin. Receive a small separate payment, then try again. Your game funds remain safe.'],
+    NO_UTXOS: ['Network fee unavailable', 'This wallet needs a small separate balance to pay the network fee.'],
+    NO_ORDINARY_UTXOS: ['Network fee unavailable', 'This wallet needs a small separate balance to pay the network fee.'],
+    INSUFFICIENT_UTXOS: ['Not enough KAS for the network fee', 'Add a small amount of KAS to this wallet, then try again.'],
+    FEE_REPRICING_FAILED: ['Network fee changed', 'The network fee changed while preparing this action. Please try again.'],
+    TRANSACTION_REJECTED: ['Transaction not accepted', 'The network did not accept this action. Wait a few seconds, then try again. Your game funds remain safe.'],
+  }[error.code] ?? ['Please try again', 'Something went wrong. Please try again in a few seconds. Your game funds remain safe.'];
+  return { title: copy[0], message: copy[1] };
 }
 
 function winnerIsYou(game, role) {

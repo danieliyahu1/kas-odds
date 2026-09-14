@@ -134,7 +134,7 @@ const server = createServer((req, res) => {
   res.setHeader('x-frame-options', 'DENY');
   res.setHeader('referrer-policy', 'no-referrer');
   res.setHeader('content-security-policy', contentSecurityPolicy);
-  void routeRequest(req, res, pathname).catch((error) => sendError(res, error));
+  void routeRequest(req, res, pathname).catch((error) => sendError(res, error, { route, pathname }));
 });
 
 async function routeRequest(req, res, pathname) {
@@ -290,13 +290,22 @@ function readJson(req) {
   });
 }
 
-function sendError(res, error) {
+function sendError(res, error, context = {}) {
   if (res.writableEnded || res.destroyed) return;
   const code = error?.code ?? 'INTERNAL_ERROR';
   const clientError = error instanceof ProtocolError || ['INVALID_JSON', 'REQUEST_TOO_LARGE', 'RELAY_PAYLOAD_TOO_LARGE', 'REQUEST_ABORTED'].includes(code);
   const notFound = ['GAME_NOT_FOUND', 'PREPARATION_NOT_FOUND', 'MATCH_NOT_FOUND'].includes(code);
   res.kaspaError = { code, message: error?.message ?? 'Operation failed' };
-  if (!clientError) logger.error('server_error', { code, message: error?.message, stack: error?.stack });
+  if (error?.cause) {
+    logger.error('rpc_transaction_rejected', {
+      code,
+      route: context.route,
+      path: context.pathname,
+      nodeMessage: error.cause?.message ?? String(error.cause),
+    });
+  } else if (!clientError) {
+    logger.error('server_error', { code, message: error?.message, stack: error?.stack });
+  }
   sendJson(res, notFound ? 404 : clientError ? 400 : 502, {
     error: code,
     message: clientError ? error.message : 'Kaspa testnet10 backend is unavailable',

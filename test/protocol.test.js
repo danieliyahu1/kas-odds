@@ -7,6 +7,7 @@ import { bech32Encode } from '../src/hashes/bech32.mjs';
 import { KaspaCreationConfirmer, submitSignedTransaction } from '../src/kaspa-adapter.js';
 import { KaswareWalletAdapter, waitForKaswareProvider } from '../src/kasware-wallet.js';
 import { createGenesisGameOutput } from '../src/genesis-transaction.js';
+import { isDisconnectedError } from '../src/wrpc.mjs';
 
 const valid = {
   network: 'testnet-10',
@@ -122,6 +123,11 @@ test('confirms creation before producing an invite', async () => {
 
 test('uses typed protocol errors', () => {
   assert.throws(() => prepareCreateGame({ ...valid, side: 'random' }), (error) => error instanceof ProtocolError && error.code === 'INVALID_SIDE');
+});
+
+test('recognizes disconnected RPC errors for reconnect handling', () => {
+  assert.equal(isDisconnectedError(new Error('WebSocket is not connected')), true);
+  assert.equal(isDisconnectedError(new Error('transaction rejected by the node')), false);
 });
 
 test('submits through the Rusty Kaspa v2 object-shaped RPC boundary', async () => {

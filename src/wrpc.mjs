@@ -5,6 +5,7 @@ import { NETWORK, ProtocolError } from './protocol.js';
 import { loadWasmSdk, initWasmSdk } from './wasm-loader.mjs';
 
 const DEFAULT_NODE_URL = typeof process !== 'undefined' ? process?.env?.KASPA_WRPC_URL : undefined;
+const MAX_RECONNECT_RETRIES = 3;
 
 export class WrpcClient {
   constructor({ network = NETWORK, url = DEFAULT_NODE_URL } = {}) {
@@ -33,18 +34,18 @@ export class WrpcClient {
   }
 
   async getBlockDagInfo() {
-    const response = await (await this.#rpc()).getBlockDagInfo();
+    const response = await this.#read((rpc) => rpc.getBlockDagInfo());
     return response?.toJSON ? response.toJSON() : response;
   }
 
   async getUtxosByAddresses(addresses) {
-    const response = await (await this.#rpc()).getUtxosByAddresses(addresses);
+    const response = await this.#read((rpc) => rpc.getUtxosByAddresses(addresses));
     const entries = (response?.entries ?? response).map(normalizeUtxoEntry);
     return { entries };
   }
 
   async getFeeEstimate() {
-    const response = await (await this.#rpc()).getFeeEstimate();
+    const response = await this.#read((rpc) => rpc.getFeeEstimate());
     const priority = response?.estimate?.priorityBucket;
     return { estimate: { priorityBucket: Array.isArray(priority) ? priority : [priority].filter(Boolean) } };
   }
@@ -57,14 +58,53 @@ export class WrpcClient {
     } catch {
       throw new ProtocolError('INVALID_TRANSACTION', 'Signed transaction is not valid Kaspa SafeJSON');
     }
-    const response = await (await this.#rpc()).submitTransaction({ transaction, allowOrphan: false });
-    return response?.transactionId ?? response?.txId ?? response;
+    try {
+      const response = await (await this.#rpc()).submitTransaction({ transaction, allowOrphan: false });
+      return response?.transactionId ?? response?.txId ?? response;
+    } catch (error) {
+      if (isDisconnectedError(error)) {
+        await this.#resetConnection();
+        throw internalRpcError(error);
+      }
+      throw new ProtocolError(
+        'TRANSACTION_REJECTED',
+        'The network did not accept this transaction. Wait a few seconds and try again. Your game funds remain safe.',
+        { cause: error },
+      );
+    }
   }
 
   async #rpc() {
     await this.connect();
     return this.rpc;
   }
+
+  async #read(operation) {
+    let lastError;
+    try {
+      return await operation(await this.#rpc());
+    } catch (error) {
+      if (!isDisconnectedError(error)) throw error;
+      lastError = error;
+    }
+    for (let retry = 0; retry < MAX_RECONNECT_RETRIES; retry += 1) {
+      await this.#resetConnection();
+      try {
+        return await operation(await this.#rpc());
+      } catch (error) {
+        if (!isDisconnectedError(error)) throw error;
+        lastError = error;
+      }
+    }
+    throw internalRpcError(lastError);
+  }
+
+  async #resetConnection() {
+    const rpc = this.rpc;
+    this.rpc = null;
+    if (rpc) await rpc.disconnect().catch(() => {});
+  }
+
 
   async #connect() {
     if (!loadWasmSdkSafe()) await initWasmSdk();
@@ -75,6 +115,18 @@ export class WrpcClient {
     this.url = url;
     this.rpc = rpc;
   }
+}
+
+export function isDisconnectedError(error) {
+  const message = String(error?.message ?? error ?? '').toLowerCase();
+  return /not connected|connection (?:closed|lost|refused|reset)|websocket.*(?:closed|disconnected|not connected)|socket.*(?:closed|disconnected|not connected)|failed to connect|unable to connect|econnrefused|timed out|timeout/.test(message);
+}
+
+function internalRpcError(cause) {
+  const error = new Error('Kaspa network connection failed after three retries');
+  error.code = 'INTERNAL_ERROR';
+  error.cause = cause;
+  return error;
 }
 
 function loadWasmSdkSafe() {

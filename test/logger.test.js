@@ -58,6 +58,15 @@ test('sanitizeFields coerces errors and truncates long values', () => {
   assert.ok(safe.long.length <= 201);
 });
 
+test('logger preserves a bounded sanitized node rejection', () => {
+  const safe = sanitizeFields({
+    nodeMessage: `Rejected transaction ${'a'.repeat(64)} for kaspatest:qabc ${'x'.repeat(2500)}`,
+  });
+  assert.match(safe.nodeMessage, /Rejected transaction <txid> for <address>/);
+  assert.ok(safe.nodeMessage.length <= 2001);
+  assert.doesNotMatch(safe.nodeMessage, /a{64}|kaspatest:/);
+});
+
 test('logger reveals wallet addresses only when redactAddresses is disabled', () => {
   const { lines, stream } = capture();
   const logger = createLogger({ level: 'info', stream, now: () => new Date('2026-01-01T00:00:00.000Z'), redactAddresses: false });
