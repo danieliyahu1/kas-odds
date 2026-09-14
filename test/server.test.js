@@ -95,7 +95,7 @@ test('server serves the browser application and health probe', async (t) => {
   assert.match(browserSource, /api\/games\/\$\{gameId\}\/reveal\/prepare/);
   assert.match(browserSource, /api\/matchmaking\/join/);
   assert.match(browserSource, /api\/matchmaking\/\$\{match\.matchId\}\/leave/);
-  assert.match(browserSource, /api\/matchmaking\/\$\{match\.matchId\}\/confirm/);
+  assert.doesNotMatch(browserSource, /api\/matchmaking\/\$\{match\.matchId\}\/confirm/);
   assert.match(browserSource, /data-action="reveal"/);
   assert.match(browserSource, /data-commit-number/);
   assert.match(browserSource, /data-join-number/);
@@ -241,7 +241,7 @@ test('server serves the browser application and health probe', async (t) => {
   assert.doesNotMatch(stderr, /kaspatest:|[0-9a-f]{64}/);
 });
 
-test('matchmaking joins, refuses a wrong stake, and becomes ready when both accept', async (t) => {
+test('matchmaking joins and pairs when the lower limit sets the stake', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-http-match-'));
   const port = 3700 + Math.floor(Math.random() * 300);
   const metricsPort = port + 600;
@@ -275,19 +275,13 @@ test('matchmaking joins, refuses a wrong stake, and becomes ready when both acce
   assert.equal(second.status, 'matched');
   assert.equal(second.stakeKas, 6);
 
-  // A stake other than the agreed lower limit cannot lock anything.
-  const refused = await post(`/api/matchmaking/${first.matchId}/confirm`, { address: 'kaspatest:one', stakeKas: 20 });
-  assert.equal(refused.status, 400);
-
-  const accepted = await post(`/api/matchmaking/${first.matchId}/confirm`, { address: 'kaspatest:one', stakeKas: 6 }).then((response) => response.json());
-  assert.equal(accepted.status, 'matched');
-  assert.equal(accepted.confirmed, true);
-  assert.equal(accepted.opponentConfirmed, false);
-
-  const ready = await post(`/api/matchmaking/${first.matchId}/confirm`, { address: 'kaspatest:two', stakeKas: 6 }).then((response) => response.json());
-  assert.equal(ready.status, 'ready');
-  assert.equal(ready.confirmed, true);
-  assert.equal(ready.opponentConfirmed, true);
+  // Both players see the matched pairing with their assigned role and side.
+  const firstStatus = await fetch(`${origin}/api/matchmaking/${first.matchId}?address=kaspatest:one`).then((response) => response.json());
+  const secondStatus = await fetch(`${origin}/api/matchmaking/${first.matchId}?address=kaspatest:two`).then((response) => response.json());
+  assert.equal(firstStatus.status, 'matched');
+  assert.equal(secondStatus.status, 'matched');
+  assert.equal(firstStatus.stakeKas, 6);
+  assert.notEqual(firstStatus.role, secondStatus.role);
 });
 
 test('starts without a fee recipient configured and reports the game fee as not configured', async (t) => {

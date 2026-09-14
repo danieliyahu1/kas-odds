@@ -57,23 +57,6 @@ export class BackendGameService {
     return this.#matchResponse(match, address);
   }
 
-  async confirmMatchmaking(matchId, address, stakeKas) {
-    const playerAddress = this.#matchmakingAddress(address);
-    const match = await this.store.loadMatch(matchId);
-    const player = this.#matchPlayer(match, playerAddress);
-    if (player.confirmed) return this.#matchResponse(match, playerAddress);
-    if (match.status !== 'matched' || match.stakeKas === null || match.players.length !== 2) {
-      throw new ProtocolError('MATCH_NOT_READY', 'This match has no stake to accept yet');
-    }
-    if (Number(stakeKas) !== match.stakeKas) {
-      throw new ProtocolError('INVALID_STAKE', 'The stake you accept must match the agreed game');
-    }
-    this.#logPlayer('matchmaking_confirm', playerAddress, { matchId, stakeKas });
-    const updated = await this.store.confirmMatchmaking(matchId, playerAddress);
-    this.metrics.recordGameEvent('matchmaking_confirm');
-    return this.#matchResponse(updated, playerAddress);
-  }
-
   async matchmakingStatus(matchId, address) {
     const match = await this.store.loadMatch(matchId);
     const playerAddress = this.#matchmakingAddress(address);
@@ -788,7 +771,7 @@ export class BackendGameService {
     if (!match) throw new ProtocolError('MATCH_NOT_FOUND', 'Matchmaking session was not found');
     const creator = this.#matchPlayer(match, request.creatorAddress);
     const creatorIndex = match.players.indexOf(creator);
-    if (match.status !== 'ready' || creatorIndex !== match.creatorIndex) {
+    if (match.status !== 'matched' || creatorIndex !== match.creatorIndex) {
       throw new ProtocolError('MATCH_NOT_READY', 'Only the match creator can publish the game');
     }
     const updated = await this.store.updateMatch(matchId, (current) => {
@@ -813,7 +796,7 @@ export class BackendGameService {
     const player = this.#matchPlayer(match, input.creatorAddress);
     const playerIndex = match.players.indexOf(player);
     const assignedSide = this.#assignedSide(match, playerIndex);
-    if (match.status !== 'ready' || match.players.length !== 2 || playerIndex !== match.creatorIndex || input.stakeKas !== match.stakeKas || input.side !== assignedSide) {
+    if (match.status !== 'matched' || match.players.length !== 2 || playerIndex !== match.creatorIndex || input.stakeKas !== match.stakeKas || input.side !== assignedSide) {
       throw new ProtocolError('MATCH_NOT_READY', 'This matchmaking game is not ready to start');
     }
   }
@@ -879,8 +862,6 @@ export class BackendGameService {
       stakeKas: match.stakeKas ?? null,
       myLimitKas: mine.limitKas ?? MIN_STAKE_KAS,
       rivalLimitKas: rival ? rival.limitKas ?? MIN_STAKE_KAS : null,
-      confirmed: Boolean(mine.confirmed),
-      opponentConfirmed: Boolean(rival?.confirmed ?? false),
       opponentConnected: match.players.length === 2,
     };
   }

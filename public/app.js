@@ -114,59 +114,53 @@ function renderMatchmaking() {
       content.innerHTML = '<div class="notice error"><strong>Your rival left.</strong>No KAS was locked.</div><div class="actions"><a class="primary home-button" href="/rival">Find another rival</a></div>';
       return;
     }
-    if (match.status === 'matched' && !match.confirmed) {
-      content.innerHTML = `
-        <div class="notice"><strong>Rival found.</strong>You're ${escapeHtml(capitalize(match.side))}. The game is <strong>${escapeHtml(match.stakeKas)} KAS each</strong>.</div>
-        <p class="muted-note">You were in for up to ${escapeHtml(match.myLimitKas)} KAS. Your rival up to ${escapeHtml(match.rivalLimitKas)}. The lower limit wins.</p>
-        <div class="summary">
-          <div class="sum-item"><small>Stake</small><strong>${escapeHtml(match.stakeKas)} KAS</strong></div>
-          <div class="sum-item"><small>Pot</small><strong>${escapeHtml(match.stakeKas * 2)} KAS</strong></div>
-        </div>
-        <fieldset class="choice-group">
-          <legend>Your number</legend>
-          <div class="choice-row">
-            <button type="button" class="choice num" data-match-number="1" aria-pressed="false"><span class="num-big">1</span><small class="num-tag">Odd</small></button>
-            <button type="button" class="choice num" data-match-number="0" aria-pressed="false"><span class="num-big">2</span><small class="num-tag">Even</small></button>
-          </div>
-        </fieldset>
-        ${match.opponentConfirmed ? '<p class="muted-note">Your rival already accepted the stake.</p>' : ''}
-        <div id="match-number-notice"></div>
-        <div class="actions"><button type="button" class="primary" id="match-play" disabled>Play for ${escapeHtml(match.stakeKas)} KAS</button></div>`;
-      document.querySelectorAll('[data-match-number]').forEach((button) => button.addEventListener('click', () => {
-        number = Number(button.dataset.matchNumber);
-        document.querySelectorAll('[data-match-number]').forEach((item) => {
-          const selected = item === button;
-          item.classList.toggle('selected', selected);
-          item.setAttribute('aria-pressed', String(selected));
-        });
-        document.querySelector('#match-play').disabled = false;
-      }));
-      document.querySelector('#match-play').addEventListener('click', confirmAccept);
+    // The creator starts the game by signing; the matched rival joins once the
+    // on-chain game appears (the join transaction spends the creator output).
+    if (match.role === 'creator' && match.gameId) {
+      location.href = `/game?id=${match.gameId}`;
       return;
     }
-    if (match.status === 'matched') {
-      content.innerHTML = `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for your rival to accept ${escapeHtml(match.stakeKas)} KAS</span></div><button type="button" class="outline" id="match-leave">Cancel</button>`;
-      document.querySelector('#match-leave').addEventListener('click', leave);
+    if ((match.role === 'creator' && !match.gameId) || (match.role === 'joiner' && match.gameId)) {
+      renderMatchPlay();
       return;
     }
-    const message = match.role === 'joiner' && !match.gameId
-      ? 'Waiting for your rival to create the game'
-      : `Playing for ${escapeHtml(match.stakeKas)} KAS. Preparing your game`;
-    content.innerHTML = `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">${message}</span></div>`;
+    content.innerHTML = `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for your rival to create the game</span></div><button type="button" class="outline" id="match-leave">Cancel</button>`;
+    document.querySelector('#match-leave').addEventListener('click', leave);
   }
 
-  async function confirmAccept() {
-    const button = document.querySelector('#match-play');
-    button.disabled = true;
-    try {
-      match = await api(`/api/matchmaking/${match.matchId}/confirm`, { method: 'POST', body: { address: account.address, stakeKas: match.stakeKas } });
-      renderMatchState();
-      await advanceMatch();
-    } catch (error) {
-      button.disabled = false;
-      logError('match_confirm_failed', { code: error.code, message: error.message });
-      showNotice('#matchmaking-content', 'Could not accept the game', error.message, 'error');
-    }
+  function renderMatchPlay() {
+    const isCreator = match.role === 'creator';
+    content.innerHTML = `
+      <div class="notice"><strong>Rival found.</strong>You're ${escapeHtml(capitalize(match.side))}. The game is <strong>${escapeHtml(match.stakeKas)} KAS each</strong>.</div>
+      <p class="muted-note">You were in for up to ${escapeHtml(match.myLimitKas)} KAS. Your rival up to ${escapeHtml(match.rivalLimitKas)}. The lower limit wins.</p>
+      <div class="summary">
+        <div class="sum-item"><small>Stake</small><strong>${escapeHtml(match.stakeKas)} KAS</strong></div>
+        <div class="sum-item"><small>Pot</small><strong>${escapeHtml(match.stakeKas * 2)} KAS</strong></div>
+      </div>
+      <fieldset class="choice-group">
+        <legend>Your number</legend>
+        <div class="choice-row">
+          <button type="button" class="choice num" data-match-number="1" aria-pressed="false"><span class="num-big">1</span><small class="num-tag">Odd</small></button>
+          <button type="button" class="choice num" data-match-number="0" aria-pressed="false"><span class="num-big">2</span><small class="num-tag">Even</small></button>
+        </div>
+      </fieldset>
+      <div id="match-number-notice"></div>
+      <div class="actions"><button type="button" class="primary" id="match-play" disabled>${isCreator ? 'Create' : 'Join'} for ${escapeHtml(match.stakeKas)} KAS</button></div>`;
+    document.querySelectorAll('[data-match-number]').forEach((button) => button.addEventListener('click', () => {
+      number = Number(button.dataset.matchNumber);
+      document.querySelectorAll('[data-match-number]').forEach((item) => {
+        const selected = item === button;
+        item.classList.toggle('selected', selected);
+        item.setAttribute('aria-pressed', String(selected));
+      });
+      document.querySelector('#match-play').disabled = false;
+    }));
+    document.querySelector('#match-play').addEventListener('click', () => {
+      started = true;
+      clearInterval(pollTimer);
+      if (isCreator) void startCreation();
+      else void startJoin();
+    });
   }
 
   async function refreshMatch() {
@@ -177,28 +171,10 @@ function renderMatchmaking() {
       const changed = previous.status !== match.status
         || previous.opponentConnected !== match.opponentConnected
         || previous.gameId !== match.gameId
-        || previous.confirmed !== match.confirmed
-        || previous.opponentConfirmed !== match.opponentConfirmed
         || previous.stakeKas !== match.stakeKas;
       if (changed) renderMatchState();
-      await advanceMatch();
     } catch (error) {
       if (error.code === 'MATCH_NOT_FOUND') clearInterval(pollTimer);
-    }
-  }
-
-  async function advanceMatch() {
-    // The creator creates once both players have accepted the stake; the joiner
-    // waits for the on-chain creation to appear (the join tx must spend it).
-    if (started || number === null) return;
-    if (match.status === 'ready' && match.role === 'creator' && !match.gameId) {
-      started = true;
-      clearInterval(pollTimer);
-      await startCreation();
-    } else if (match.gameId && match.role === 'joiner') {
-      started = true;
-      clearInterval(pollTimer);
-      await startJoin();
     }
   }
 

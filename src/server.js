@@ -180,7 +180,6 @@ async function routeRequest(req, res, pathname) {
   }
   const matchStatus = pathname.match(/^\/api\/matchmaking\/([0-9a-f-]{36})$/i);
   const matchLeave = pathname.match(/^\/api\/matchmaking\/([0-9a-f-]{36})\/leave$/i);
-  const matchConfirm = pathname.match(/^\/api\/matchmaking\/([0-9a-f-]{36})\/confirm$/i);
   if (req.method === 'GET' && matchStatus) {
     const query = new URL(req.url ?? '/', 'http://localhost').searchParams;
     return sendJson(res, 200, await gameService.matchmakingStatus(matchStatus[1], query.get('address')));
@@ -188,10 +187,6 @@ async function routeRequest(req, res, pathname) {
   if (req.method === 'POST' && matchLeave) {
     const body = await readJson(req);
     return sendJson(res, 200, await gameService.leaveMatchmaking(matchLeave[1], body.address));
-  }
-  if (req.method === 'POST' && matchConfirm) {
-    const body = await readJson(req);
-    return sendJson(res, 200, await gameService.confirmMatchmaking(matchConfirm[1], body.address, body.stakeKas));
   }
   const gameMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})$/i);
   const joinMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})\/join\/(prepare|submit)$/i);
@@ -334,7 +329,6 @@ function routeLabel(pathname) {
   if (pathname === '/api/games/submit') return '/api/games/submit';
   if (pathname === '/api/matchmaking/join') return '/api/matchmaking/join';
   if (/^\/api\/matchmaking\/[0-9a-f-]{36}\/leave$/i.test(pathname)) return '/api/matchmaking/:id/leave';
-  if (/^\/api\/matchmaking\/[0-9a-f-]{36}\/confirm$/i.test(pathname)) return '/api/matchmaking/:id/confirm';
   if (/^\/api\/matchmaking\/[0-9a-f-]{36}$/i.test(pathname)) return '/api/matchmaking/:id';
   if (/^\/api\/games\/[0-9a-f]{64}\/(join|reveal)\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/:stage/:step';
   if (/^\/api\/games\/[0-9a-f]{64}\/(creator_refund|fallback_claim|refund_player)\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/:action/:step';

@@ -23,12 +23,6 @@ test('matchmaking pairs two wallets and keeps the queue private to the store', a
   assert.ok([0, 1].includes(second.creatorIndex));
   assert.deepEqual((await store.loadMatch('first-match')).players.map(({ address }) => address), ['kaspatest:first', 'kaspatest:second']);
 
-  const afterCreatorConfirm = await store.confirmMatchmaking('first-match', 'kaspatest:first');
-  assert.equal(afterCreatorConfirm.status, 'matched');
-  assert.equal(afterCreatorConfirm.players[0].confirmed, true);
-  const afterJoinerConfirm = await store.confirmMatchmaking('first-match', 'kaspatest:second');
-  assert.equal(afterJoinerConfirm.status, 'ready');
-
   await store.updateMatch('first-match', (match) => { match.status = 'started'; match.creation = { gameId: 'd'.repeat(64) }; });
   const updated = await store.loadMatch('first-match');
   assert.equal(updated.status, 'started');
@@ -51,7 +45,6 @@ test('pairs any two waiters and stakes the lower limit', async (t) => {
   assert.equal(low.status, 'matched');
   assert.equal(low.stakeKas, 5);
   assert.deepEqual(low.players.map((player) => player.limitKas), [20, 5]);
-  assert.ok(low.players.every((player) => player.confirmed === false));
 
   const solo = await store.joinMatchmaking({ matchId: 'solo', address: 'kaspatest:solo', publicKey: 'c'.repeat(64), limitKas: 3 });
   assert.equal(solo.status, 'waiting');
