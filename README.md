@@ -79,14 +79,14 @@ from SilverScript `v1.0.0` (whose emitted artifact/compiler identifier remains
 `0.1.0`) from `covenant/even_odd.sil` into
 `covenant/even_odd.template.artifact.json`:
 
-- **contract**: `EvenOdd`, template hash `f411b38a…d9953f`
-- **state span**: `offset 1, len 252` (12 fields: `creator_hash`,
+- **contract**: `EvenOdd`, template hash `4db84ab2…fb9d13f`
+- **state span**: `offset 1, len 261` (13 fields: `creator_hash`,
   `joiner_hash`, `creator_commit`, `joiner_commit`, `stake`, `deadline_daa`,
   `creator_even`, `creator_choice`, `joiner_choice`, `first_revealer_hash`,
-  `game_wallet_hash`, `status`)
-- **dispatch tags**: `join = b1d2ce8f`, `refund = 762ffa55`
+  `game_wallet_hash`, `status`, `settle_fee`)
+- **dispatch tags**: `join = b1d2ce8f`, `refund = 762ffa55`, `refund_open = 3a658a5b`
 - **terminal dispatch tags**: `reveal = 6b547798`, `fallback_claim = e8bae487`,
-  `refund_player = 7e21ac29`
+  `refund_all = 0e2b436c`
 - **P2SH-256**: `0xaa 0x20 <blake2b-256(redeemScript)>`; address prefix
   `kaspatest`, version byte 8.
 - **reproducibility manifest**: `covenant/pins.json` pins the SilverScript
@@ -176,8 +176,9 @@ Runtime details:
   version-0 (PubKey) addresses embed the recipient's x-only public key
 directly, so the server decodes the address at startup and bakes that key
   into every game's covenant state. Each player locks exactly the displayed
-  stake; refunds and no-reveal flows return that full lock, while winner
-  settlement pays the fee from the total pot. The fee recipient is runtime-only
+  stake; automatic timeout refunds reserve 0.016 KAS from the locked amount for
+  the network fee, while winner settlement pays the game fee from the total pot.
+  The fee recipient is runtime-only
   configuration: the process boots without it, reports
   `gameFeePublicKey: null` from `/api/config`, and rejects game creation with
   `INVALID_GAME_FEE` until it is configured — so a misconfigured pod never
@@ -271,10 +272,12 @@ session. Matchmaking is "play up to": each player sets the most they are
 comfortable playing, the server pairs any two waiters, and the game is the
 lower of the two limits. Acceptance is on-chain, not off-chain: the assigned
 creator signs the creation transaction to lock their escrow, and the matched
-rival signs the join transaction to take the other side. Until a join confirms,
-only the creator's deadline refund may spend the covenant. The server builds and broadcasts every transaction, so
-it is required for the normal flow; the covenant still enforces the
-reveal/claim/refund timeouts on-chain regardless of who broadcasts.
+  rival signs the join transaction to take the other side. Until a join confirms,
+  the permissionless `refund_open` entry can reclaim the creator's stake after
+  the deadline, reserving the network fee from that lock. The server builds and
+  broadcasts every transaction, so it is required for the normal flow; the
+  covenant still enforces the reveal/claim/refund timeouts on-chain regardless
+  of who broadcasts.
 
 ## Support
 

@@ -80,3 +80,39 @@ test('reloads stored data from disk after a new instance', async (t) => {
   const second = new BackendGameStore(filePath);
   assert.equal((await second.loadGame('a'.repeat(64))).status, 'joined');
 });
+
+test('completing a game removes its durable aggregate and related preparations', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-complete-'));
+  const filePath = join(directory, 'games.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(filePath);
+  const gameId = 'g'.repeat(64);
+  const matchId = 'match';
+
+  await store.savePrepared({ preparedHash: 'p1', prepared: { txJson: 'creation' } });
+  await store.saveJoinPrepared({ preparedHash: 'j1', gameId });
+  await store.saveActionPrepared({ preparedHash: 'a1', gameId });
+  await store.saveGame({ gameId, matchId, creationPreparedHash: 'p1', prepared: { txJson: 'creation' }, status: 'settled' });
+  await store.saveMatch({ matchId, status: 'started', players: [] });
+
+  assert.equal(await store.completeGame({ gameId, matchId, creationPreparedHash: 'p1', prepared: { txJson: 'creation' } }), true);
+  assert.equal(await store.loadGame(gameId), null);
+  assert.equal(await store.loadPrepared('p1'), null);
+  assert.equal(await store.loadJoinPrepared('j1'), null);
+  assert.equal(await store.loadActionPrepared('a1'), null);
+  assert.equal(await store.loadMatch(matchId), null);
+});
+
+test('startup pruning removes expired durable preparations', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-prune-'));
+  const filePath = join(directory, 'games.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(filePath);
+  await store.savePrepared({ preparedHash: 'old', createdAt: '2020-01-01T00:00:00.000Z' });
+  await store.savePrepared({ preparedHash: 'new', createdAt: new Date().toISOString() });
+
+  await store.init();
+
+  assert.equal(await store.loadPrepared('old'), null);
+  assert.ok(await store.loadPrepared('new'));
+});

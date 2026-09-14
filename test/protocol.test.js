@@ -83,8 +83,8 @@ test('rejects wrong network and incomplete covenant state', () => {
 test('serializes and parses an invite with only version and game id', () => {
   const gameId = 'b'.repeat(64);
   const invite = serializeInvite({ gameId, origin: 'https://example.test/create' });
-  assert.equal(invite, `https://example.test/join?v=EO%2Fv6&game=${gameId}`);
-  assert.deepEqual(parseInvite(invite, 'https://example.test'), { protocolVersion: 'EO/v6', network: 'testnet-10', gameId, creation: null });
+  assert.equal(invite, `https://example.test/join?v=EO%2Fv9&game=${gameId}`);
+  assert.deepEqual(parseInvite(invite, 'https://example.test'), { protocolVersion: 'EO/v9', network: 'testnet-10', gameId, creation: null });
   assert.throws(() => parseInvite(`${invite}&secret=do-not-accept`, 'https://example.test'), { code: 'INVALID_INVITE' });
 });
 

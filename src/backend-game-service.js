@@ -4,18 +4,18 @@ import { verifySignedCreationSafeJson } from './genesis-transaction.js';
 import { deriveGameInstance } from './covenant/even-odd.mjs';
 import { verifySignedJoinTransaction } from './join-transactions.js';
 import { DEFAULT_RELAY_FLOOR_RATE, selectOrdinaryUtxos } from './fee-policy.js';
-import { prepareRevealTransaction, prepareTerminalTransaction, serializeTerminalTransaction, verifySignedTerminalTransaction } from './terminal-transactions.js';
+import { prepareRevealTransaction, prepareTerminalTransaction, prepareCovenantOnlyTransaction, prepareOpenRefundTransaction, serializeTerminalTransaction, verifySignedTerminalTransaction } from './terminal-transactions.js';
 import { parityOutcome, verifyRevealPreimage } from './reveal.js';
 import { blake2b256 } from './hashes/blake2b.mjs';
-import { FALLBACK_CLAIM_DAA_OFFSET, FIVE_MINUTE_DAA_OFFSET, NO_REVEAL_REFUND_DAA_OFFSET, safetyReadiness } from './terminal-actions.js';
-import { playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, MIN_STAKE_KAS, stakeToSompi, NETWORK, PROTOCOL_VERSION, ProtocolError, validateGameFeePublicKey, validateGameId } from './protocol.js';
+import { FALLBACK_CLAIM_DAA_OFFSET, FIVE_MINUTE_DAA_OFFSET, NO_REVEAL_REFUND_DAA_OFFSET, TESTNET10_DAA_PER_SECOND, safetyReadiness } from './terminal-actions.js';
+import { playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, automaticFallbackPayoutSompi, automaticRefundPayoutSompi, AUTOMATION_FEE_SOMPI, MIN_STAKE_KAS, stakeToSompi, NETWORK, PROTOCOL_VERSION, ProtocolError, validateGameFeePublicKey, validateGameId } from './protocol.js';
 import { noopMetrics } from './metrics.js';
 import { EphemeralPreparations } from './ephemeral-preparations.js';
 import { KaspaChainAdapter } from './chain-adapter.js';
 import { logger } from './logger.js';
 import { loadWasmSdk } from './wasm-transaction.js';
 import { prepareWithDynamicFee } from './transaction-fee.js';
-import { assertSignedTransactionFee } from './transaction-mass.js';
+import { assertSignedTransactionFee, signedTransactionFeeDiagnostics } from './transaction-mass.js';
 
 const MAX_TERMINAL_STORAGE_MASS = 500_000;
 // A broadcast transaction that has not been observed on-chain yet keeps the
@@ -131,6 +131,7 @@ export class BackendGameService {
       status: 'broadcast',
       request: record.request,
       prepared: record.prepared,
+      creationPreparedHash: preparedHash,
       createdAt: new Date().toISOString(),
       ...(matchId ? { matchId } : {}),
     });
@@ -165,8 +166,9 @@ export class BackendGameService {
       stakeSompi: request.stakeSompi,
       deadlineDaa: request.deadlineDaa,
       creatorEven: request.creatorEven,
-      gameWalletHash: request.gameWalletHash,
-      status: 1,
+         gameWalletHash: request.gameWalletHash,
+         settleFee: request.settleFeeSompi,
+         status: 1,
     });
     const prepared = await this.#chain(request).prepareJoin({
       request: {
@@ -342,10 +344,185 @@ export class BackendGameService {
     return { gameId: id, transactionId, status: prepared.winner ? 'settlement_broadcast' : 'reveal_broadcast' };
   }
 
+  // Permissionless timeout keeper. Every decision is re-read from the chain
+  // immediately before construction, so a competing reveal wins naturally.
+  async settleAutomaticGames() {
+    if (typeof this.store.listGames !== 'function') return { attempted: 0, skipped: 0 };
+    const games = await this.store.listGames();
+    let attempted = 0;
+    for (const record of games) {
+      try {
+        const request = deserializeRequest(record.request);
+        let current = await this.#refreshActionState(record);
+        if (current.automaticSettlement?.status === 'broadcast') {
+          await this.#refreshAutomaticSettlement(current, request);
+          continue;
+        }
+        const reveals = (current.reveals ?? []).filter((item) => item.status === 'confirmed');
+        if (reveals.length > 1) continue;
+        if (['settled', 'creator_refunded', 'refunded', 'fallback_claimed'].includes(current.status)) {
+          await this.#completeGame(current, current.status);
+          continue;
+        }
+        if (!current.join) {
+          const open = await this.#openCreationUtxo(current.gameId, request, deserializePrepared(current.prepared));
+          if (open.currentDaaScore < request.deadlineDaa) continue;
+          const prepared = prepareOpenRefundTransaction({
+            gameInput: { ...open.entry, transactionId: current.gameId, index: 0, amount: playerLockSompi(request.stakeSompi), covenantId: deserializePrepared(current.prepared).covenantId, redeemScript: request.covenantRedeemScript },
+            stakeSompi: request.stakeSompi,
+            settleFeeSompi: request.settleFeeSompi,
+            deadlineDaa: request.deadlineDaa,
+            creatorPublicKey: request.creatorPublicKey,
+           });
+           const txJson = serializeTerminalTransaction(prepared);
+           const feeDiagnostics = await this.#validateAutomaticFee('refund_open', txJson, request.settleFeeSompi);
+           const transactionId = validateGameId(await this.rpc.submitSafeJson(txJson));
+          await this.#saveGame({ ...current, status: 'refund_open_broadcast', automaticSettlement: {
+            action: 'refund_open', transactionId, txJson, status: 'broadcast', submittedAt: new Date().toISOString(),
+            payouts: [{ outputIndex: 0, value: String(playerLockSompi(request.stakeSompi) - request.settleFeeSompi), scriptPublicKey: playerScriptPublicKey(request.creatorPublicKey), address: request.creatorAddress }],
+          } });
+          this.metrics.recordGameEvent('refund_open_submitted');
+           logger.info('automatic_settlement_submitted', { gameId: record.gameId, action: 'refund_open', transactionId, feeSompi: String(request.settleFeeSompi), mass: feeDiagnostics.mass, requiredFeeSompi: String(feeDiagnostics.requiredFeeSompi), feeRate: feeDiagnostics.effectiveFeeRate });
+          attempted += 1;
+          continue;
+        }
+        const covenant = await this.#currentGameUtxo(current, request, reveals);
+        const age = covenant.currentDaaScore - BigInt(covenant.entry.blockDaaScore);
+        let action;
+        let args;
+        let outputs;
+        if (reveals.length === 0 && age >= NO_REVEAL_REFUND_DAA_OFFSET) {
+          action = 'refund_all';
+          args = [request.creatorPublicKey, current.join.joinerPublicKey];
+          const refund = automaticRefundPayoutSompi(request.stakeSompi);
+          outputs = [
+            { value: refund, scriptPublicKey: playerScriptPublicKey(request.creatorPublicKey) },
+            { value: refund, scriptPublicKey: playerScriptPublicKey(current.join.joinerPublicKey) },
+          ];
+        } else if (reveals.length === 1 && age >= FALLBACK_CLAIM_DAA_OFFSET) {
+          action = 'fallback_claim';
+          const first = reveals[0];
+          args = [first.role === 'creator' ? request.creatorPublicKey : current.join.joinerPublicKey, request.gameFeePublicKey];
+          const winnerKey = args[0];
+          outputs = [{ value: automaticFallbackPayoutSompi(request.stakeSompi), scriptPublicKey: playerScriptPublicKey(winnerKey) }];
+          const fee = gameFeeSompi(request.stakeSompi);
+          if (fee > 0n) outputs.push({ value: fee, scriptPublicKey: playerScriptPublicKey(request.gameFeePublicKey) });
+        } else continue;
+
+        const prepared = prepareCovenantOnlyTransaction({
+          action,
+          gameInput: { ...covenant.entry, transactionId: covenant.transactionId, index: 0, amount: grossPotSompi(request.stakeSompi), covenantId: current.join.covenantId, redeemScript: covenant.redeemScript },
+          inputSequence: action === 'fallback_claim' ? FALLBACK_CLAIM_DAA_OFFSET : NO_REVEAL_REFUND_DAA_OFFSET,
+          args,
+          outputs,
+         });
+         const txJson = serializeTerminalTransaction(prepared);
+          const feeDiagnostics = await this.#validateAutomaticFee(action, txJson, prepared.feeSompi);
+         const transactionId = validateGameId(await this.rpc.submitSafeJson(txJson));
+        const payoutAddresses = action === 'refund_all'
+          ? [request.creatorAddress, current.join.joinerAddress]
+          : [reveals[0].role === 'creator' ? request.creatorAddress : current.join.joinerAddress];
+        await this.#saveGame({ ...current, status: `${action}_broadcast`, automaticSettlement: {
+          action, transactionId, txJson, status: 'broadcast', submittedAt: new Date().toISOString(),
+          payouts: outputs.slice(0, action === 'refund_all' ? 2 : 1).map((output, outputIndex) => ({ outputIndex, value: String(output.value), scriptPublicKey: output.scriptPublicKey,
+            address: payoutAddresses[outputIndex] })),
+        } });
+        this.metrics.recordGameEvent(`${action}_submitted`);
+         logger.info('automatic_settlement_submitted', { gameId: record.gameId, action, transactionId, feeSompi: String(prepared.feeSompi), mass: feeDiagnostics.mass, requiredFeeSompi: String(feeDiagnostics.requiredFeeSompi), feeRate: feeDiagnostics.effectiveFeeRate });
+        attempted += 1;
+      } catch (error) {
+        if (!['ACTION_NOT_CONFIRMED', 'GAME_NOT_FOUND', 'GAME_NOT_OPEN', 'GAME_NOT_CONFIRMED'].includes(error?.code)) {
+           logger.warn('automatic_settlement_failed', { gameId: record.gameId, code: error?.code, message: error?.message, ...feeLogFields(error?.transactionDiagnostics) });
+        }
+      }
+    }
+    return { attempted, skipped: games.length - attempted };
+  }
+
+  // Wait for the earliest known timeout. Once a timeout is due, keep checking
+  // every 30 seconds until the chain accepts either the automatic spend or a
+  // normal reveal settlement.
+  async automaticSettlementDelayMs() {
+    if (typeof this.store.listGames !== 'function') return null;
+    const games = await this.store.listGames();
+    if (games.length === 0) return null;
+    const currentDaa = await this.#currentDaaScore();
+    let nextDaa = null;
+    let pollSoon = false;
+    for (const record of games) {
+      if (record.automaticSettlement?.status === 'confirmed' || ['settled', 'creator_refunded', 'refunded', 'fallback_claimed'].includes(record.status)) continue;
+      if (record.automaticSettlement?.status === 'broadcast') {
+        pollSoon = true;
+        continue;
+      }
+      if (!record.join) {
+        const readyAt = BigInt(deserializeRequest(record.request).deadlineDaa);
+        if (readyAt <= currentDaa) pollSoon = true;
+        else if (nextDaa === null || readyAt < nextDaa) nextDaa = readyAt;
+        continue;
+      }
+      const reveals = (record.reveals ?? []).filter((item) => item.status === 'confirmed');
+      if (reveals.length > 1) continue;
+      let active;
+      try {
+        active = await this.#currentGameUtxo(record, deserializeRequest(record.request), reveals);
+      } catch (error) {
+        if (error?.code === 'ACTION_NOT_CONFIRMED' || error?.code === 'GAME_NOT_FOUND') {
+          pollSoon = true;
+          continue;
+        }
+        throw error;
+      }
+      const readyAt = BigInt(active.entry.blockDaaScore) + (reveals.length === 1 ? FALLBACK_CLAIM_DAA_OFFSET : NO_REVEAL_REFUND_DAA_OFFSET);
+      if (readyAt <= currentDaa) pollSoon = true;
+      else if (nextDaa === null || readyAt < nextDaa) nextDaa = readyAt;
+    }
+    if (pollSoon) return 30_000;
+    if (nextDaa === null) return 300_000;
+    const remainingDaa = nextDaa - currentDaa;
+    return Math.max(1_000, Number(remainingDaa) * 1_000 / Number(TESTNET10_DAA_PER_SECOND) + 1_000);
+  }
+
+  async #validateAutomaticFee(action, txJson, reservedFeeSompi) {
+    const estimate = await this.rpc.getFeeEstimate();
+    const estimatedRate = Number(estimate?.estimate?.priorityBucket?.[0]?.feerate ?? DEFAULT_RELAY_FLOOR_RATE);
+    const priorityFeerate = Number.isFinite(estimatedRate) && estimatedRate >= 0 ? estimatedRate : DEFAULT_RELAY_FLOOR_RATE;
+    const diagnostics = signedTransactionFeeDiagnostics({ network: NETWORK, signedTxJson: txJson, priorityFeerate });
+    if (diagnostics.paidFeeSompi < diagnostics.requiredFeeSompi) {
+      const error = new ProtocolError('INSUFFICIENT_TRANSACTION_FEE', 'Embedded automatic settlement fee is below the current network fee.');
+      error.transactionDiagnostics = { ...diagnostics, reservedFeeSompi: BigInt(reservedFeeSompi) };
+      throw error;
+    }
+    logger.info('automatic_settlement_fee_validated', { action, mass: diagnostics.mass, paidFeeSompi: String(diagnostics.paidFeeSompi), requiredFeeSompi: String(diagnostics.requiredFeeSompi), feeRate: diagnostics.effectiveFeeRate });
+    return diagnostics;
+  }
+
+  async #refreshAutomaticSettlement(record, request) {
+    const payouts = record.automaticSettlement?.payouts ?? [];
+    if (payouts.length === 0) return record;
+    try {
+      for (const payout of payouts) {
+        await this.#expectedUtxo({ transactionId: record.automaticSettlement.transactionId, address: payout.address, scriptPublicKey: payout.scriptPublicKey, outputIndex: payout.outputIndex }, BigInt(payout.value));
+      }
+    } catch (error) {
+      if (error?.code === 'ACTION_NOT_CONFIRMED') return record;
+      throw error;
+    }
+    const terminalStatus = record.automaticSettlement.action === 'fallback_claim'
+      ? 'fallback_claimed'
+      : record.automaticSettlement.action === 'refund_open' ? 'creator_refunded' : 'refunded';
+    const saved = { ...record, status: terminalStatus, automaticSettlement: { ...record.automaticSettlement, status: 'confirmed', confirmedAt: new Date().toISOString() } };
+    await this.#completeGame(saved, terminalStatus);
+    return saved;
+  }
+
   async prepareSafetyAction(gameId, action, input) {
     const id = validateGameId(gameId);
     let gameRecord = await this.store.loadGame(id);
     if (!gameRecord) throw new ProtocolError('GAME_NOT_FOUND', 'Game was not found');
+    if (action !== 'creator_refund') {
+      throw new ProtocolError('ACTION_UNAVAILABLE', 'Timeout settlement is automatic and permissionless');
+    }
     gameRecord = await this.#refreshActionState(gameRecord);
     gameRecord = await this.#refreshSafetyState(gameRecord);
     const request = deserializeRequest(gameRecord.request);
@@ -357,13 +534,9 @@ export class BackendGameService {
       && item.action === action && item.playerAddress === player.address && !isPendingRetryable(item));
     if (pendingMine) throw new ProtocolError('ACTION_PENDING', 'The previous recovery action is still confirming');
     this.#logPlayer(`${action}_prepare`, player.address, { gameId: id, role: player.role });
-    const confirmedReveals = (gameRecord.reveals ?? []).filter((item) => item.status === 'confirmed');
-    const confirmedRefunds = (gameRecord.safetyActions ?? []).filter((item) => item.action === 'refund_player' && item.status === 'confirmed');
     let current;
     let covenantEntry;
     let sequence = 0n;
-    let continuation;
-    let continuationOutputIndex;
 
     if (action === 'creator_refund') {
       if (gameRecord.join) throw new ProtocolError('ACTION_UNAVAILABLE', 'Player B already joined this game');
@@ -372,57 +545,13 @@ export class BackendGameService {
       if (open.currentDaaScore < request.deadlineDaa) throw new ProtocolError('ACTION_UNAVAILABLE', 'The game is still open for Player B');
       current = { entry: open.entry, currentDaaScore: open.currentDaaScore, transactionId: id, redeemScript: request.covenantRedeemScript, value: playerLockSompi(request.stakeSompi) };
       covenantEntry = 'refund';
-    } else if (action === 'fallback_claim') {
-      if (confirmedReveals.length !== 1 || confirmedReveals[0].playerAddress !== player.address) throw new ProtocolError('ACTION_UNAVAILABLE', 'Only the first revealer can claim the timeout pot');
-      current = await this.#currentGameUtxo(gameRecord, request, confirmedReveals);
-      if (current.currentDaaScore < BigInt(current.entry.blockDaaScore) + FALLBACK_CLAIM_DAA_OFFSET) throw new ProtocolError('ACTION_UNAVAILABLE', 'The opponent still has time to reveal');
-      current.value = grossPotSompi(request.stakeSompi);
-      covenantEntry = 'fallback_claim';
-      sequence = FALLBACK_CLAIM_DAA_OFFSET;
-    } else if (action === 'refund_player') {
-      if (!gameRecord.join || confirmedReveals.length > 0) throw new ProtocolError('ACTION_UNAVAILABLE', 'Refunds require a joined game with no reveals');
-      if (confirmedRefunds.some((item) => item.playerAddress === player.address)) throw new ProtocolError('ALREADY_REFUNDED', 'This player already received a refund');
-      if (confirmedRefunds.length === 0) {
-        current = await this.#currentGameUtxo(gameRecord, request, []);
-      } else {
-        const firstRefund = confirmedRefunds[0];
-        const found = await this.#expectedUtxo({ transactionId: firstRefund.transactionId, address: firstRefund.continuationAddress, scriptPublicKey: firstRefund.continuationScriptPublicKey, outputIndex: 1 }, playerLockSompi(request.stakeSompi));
-        current = { ...found, transactionId: firstRefund.transactionId, outputIndex: 1, redeemScript: firstRefund.continuationRedeemScript, joinedDaaScore: BigInt(found.entry.blockDaaScore) };
-      }
-      if (current.currentDaaScore < BigInt(current.entry.blockDaaScore) + NO_REVEAL_REFUND_DAA_OFFSET) throw new ProtocolError('ACTION_UNAVAILABLE', 'The no-reveal refund wait has not elapsed');
-      current.value = confirmedRefunds.length === 0 ? grossPotSompi(request.stakeSompi) : playerLockSompi(request.stakeSompi);
-      covenantEntry = 'refund_player';
-      sequence = NO_REVEAL_REFUND_DAA_OFFSET;
-      if (confirmedRefunds.length === 0) {
-        continuation = deriveGameInstance({
-          creatorPubkey: request.creatorPublicKey,
-          creatorCommit: request.creatorCommitment,
-          joinerPubkey: gameRecord.join.joinerPublicKey,
-          joinerCommit: gameRecord.join.joinerCommitment,
-          stakeSompi: request.stakeSompi,
-          deadlineDaa: request.deadlineDaa,
-          creatorEven: request.creatorEven,
-          gameWalletHash: request.gameWalletHash,
-          status: player.role === 'creator' ? 5 : 6,
-        });
-        continuationOutputIndex = 1;
-      }
     } else {
       throw new ProtocolError('UNSUPPORTED_ACTION', 'Unsupported safety action');
     }
 
     let preparedArgs = [publicKey];
     let preparedPayout = playerLockSompi(request.stakeSompi);
-    let preparedExtraOutputs = continuation
-      ? [{ value: playerLockSompi(request.stakeSompi), scriptPublicKey: `0000${continuation.p2shScript.toString('hex')}`, covenant: { authorizingInput: 0, covenantId: gameRecord.join.covenantId } }]
-      : [];
-    if (action === 'fallback_claim') {
-      preparedPayout = winnerPayoutSompi(request.stakeSompi);
-      preparedArgs = [publicKey, request.gameFeePublicKey];
-      preparedExtraOutputs = gameFeeSompi(request.stakeSompi) > 0n
-        ? [{ value: gameFeeSompi(request.stakeSompi), scriptPublicKey: playerScriptPublicKey(request.gameFeePublicKey) }]
-        : [];
-    }
+    const preparedExtraOutputs = [];
     const build = (funding) => prepareTerminalTransaction({
       action: covenantEntry,
       gameInput: { ...current.entry, transactionId: current.transactionId, index: current.outputIndex ?? 0, amount: current.value, covenantId: gameRecord.join?.covenantId ?? deserializePrepared(gameRecord.prepared).covenantId, redeemScript: current.redeemScript },
@@ -444,10 +573,6 @@ export class BackendGameService {
     await this.store.saveActionPrepared({
       preparedHash, action, gameId: id, playerAddress: player.address, role: player.role,
       txJson, transaction: prepared.transaction, feeSompi: String(funding.feeSompi), priorityFeerate: funding.priorityFeerate,
-      continuationAddress: continuation?.address,
-      continuationScriptPublicKey: continuation ? `0000${continuation.p2shScript.toString('hex')}` : undefined,
-      continuationRedeemScript: continuation?.redeemScript.toString('hex'),
-      continuationOutputIndex,
       createdAt: new Date().toISOString(),
     });
     this.metrics.recordGameEvent(`${action}_prepared`);
@@ -480,6 +605,9 @@ export class BackendGameService {
     const record = await this.store.loadGame(id);
     if (!record) throw new ProtocolError('GAME_NOT_FOUND', 'Game was not prepared by this backend');
     let refreshed = record.join ? await this.#refreshActionState(record) : record;
+    if (refreshed.automaticSettlement?.status === 'broadcast') {
+      refreshed = await this.#refreshAutomaticSettlement(refreshed, deserializeRequest(refreshed.request));
+    }
     refreshed = await this.#refreshSafetyState(refreshed);
     const request = deserializeRequest(refreshed.request);
     const prepared = deserializePrepared(refreshed.prepared);
@@ -487,6 +615,7 @@ export class BackendGameService {
     const confirmedReveals = (refreshed.reveals ?? []).filter((reveal) => reveal.status === 'confirmed');
     const pendingReveals = (refreshed.reveals ?? []).filter((reveal) => reveal.status !== 'confirmed');
     const pendingSafety = (refreshed.safetyActions ?? []).filter((item) => item.status !== 'confirmed');
+    const automaticBroadcast = refreshed.automaticSettlement?.status === 'broadcast';
     const confirmation = safetyStatus || confirmedReveals.length > 0
       ? { status: 'confirmed' }
       : pendingReveals.length > 0 || pendingSafety.length > 0
@@ -495,6 +624,7 @@ export class BackendGameService {
       ? await this.#confirmJoin(refreshed, request)
       : await this.#chain(request, 1).confirmCreation({ transactionId: id, request, prepared });
     const status = safetyStatus ? refreshed.status
+      : automaticBroadcast ? `${refreshed.automaticSettlement.action}_broadcast`
       : confirmedReveals.some((reveal) => reveal.winner) ? 'settled'
       : confirmedReveals.length >= 1 ? 'first_revealed'
       : pendingReveals.some((reveal) => reveal.winner) ? 'settlement_broadcast'
@@ -504,10 +634,10 @@ export class BackendGameService {
         ? (confirmation.status === 'confirmed' ? 'joined' : refreshed.status)
       : (confirmation.status === 'confirmed' ? 'waiting_for_player_b' : confirmation.status);
     if (status !== refreshed.status) await this.#saveGame({ ...refreshed, status, confirmation, updatedAt: new Date().toISOString() });
-    const safetyAction = status === 'first_revealed' ? 'fallback_claim'
-      : status === 'joined' || status === 'refund_partial' ? 'refund_player'
-      : status === 'waiting_for_player_b' ? 'creator_refund' : null;
-    const readiness = await this.#safetyReadiness(refreshed, request, safetyAction);
+    const safetyAction = status === 'waiting_for_player_b' ? 'creator_refund' : null;
+    const automaticAction = ['waiting_for_player_b', 'refund_open_broadcast'].includes(status) ? 'refund_open'
+      : status === 'first_revealed' ? 'fallback_claim' : status === 'joined' ? 'refund_all' : null;
+    const readiness = await this.#safetyReadiness(refreshed, request, automaticAction ?? safetyAction);
     return {
       gameId: id,
       network: NETWORK,
@@ -517,7 +647,7 @@ export class BackendGameService {
       creator: { address: request.creatorAddress, side: request.side },
       joiner: refreshed.join ? { address: refreshed.join.joinerAddress } : null,
       deadlineDaa: String(request.deadlineDaa),
-      canJoin: status === 'waiting_for_player_b',
+       canJoin: status === 'waiting_for_player_b' && !(automaticAction === 'refund_open' && readiness?.ready),
       joinTransactionId: refreshed.join?.transactionId,
       revealCount: confirmedReveals.length,
       firstRevealer: confirmedReveals.find((reveal) => !reveal.winner)?.playerAddress ?? null,
@@ -528,10 +658,18 @@ export class BackendGameService {
       canReveal: ['joined', 'first_revealed'].includes(status),
       pendingReveals: pendingReveals.map((reveal) => ({ role: reveal.role, stage: reveal.winner ? 'settlement' : 'first', retryable: isPendingRetryable(reveal) })),
       pendingSafety: pendingSafety.map((item) => ({ action: item.action, role: item.role, retryable: isPendingRetryable(item) })),
-      safetyAction,
-      safetyReady: readiness?.ready ?? null,
-      safetyRemainingSeconds: readiness?.remainingSeconds ?? null,
-    };
+       safetyAction,
+       safetyReady: readiness?.ready ?? null,
+       safetyRemainingSeconds: readiness?.remainingSeconds ?? null,
+       automaticAction,
+       automaticReady: automaticAction ? (readiness?.ready ?? false) : null,
+       automaticRemainingSeconds: automaticAction ? (readiness?.remainingSeconds ?? null) : null,
+       automaticSettlement: refreshed.automaticSettlement ? {
+         action: refreshed.automaticSettlement.action,
+         status: refreshed.automaticSettlement.status,
+         transactionId: refreshed.automaticSettlement.transactionId,
+       } : null,
+     };
   }
 
   // --- Reveal helpers ------------------------------------------------------
@@ -551,8 +689,9 @@ export class BackendGameService {
           creatorChoice: player.role === 'creator' ? choice : 0,
           joinerChoice: player.role === 'joiner' ? choice : 0,
           firstRevealerHash: firstHash,
-          gameWalletHash: request.gameWalletHash,
-          status: 2,
+           gameWalletHash: request.gameWalletHash,
+           settleFee: request.settleFeeSompi,
+           status: 2,
         }),
         winner: null,
       };
@@ -617,7 +756,8 @@ export class BackendGameService {
         .filter(Boolean);
       const settled = updated.find((reveal) => reveal.status === 'confirmed' && reveal.winner);
       const saved = { ...record, reveals: updated, status: settled ? 'settled' : 'first_revealed', ...(settled ? { winner: settled.winner } : {}) };
-      await this.#saveGame(saved);
+      if (settled) await this.#completeGame(saved, 'settled');
+      else await this.#saveGame(saved);
       return saved;
     }
     return record;
@@ -653,12 +793,10 @@ export class BackendGameService {
           return item;
         })
         .filter(Boolean);
-      const refundCount = updated.filter((item) => item.action === 'refund_player' && item.status === 'confirmed').length;
-      const status = attempt.action === 'fallback_claim' ? 'fallback_claimed'
-        : attempt.action === 'creator_refund' ? 'creator_refunded'
-        : refundCount >= 2 ? 'refunded' : 'refund_partial';
+      const status = attempt.action === 'creator_refund' ? 'creator_refunded' : record.status;
       const saved = { ...record, safetyActions: updated, status };
-      await this.#saveGame(saved);
+       if (status === 'creator_refunded') await this.#completeGame(saved, status);
+       else await this.#saveGame(saved);
       return saved;
     }
     return record;
@@ -787,7 +925,7 @@ export class BackendGameService {
   async #safetyReadiness(record, request, safetyAction) {
     if (!safetyAction) return null;
     const currentDaa = await this.#currentDaaScore();
-    if (safetyAction === 'creator_refund') return safetyReadiness(currentDaa, request.deadlineDaa);
+    if (safetyAction === 'creator_refund' || safetyAction === 'refund_open') return safetyReadiness(currentDaa, request.deadlineDaa);
     if (safetyAction === 'fallback_claim') {
       const reveal = (record.reveals ?? []).find((item) => item.status === 'confirmed');
       if (!reveal?.confirmedDaaScore) return { ready: false, remainingSeconds: null };
@@ -817,10 +955,6 @@ export class BackendGameService {
   }
 
   #refundCurrentOutput(record) {
-    const confirmedRefund = (record.safetyActions ?? []).find((item) => item.action === 'refund_player' && item.status === 'confirmed');
-    if (confirmedRefund?.continuationAddress) {
-      return { address: confirmedRefund.continuationAddress, outputIndex: confirmedRefund.continuationOutputIndex ?? 1, scriptPublicKey: confirmedRefund.continuationScriptPublicKey };
-    }
     if (record.join) return { address: record.join.joinedAddress, outputIndex: 0, scriptPublicKey: record.join.joinedScriptPublicKey };
     return null;
   }
@@ -890,6 +1024,22 @@ export class BackendGameService {
 
   async #saveGame(record) {
     await this.store.saveGame(record);
+  }
+
+  async #completeGame(record, status) {
+    const removed = await this.store.completeGame(record);
+    if (!removed) return;
+    logger.info('game_completed', {
+      gameId: record.gameId,
+      status,
+      winner: record.winner ?? null,
+      revealTransactionId: record.reveals?.find((reveal) => reveal.winner)?.transactionId ?? null,
+      automaticTransactionId: record.automaticSettlement?.transactionId ?? null,
+      safetyTransactionIds: (record.safetyActions ?? []).map((action) => action.transactionId).filter(Boolean),
+      payouts: record.automaticSettlement?.payouts ?? [],
+    });
+    this.ephemeral.deleteForGame(record.gameId);
+    this.metrics.recordGameEvent('game_completed');
   }
 
   // Recompute the matchmaking gauge from the store. Called on startup and
@@ -999,7 +1149,7 @@ function serializeRequest(request) {
 }
 
 function deserializeRequest(request) {
-  return { ...request, stakeSompi: BigInt(request.stakeSompi), feeSompi: BigInt(request.feeSompi), deadlineDaa: BigInt(request.deadlineDaa) };
+  return { ...request, stakeSompi: BigInt(request.stakeSompi), feeSompi: BigInt(request.feeSompi), deadlineDaa: BigInt(request.deadlineDaa), settleFeeSompi: BigInt(request.settleFeeSompi ?? 0) };
 }
 
 function serializePrepared(prepared) {

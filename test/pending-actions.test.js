@@ -34,7 +34,7 @@ function serializedRequest() {
 function baseRecord(overrides = {}) {
   return {
     gameId: GAME_ID,
-    protocolVersion: 'EO/v6',
+    protocolVersion: 'EO/v9',
     status: 'joined',
     request: serializedRequest(),
     prepared: {
@@ -153,7 +153,6 @@ test('confirms the attempt the chain accepted and prunes the losing duplicates',
   assert.equal(stored.reveals[0].transactionId, 'bb'.repeat(32));
   assert.equal(stored.reveals[0].status, 'confirmed');
 });
-
 test('prunes a rival attempt for the same step once one confirms', async (t) => {
   const creatorSpk = '0000aa20' + '0a'.repeat(32) + '87';
   const joinerSpk = '0000aa20' + '0b'.repeat(32) + '87';
@@ -206,29 +205,3 @@ test('unlocks the button after a minute but keeps the original attempt', async (
   assert.equal(stored.reveals[0].status, 'broadcast');
 });
 
-test('confirms a safety action and prunes its duplicates', async (t) => {
-  const firstSpk = '0000aa20' + '0c'.repeat(32) + '87';
-  const secondSpk = '0000aa20' + '0d'.repeat(32) + '87';
-  const record = baseRecord({
-    status: 'refund_player_broadcast',
-    safetyActions: [
-      pendingRefund({ transactionId: 'cc'.repeat(32), address: 'kaspatest:refund-a', scriptPublicKey: firstSpk, submittedAt: new Date().toISOString() }),
-      pendingRefund({ transactionId: 'ee'.repeat(32), address: 'kaspatest:refund-b', scriptPublicKey: secondSpk, submittedAt: new Date().toISOString() }),
-    ],
-  });
-  const { service, store } = await withRecord(t, record, {
-    confirmedAddress: 'kaspatest:refund-b',
-    confirmedTransactionId: 'ee'.repeat(32),
-    confirmedScriptPublicKey: secondSpk,
-    outputIndex: 1,
-    amount: '100000000',
-  });
-
-  const game = await service.readGame(GAME_ID);
-  assert.equal(game.status, 'refund_partial');
-  assert.equal(game.pendingSafety.length, 0);
-  const stored = await store.loadGame(GAME_ID);
-  assert.equal(stored.safetyActions.length, 1);
-  assert.equal(stored.safetyActions[0].transactionId, 'ee'.repeat(32));
-  assert.equal(stored.safetyActions[0].status, 'confirmed');
-});

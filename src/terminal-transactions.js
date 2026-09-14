@@ -1,4 +1,4 @@
-import { playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, ProtocolError } from './protocol.js';
+import { playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, automaticFallbackPayoutSompi, AUTOMATION_FEE_SOMPI, ProtocolError } from './protocol.js';
 import { getCovenantTemplate } from './covenant/template.mjs';
 import { hexToBytes, bytesToHex } from './hashes/hex.mjs';
 import {
@@ -14,7 +14,9 @@ import { describeTransactionChanges, unsignedInputs } from './transaction-diagno
 export const TERMINAL_ENTRIES = Object.freeze({
   reveal: 'reveal',
   fallbackClaim: 'fallback_claim',
-  refund: 'refund_player',
+  refund: 'refund',
+  refundOpen: 'refund_open',
+  refundAll: 'refund_all',
 });
 
 export function buildKccEntrySignatureScript({ entry, args, redeemScript, wasm = loadWasmSdk() }) {
@@ -35,17 +37,43 @@ export function prepareFallbackClaimTransaction({ game, caller, currentDaaScore,
   if (typeof walletPublicKey !== 'string' || walletPublicKey.length === 0) throw new ProtocolError('INVALID_TRANSACTION', 'Game wallet public key is required');
   const gameFee = gameFeeSompi(game.stakeSompi);
   if (gameFee > 0n && (typeof feeScriptPublicKey !== 'string' || feeScriptPublicKey.length === 0)) throw new ProtocolError('INVALID_TRANSACTION', 'Game fee script public key is required');
-  return prepareTerminalTransaction({
+  return prepareCovenantOnlyTransaction({
     action: TERMINAL_ENTRIES.fallbackClaim,
     gameInput,
     inputSequence: FALLBACK_CLAIM_DAA_OFFSET,
     args: [publicKey, walletPublicKey],
-    payoutValue: winnerPayoutSompi(game.stakeSompi),
-    recipientScriptPublicKey,
-    extraOutputs: gameFee > 0n ? [{ value: gameFee, scriptPublicKey: feeScriptPublicKey }] : [],
-    feeInputs,
-    feeSompi,
-    change,
+    outputs: [
+      { value: automaticFallbackPayoutSompi(game.stakeSompi), scriptPublicKey: recipientScriptPublicKey },
+      ...(gameFee > 0n ? [{ value: gameFee, scriptPublicKey: feeScriptPublicKey }] : []),
+    ],
+  });
+}
+
+export function prepareRefundAllTransaction({ gameInput, stakeSompi, creatorPublicKey, joinerPublicKey }) {
+  const stake = playerLockSompi(BigInt(stakeSompi));
+  return prepareCovenantOnlyTransaction({
+    action: TERMINAL_ENTRIES.refundAll,
+    gameInput,
+    inputSequence: NO_REVEAL_REFUND_DAA_OFFSET,
+    args: [creatorPublicKey, joinerPublicKey],
+    outputs: [
+      { value: stake - AUTOMATION_FEE_SOMPI / 2n, scriptPublicKey: playerScriptPublicKey(creatorPublicKey) },
+      { value: stake - AUTOMATION_FEE_SOMPI / 2n, scriptPublicKey: playerScriptPublicKey(joinerPublicKey) },
+    ],
+  });
+}
+
+export function prepareOpenRefundTransaction({ gameInput, stakeSompi, settleFeeSompi, deadlineDaa, creatorPublicKey }) {
+  const stake = playerLockSompi(BigInt(stakeSompi));
+  const fee = BigInt(settleFeeSompi);
+  if (fee <= 0n || fee >= stake) throw new ProtocolError('INVALID_TRANSACTION', 'Open refund fee must be smaller than the stake');
+  return prepareCovenantOnlyTransaction({
+    action: TERMINAL_ENTRIES.refundOpen,
+    gameInput,
+    inputSequence: NO_REVEAL_REFUND_DAA_OFFSET,
+    lockTime: BigInt(deadlineDaa),
+    args: [creatorPublicKey],
+    outputs: [{ value: stake - fee, scriptPublicKey: playerScriptPublicKey(creatorPublicKey) }],
   });
 }
 
@@ -151,6 +179,29 @@ export function prepareTerminalTransaction({ action, gameInput, inputSequence = 
       gas: '0',
       storageMass: '0',
       payload: '',
+    },
+  });
+}
+
+export function prepareCovenantOnlyTransaction({ action, gameInput, inputSequence = 0n, lockTime = 0n, args, outputs }) {
+  if (!gameInput || typeof gameInput !== 'object') throw new ProtocolError('INVALID_TRANSACTION', 'Current game UTXO is required');
+  if (!Array.isArray(outputs) || outputs.length === 0) throw new ProtocolError('INVALID_TRANSACTION', 'Covenant settlement outputs are required');
+  const input = normalizeInput({ ...gameInput, sequence: inputSequence }, buildKccEntrySignatureScript({
+    entry: action,
+    args,
+    redeemScript: gameInput.redeemScript,
+  }));
+  const normalizedOutputs = normalizeExtraOutputs(outputs);
+  const totalIn = BigInt(input.utxo.amount);
+  const totalOut = normalizedOutputs.reduce((sum, output) => sum + BigInt(output.value), 0n);
+  if (totalOut >= totalIn) throw new ProtocolError('INVALID_TRANSACTION', 'Covenant settlement must reserve a network fee');
+  return Object.freeze({
+    action,
+    feeSompi: totalIn - totalOut,
+    payoutSompi: BigInt(normalizedOutputs[0].value),
+    transaction: {
+       id: '00'.repeat(32), version: 1, inputs: [input], outputs: normalizedOutputs,
+       subnetworkId: '00'.repeat(20), lockTime: String(lockTime), gas: '0', storageMass: '0', payload: '',
     },
   });
 }
@@ -322,4 +373,11 @@ function pushScriptData(value) {
     return `4d${bytesToHex(size)}${bytesToHex(data)}`;
   }
   throw new ProtocolError('INVALID_TRANSACTION', 'Redeem script is too large');
+}
+
+function playerScriptPublicKey(publicKey) {
+  if (typeof publicKey !== 'string' || !/^[0-9a-f]{64}$/i.test(publicKey)) {
+    throw new ProtocolError('INVALID_TRANSACTION', 'Player public key must be 32-byte hexadecimal');
+  }
+  return `000020${publicKey.toLowerCase()}ac`;
 }

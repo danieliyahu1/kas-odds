@@ -9,6 +9,7 @@
 import { deriveGameInstance, parseTemplateArtifact, verifyTemplateHash, bytesToHex, hexToBytes } from '/src/covenant/even-odd-core.mjs';
 import { blake2b256 } from '/src/hashes/blake2b.mjs';
 import { createGenesisGameOutput } from '/src/genesis-transaction.js';
+import { AUTOMATION_FEE_SOMPI } from '/src/protocol.js';
 
 const SOMPI_PER_KAS = 100_000_000n;
 
@@ -37,6 +38,7 @@ export async function deriveCovenant({ creatorPublicKey, creatorCommitment, side
     deadlineDaa,
     creatorEven: side === 'even',
     gameWalletHash,
+    settleFee: AUTOMATION_FEE_SOMPI,
   }, { template });
 }
 

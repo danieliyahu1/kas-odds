@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   buildKccEntrySignatureScript,
   prepareFallbackClaimTransaction,
-  prepareIndividualRefundTransaction,
+  prepareOpenRefundTransaction,
+  prepareRefundAllTransaction,
   prepareRevealTransaction,
   prepareTerminalTransaction,
   serializeTerminalTransaction,
@@ -56,11 +57,10 @@ const gameFeeScriptPublicKey = '000053';
 
 test('encodes KCC arguments and dispatch tag from the pinned artifact', () => {
   const script = buildKccEntrySignatureScript({
-    entry: 'refund_player',
-    args: [new Uint8Array(32)],
+    entry: 'refund_all',
+    args: [new Uint8Array(32), new Uint8Array(32)],
   });
-  assert.match(script.toString('hex'), /7e21ac29$/);
-  assert.equal(script.length, 76);
+  assert.match(script.toString('hex'), /0e2b436c$/);
 });
 
 test('prepares and serializes an authorized fallback claim transaction', () => {
@@ -79,35 +79,40 @@ test('prepares and serializes an authorized fallback claim transaction', () => {
   });
   const transaction = JSON.parse(serializeTerminalTransaction(prepared));
   assert.equal(transaction.inputs[0].sequence, '3000');
-   assert.equal(transaction.outputs[0].value, '200000000');
-   assert.equal(transaction.outputs[1].value, '999000');
+   assert.equal(transaction.outputs[0].value, '198400000');
+  assert.equal(transaction.outputs.length, 1);
   assert.match(transaction.inputs[0].signatureScript, /e8bae487$/);
 });
 
-test('prepares an individual refund for only the caller escrow and fee', () => {
-  const prepared = prepareIndividualRefundTransaction({
-    game,
-    caller: 'joiner',
-    currentDaaScore: 4_000n,
+test('prepares a permissionless refund for both escrow holders', () => {
+  const prepared = prepareRefundAllTransaction({
     gameInput,
-    recipientScriptPublicKey: '000052',
-    continuationScriptPublicKey: gameInput.scriptPublicKey,
-    continuationCovenant: { authorizingInput: 0, covenantId: '33'.repeat(32) },
-    feeInputs: [feeInput],
-    feeSompi: 1_000n,
-    change: { value: 999_000n, scriptPublicKey: '000051' },
-    publicKey: new Uint8Array(32).fill(8),
+    stakeSompi: game.stakeSompi,
+    creatorPublicKey: '07'.repeat(32),
+    joinerPublicKey: '08'.repeat(32),
   });
   const transaction = JSON.parse(serializeTerminalTransaction(prepared));
   assert.equal(transaction.inputs[0].sequence, '3000');
-   assert.equal(transaction.outputs[0].value, '100000000');
-  assert.equal(transaction.outputs[0].scriptPublicKey, '000052');
-  assert.deepEqual(transaction.outputs[1], {
-    value: '100000000',
-    scriptPublicKey: gameInput.scriptPublicKey,
-    covenant: { authorizingInput: 0, covenantId: '33'.repeat(32) },
+   assert.equal(transaction.outputs[0].value, '99200000');
+   assert.equal(transaction.outputs[1].value, '99200000');
+  assert.equal(transaction.inputs.length, 1);
+  assert.match(transaction.inputs[0].signatureScript, /0e2b436c$/);
+});
+
+test('prepares an automatic refund for an unmatched creator', () => {
+  const prepared = prepareOpenRefundTransaction({
+    gameInput: { ...gameInput, amount: 100_000_000n },
+    stakeSompi: 100_000_000n,
+     settleFeeSompi: 1_600_000n,
+    deadlineDaa: 5_000n,
+    creatorPublicKey: '07'.repeat(32),
   });
-  assert.match(transaction.inputs[0].signatureScript, /7e21ac29$/);
+  const transaction = JSON.parse(serializeTerminalTransaction(prepared));
+  assert.equal(transaction.lockTime, '5000');
+  assert.equal(transaction.inputs.length, 1);
+  assert.equal(transaction.outputs.length, 1);
+   assert.equal(transaction.outputs[0].value, '98400000');
+  assert.match(transaction.inputs[0].signatureScript, /3a658a5b$/);
 });
 
 test('prepares first reveal as covenant continuation and second reveal as winner payout', () => {
@@ -182,24 +187,9 @@ test('refuses terminal transaction preparation when chain state is not eligible'
   }), { code: 'ACTION_UNAVAILABLE' });
 });
 
-test('requires wallet signing only on ordinary player inputs', () => {
-  const prepared = prepareIndividualRefundTransaction({
-    game,
-    caller: 'creator',
-    currentDaaScore: 4_000n,
-    gameInput,
-    recipientScriptPublicKey: '000051',
-    continuationScriptPublicKey: gameInput.scriptPublicKey,
-    continuationCovenant: { authorizingInput: 0, covenantId: '33'.repeat(32) },
-    feeInputs: [feeInput],
-    feeSompi: 1_000n,
-    change: { value: 999_000n, scriptPublicKey: '000051' },
-    publicKey: new Uint8Array(32).fill(7),
-  });
-  const signed = JSON.parse(serializeTerminalTransaction(prepared));
-  signed.id = 'aa'.repeat(32);
-  signed.inputs[1].signatureScript = '01aa';
-  assert.equal(typeof verifySignedTerminalTransaction({ prepared, signedTxJson: JSON.stringify(signed) }), 'string');
-  signed.outputs[0].value = '1';
-  assert.throws(() => verifySignedTerminalTransaction({ prepared, signedTxJson: JSON.stringify(signed) }), { code: 'SIGNED_TRANSACTION_MISMATCH' });
+test('automatic settlement requires no wallet signing', () => {
+  const prepared = prepareRefundAllTransaction({ gameInput, stakeSompi: game.stakeSompi, creatorPublicKey: '07'.repeat(32), joinerPublicKey: '08'.repeat(32) });
+  const transaction = JSON.parse(serializeTerminalTransaction(prepared));
+  assert.equal(transaction.inputs.length, 1);
+  assert.match(transaction.inputs[0].signatureScript, /0e2b436c$/);
 });

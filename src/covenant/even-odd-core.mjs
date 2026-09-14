@@ -12,7 +12,7 @@ import { blake2b256 } from '../hashes/blake2b.mjs';
 import { blake3 } from '../hashes/blake3.mjs';
 import { bech32Encode, bech32Decode } from '../hashes/bech32.mjs';
 import { hexToBytes, bytesToHex } from '../hashes/hex.mjs';
-import { MIN_STAKE_SOMPI, ProtocolError } from '../protocol.js';
+import { AUTOMATION_FEE_SOMPI, MIN_STAKE_SOMPI, ProtocolError } from '../protocol.js';
 
 export { hexToBytes, bytesToHex };
 
@@ -43,7 +43,8 @@ export function parseTemplateArtifact(json) {
     bytecodeHex: bytesToHex(Uint8Array.from(compiled.bytecode)),
     dispatchTags: Object.freeze({
       refund: contract.entries.refund.dispatch_tag,
-      refund_player: contract.entries.refund_player.dispatch_tag,
+      refund_open: contract.entries.refund_open.dispatch_tag,
+      refund_all: contract.entries.refund_all.dispatch_tag,
       fallback_claim: contract.entries.fallback_claim.dispatch_tag,
       reveal: contract.entries.reveal.dispatch_tag,
       join: contract.entries.join.dispatch_tag,
@@ -141,8 +142,9 @@ function buildStateScript(game) {
     pushData(encodeI64Fixed(creatorChoice)),
     pushData(encodeI64Fixed(joinerChoice)),
     pushData(firstRevealerHash),
-    pushData(gameWalletHash),   // game_wallet_hash
-    pushData(encodeI64Fixed(status)),
+     pushData(gameWalletHash),   // game_wallet_hash
+     pushData(encodeI64Fixed(status)),
+     pushData(encodeI64Fixed(game.settleFee ?? AUTOMATION_FEE_SOMPI)), // settle_fee
   ];
   const total = parts.reduce((n, p) => n + p.length, 0);
   const script = new Uint8Array(total);

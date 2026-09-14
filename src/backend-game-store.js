@@ -6,6 +6,7 @@ import { noopMetrics } from './metrics.js';
 
 const MATCH_WAIT_TIMEOUT_MS = 30_000;
 const DEFAULT_LIMIT_KAS = 1;
+const PREPARATION_RETENTION_MS = 900_000;
 // Windows can briefly lock a file being replaced by an atomic rename (antivirus,
 // search indexing, another reader). These are transient, so retry a few times
 // before surfacing a storage error.
@@ -27,6 +28,18 @@ export class BackendGameStore {
 
   async init() {
     await mkdir(dirname(this.filePath), { recursive: true });
+    await this.pruneExpiredPreparations();
+  }
+
+  async pruneExpiredPreparations(now = Date.now()) {
+    await this.#update((data) => {
+      for (const collection of [data.prepared, data.joinPrepared, data.actionPrepared]) {
+        for (const [preparedHash, record] of Object.entries(collection)) {
+          const createdAt = Date.parse(record.createdAt ?? '');
+          if (Number.isFinite(createdAt) && now - createdAt >= PREPARATION_RETENTION_MS) delete collection[preparedHash];
+        }
+      }
+    });
   }
 
   async health() {
@@ -49,8 +62,35 @@ export class BackendGameStore {
     return clone((await this.#read()).games[gameId] ?? null);
   }
 
+  async listGames() {
+    return clone(Object.values((await this.#read()).games));
+  }
+
   async saveGame(record) {
     await this.#update((data) => { data.games[record.gameId] = record; });
+  }
+
+  async completeGame(record) {
+    return this.#updateWithResult((data) => {
+      if (!data.games[record.gameId]) return false;
+      delete data.games[record.gameId];
+      if (record.matchId) {
+        delete data.matches[record.matchId];
+        data.queue = data.queue.filter((matchId) => matchId !== record.matchId);
+      }
+      for (const [preparedHash, prepared] of Object.entries(data.prepared)) {
+        if (preparedHash === record.creationPreparedHash || prepared.prepared?.txJson === record.prepared?.txJson) {
+          delete data.prepared[preparedHash];
+        }
+      }
+      for (const [preparedHash, prepared] of Object.entries(data.joinPrepared)) {
+        if (prepared.gameId === record.gameId) delete data.joinPrepared[preparedHash];
+      }
+      for (const [preparedHash, prepared] of Object.entries(data.actionPrepared)) {
+        if (prepared.gameId === record.gameId) delete data.actionPrepared[preparedHash];
+      }
+      return true;
+    });
   }
 
   async loadJoinPrepared(preparedHash) {

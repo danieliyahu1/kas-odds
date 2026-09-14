@@ -1,14 +1,12 @@
 import { ProtocolError } from './protocol.js';
 import { TERMINAL_COPY } from './terminal-actions.js';
 import {
-  prepareFallbackClaimTransaction,
-  prepareIndividualRefundTransaction,
   prepareRevealTransaction,
   serializeTerminalTransaction,
   verifySignedTerminalTransaction,
 } from './terminal-transactions.js';
 
-const ACTIONS = Object.freeze({ reveal: prepareRevealTransaction, fallback_claim: prepareFallbackClaimTransaction, individual_refund: prepareIndividualRefundTransaction });
+const ACTIONS = Object.freeze({ reveal: prepareRevealTransaction });
 const TERMINAL_STATES = new Set(['prepared', 'partially_signed', 'broadcast', 'observed', 'confirmed', 'rejected', 'stale', 'reorged']);
 
 export class MemoryTerminalStore {
@@ -78,7 +76,7 @@ export async function recoverTerminalAction({ operationKey, action, request, cha
 
 export function terminalOperationKey({ action, request, prepared }) {
   if (!action || !request?.caller || !prepared?.preparedHash) throw new ProtocolError('INVALID_TRANSACTION', 'Terminal operation identity is incomplete');
-  return ['EO/v6', action, request.caller, prepared.preparedHash].join('\u0000');
+  return ['EO/v9', action, request.caller, prepared.preparedHash].join('\u0000');
 }
 
 export function terminalStatusMessage(action, status) {

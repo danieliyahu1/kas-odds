@@ -1,22 +1,28 @@
 import { bech32Decode } from './hashes/bech32.mjs';
 
-export const PROTOCOL_VERSION = 'EO/v6';
+export const PROTOCOL_VERSION = 'EO/v9';
 export const NETWORK = 'testnet-10';
 export const ADDRESS_PREFIX = 'kaspatest';
 export const MIN_STAKE_KAS = 1;
 export const MAX_STAKE_KAS = 1_000_000;
 export const SOMPI_PER_KAS = 100_000_000n;
 export const MIN_STAKE_SOMPI = BigInt(MIN_STAKE_KAS) * SOMPI_PER_KAS;
-// Protocol v6: the entered stake IS the complete per-player lock — no extra fee
+// Protocol v7: the entered stake IS the complete per-player lock — no extra fee
 // is added on top. Both players fund `stake`, so the joined covenant holds
 // `grossPot = stake * 2`. When a winner exists (second reveal or fallback claim)
 // For a pot of at least 100 KAS, 1% goes to the game wallet and the winner
 // receives the remainder. Smaller pots pay the winner in full. Canceled/no-
-// reveal games refund each player their full lock; the game fee is never
-// charged without a winner.
+// reveal games use the creator refund path; automatic timeout settlement reserves
+// the fixed network fee from the locked pot, while the game fee is never charged
+// without a winner.
 export const GAME_FEE_DENOMINATOR = 100n;
 export const GAME_FEE_NUMERATOR = 1n;
 export const GAME_FEE_MINIMUM_SOMPI = SOMPI_PER_KAS;
+// Fee reserve embedded in each v9 covenant instance. At the relay floor, the
+// largest timeout transaction currently measures about 7,759 grams (775,900
+// sompi); this reserve leaves headroom for fee-rate movement and is deliberately
+// even because refund_all splits it equally between both players.
+export const AUTOMATION_FEE_SOMPI = 1_600_000n;
 
 export class ProtocolError extends Error {
   constructor(code, message, options = {}) {
@@ -64,6 +70,17 @@ export function gameFeeSompi(stakeSompi) {
 // Winner payout: the gross pot minus the single game fee.
 export function winnerPayoutSompi(stakeSompi) {
   return grossPotSompi(stakeSompi) - gameFeeSompi(stakeSompi);
+}
+
+export function automaticRefundPayoutSompi(stakeSompi) {
+  const stake = playerLockSompi(stakeSompi);
+  return stake - AUTOMATION_FEE_SOMPI / 2n;
+}
+
+export function automaticFallbackPayoutSompi(stakeSompi) {
+  const payout = winnerPayoutSompi(stakeSompi) - AUTOMATION_FEE_SOMPI;
+  if (payout <= 0n) throw new ProtocolError('INVALID_STAKE', 'Stake is too small for automatic settlement');
+  return payout;
 }
 
 export function validateGameFeePublicKey(value, name = 'game fee public key') {

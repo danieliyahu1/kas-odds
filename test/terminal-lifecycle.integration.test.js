@@ -6,7 +6,7 @@ import {
   terminalOperationKey,
 } from '../src/terminal-lifecycle.js';
 import { createRevealSecret } from '../src/reveal.js';
-import { prepareIndividualRefundTransaction, prepareRevealTransaction, serializeTerminalTransaction } from '../src/terminal-transactions.js';
+import { prepareRevealTransaction, serializeTerminalTransaction } from '../src/terminal-transactions.js';
 
 const creatorSecret = createRevealSecret({ gameId: 'aa'.repeat(32), player: 'creator', choice: 1, nonce: new Uint8Array(32).fill(7) });
 const joinerSecret = createRevealSecret({ gameId: 'aa'.repeat(32), player: 'joiner', choice: 0, nonce: new Uint8Array(32).fill(8) });
@@ -38,40 +38,6 @@ const request = {
   change: { value: 999_000n, scriptPublicKey: '000051' },
   publicKey: new Uint8Array(32).fill(7),
 };
-
-test('runs a refund from authoritative state through sign, submit, and confirmation', async () => {
-  const base = prepareIndividualRefundTransaction(requestForBuilder());
-  const preparedJson = serializeTerminalTransaction(base);
-  const calls = { sign: 0, submit: 0, confirm: 0 };
-  const chain = {
-    readGameState: async () => game,
-    prepareTerminalAction: async () => ({ txJson: preparedJson, preparedHash: 'ab'.repeat(32) }),
-    submitTerminal: async ({ signedTxJson }) => { calls.submit += 1; assert.match(signedTxJson, /01aa/); return 'cc'.repeat(32); },
-    confirmTerminal: async () => { calls.confirm += 1; return { status: 'confirmed', acceptingDaaScore: 10n, confirmedDaaScore: 11n }; },
-  };
-  const result = await createAndConfirmTerminalAction({
-    action: 'individual_refund', request, chain,
-    wallet: { sign: async ({ txJson }) => { calls.sign += 1; const tx = JSON.parse(txJson); tx.inputs[1].signatureScript = '01aa'; return JSON.stringify(tx); } },
-    store: new MemoryTerminalStore(),
-  });
-  assert.deepEqual(result, { status: 'confirmed', transactionId: 'cc'.repeat(32), message: 'Your refund is confirmed.' });
-  assert.deepEqual(calls, { sign: 1, submit: 1, confirm: 1 });
-});
-
-test('returns pending status and checkpoints without claiming confirmation', async () => {
-  const base = prepareIndividualRefundTransaction(requestForBuilder(), request);
-  const store = new MemoryTerminalStore();
-  const chain = {
-    readGameState: async () => game,
-    prepareTerminalAction: async () => ({ txJson: serializeTerminalTransaction(base), preparedHash: 'ab'.repeat(32) }),
-    submitTerminal: async () => 'dd'.repeat(32),
-    confirmTerminal: async () => ({ status: 'observed' }),
-  };
-  const result = await createAndConfirmTerminalAction({ action: 'individual_refund', request, chain, wallet: { sign: async ({ txJson }) => { const tx = JSON.parse(txJson); tx.inputs[1].signatureScript = '01aa'; return JSON.stringify(tx); } }, store });
-  assert.equal(result.status, 'observed');
-  assert.equal(result.message, 'Transaction status is pending confirmation.');
-  assert.equal((await store.load(terminalOperationKey({ action: 'individual_refund', request, prepared: { preparedHash: 'ab'.repeat(32) } }))).transactionId, 'dd'.repeat(32));
-});
 
 test('runs a normal second reveal through mocked wallet and chain settlement', async () => {
   const revealGame = { ...game, firstReveal: { player: 'creator', confirmedDaaScore: 2_000n }, reveals: { creator: true }, creatorChoice: 1, creatorEven: false };

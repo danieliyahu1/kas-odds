@@ -422,11 +422,12 @@ async function paintGame(gameId, game) {
   bindSafety(gameId, game, myPendingSafety);
   bindRecoveryCountdown(recoveryFromGame(game), () => refreshGame(gameId));
   bindPlayAgain();
+  if (!active) stopGameRefresh();
 }
 
 function recoveryFromGame(game) {
-  if (!game.safetyAction) return null;
-  return { ready: game.safetyReady ?? null, remainingSeconds: game.safetyRemainingSeconds ?? null };
+  if (!game.safetyAction && !game.automaticAction) return null;
+  return { ready: game.automaticAction ? game.automaticReady : game.safetyReady, remainingSeconds: game.automaticAction ? game.automaticRemainingSeconds : game.safetyRemainingSeconds };
 }
 
 function inviteBox(game, waiting) {
@@ -615,8 +616,13 @@ function flashCopy(button) {
 }
 
 function safetySection(game, role, pending) {
+  if (game.automaticAction && ['waiting_for_player_b', 'refund_open_broadcast', 'joined', 'first_revealed'].includes(game.status)) {
+    const label = game.automaticAction === 'fallback_claim' ? 'Automatic fallback claim' : 'Automatic refund';
+    const remaining = game.automaticRemainingSeconds == null ? 'checking the timeout' : game.automaticReady ? 'ready; the backend will relay it' : `in about ${game.automaticRemainingSeconds}s`;
+    return `<div id="game-safety" class="safety"><p class="lead">${label}</p><p class="muted-note">${escapeHtml(remaining)}. No wallet signature is required.</p></div>`;
+  }
   if (pending) {
-    const labels = { fallback_claim: 'Claim pot', refund_player: 'Refund my stake', creator_refund: 'Cancel game' };
+    const labels = { creator_refund: 'Cancel game' };
     const label = labels[pending.action] ?? 'Try again';
     const pendingControl = pending.retryable
       ? `<div class="actions"><button type="button" class="outline" data-action="safety" data-safety-action="${escapeHtml(pending.action)}">${escapeHtml(label)}</button></div>`
@@ -639,15 +645,6 @@ function safetySection(game, role, pending) {
     return `
       <div id="game-safety" class="safety">
         ${control('Cancel game')}
-      </div>`;
-  }
-  if (game.safetyAction === 'refund_player' && (game.status === 'joined' || game.status === 'refund_partial')) {
-    if (!isParticipant) return '';
-    return `
-      <div id="game-safety" class="safety">
-        <p class="lead">No one revealed</p>
-        <p class="muted-note">You can take back your stake after the wait.</p>
-        ${control('Refund my stake')}
       </div>`;
   }
   return '';
@@ -923,9 +920,15 @@ function capitalize(word) { return word ? word.charAt(0).toUpperCase() + word.sl
 function scheduleGameRefresh(gameId) {
   if (!window.__gameRefreshStarted) {
     window.__gameRefreshStarted = true;
-    setInterval(() => { void refreshGame(gameId); }, 3500);
+    window.__gameRefreshTimer = setInterval(() => { void refreshGame(gameId); }, 3500);
   }
   window.__gameStatus = undefined;
+}
+
+function stopGameRefresh() {
+  if (window.__gameRefreshTimer) clearInterval(window.__gameRefreshTimer);
+  window.__gameRefreshTimer = undefined;
+  window.__gameRefreshStarted = false;
 }
 
 async function refreshGame(gameId) {

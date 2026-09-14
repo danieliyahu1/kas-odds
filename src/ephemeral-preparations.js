@@ -32,6 +32,12 @@ export class EphemeralPreparations {
     this.entries.delete(preparedHash);
   }
 
+  deleteForGame(gameId) {
+    for (const [preparedHash, entry] of this.entries) {
+      if (entry.record.gameId === gameId) this.entries.delete(preparedHash);
+    }
+  }
+
   size() {
     this.#sweep();
     return this.entries.size;

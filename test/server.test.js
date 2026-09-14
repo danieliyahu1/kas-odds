@@ -60,7 +60,7 @@ test('server serves the browser application and health probe', async (t) => {
   assert.deepEqual(await health.json().then(({ ok, service, network }) => ({ ok, service, network })), { ok: true, service: 'kaspa-even-odd', network: 'testnet-10' });
   assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/api/config`)).json(), {
     network: 'testnet-10',
-    protocolVersion: 'EO/v6',
+    protocolVersion: 'EO/v9',
     gameFeePublicKey: feePublicKey,
   });
   assert.equal(missing.status, 404);
@@ -83,7 +83,7 @@ test('server serves the browser application and health probe', async (t) => {
   assert.equal(wasmJs.status, 200);
   assert.equal(icon.status, 200);
   assert.match(icon.headers.get('content-type') ?? '', /image\/svg\+xml/);
-  assert.equal((await artifact.json()).contracts.EvenOdd.compiled.state_span.len, 252);
+  assert.equal((await artifact.json()).contracts.EvenOdd.compiled.state_span.len, 261);
   assert.match(await pins.json().then((p) => p.rustyKaspa.webVendoredWasmFileSha256), /^[0-9a-f]{64}$/);
 
   // The thin client talks only to this server; it never constructs or verifies
@@ -302,7 +302,7 @@ test('starts without a fee recipient configured and reports the game fee as not 
   await waitForServer(`http://127.0.0.1:${port}/readyz`);
   assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/api/config`)).json(), {
     network: 'testnet-10',
-    protocolVersion: 'EO/v6',
+    protocolVersion: 'EO/v9',
     gameFeePublicKey: null,
   });
 });

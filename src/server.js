@@ -55,7 +55,7 @@ const metrics = new Metrics();
 metrics.setProductInfo(PROTOCOL_VERSION);
 const chainClient = new WrpcClient({ network: configuredNetwork });
 const rpc = withRpcMetrics(chainClient, metrics);
-const store = new BackendGameStore(process.env.GAME_STORE_PATH ?? '.data/games-v6.json', { metrics });
+const store = new BackendGameStore(process.env.GAME_STORE_PATH ?? '.data/games-v9.json', { metrics });
 const gameService = new BackendGameService({ rpc, store, metrics, gameFeePublicKey });
 
 // Optional, untrusted relay: clients publish non-secret game state here so the
@@ -95,6 +95,38 @@ if (feedbackDeliverer.enabled) {
 const feedbackLimiter = new RateLimiter({ limit: 5, windowMs: 10 * 60_000 });
 
 await store.init();
+
+// The keeper is deliberately best-effort and idempotent. It sleeps until the
+// next estimated timeout, then polls every 30 seconds only while settlement is
+// due or a settlement transaction is awaiting confirmation.
+let automaticSettlementTimer;
+let automaticSettlementRunning = false;
+async function runAutomaticSettlementLoop() {
+  if (automaticSettlementRunning) return;
+  automaticSettlementRunning = true;
+  try {
+    await gameService.settleAutomaticGames();
+    const delayMs = await gameService.automaticSettlementDelayMs();
+    if (delayMs !== null) {
+      automaticSettlementTimer = setTimeout(() => { void runAutomaticSettlementLoop().catch((error) => logger.debug('automatic_settlement_scan_failed', { message: error?.message })); }, delayMs);
+      automaticSettlementTimer.unref();
+    }
+  } catch (error) {
+    logger.debug('automatic_settlement_scan_failed', { message: error?.message });
+    automaticSettlementTimer = setTimeout(() => { void runAutomaticSettlementLoop(); }, 30_000);
+    automaticSettlementTimer.unref();
+  } finally {
+    automaticSettlementRunning = false;
+  }
+}
+
+function wakeAutomaticSettlementLoop() {
+  if (automaticSettlementTimer) clearTimeout(automaticSettlementTimer);
+  automaticSettlementTimer = undefined;
+  if (!automaticSettlementRunning) void runAutomaticSettlementLoop();
+}
+
+void runAutomaticSettlementLoop();
 
 // Warm the node connection in the background so the first real chain call is
 // not the slow one. Never block startup or fail it on a cold node.
@@ -173,7 +205,9 @@ async function routeRequest(req, res, pathname) {
     return sendJson(res, 200, await gameService.prepareCreation(await readJson(req)));
   }
   if (req.method === 'POST' && pathname === '/api/games/submit') {
-    return sendJson(res, 202, await gameService.submitCreation(await readJson(req)));
+    const result = await gameService.submitCreation(await readJson(req));
+    wakeAutomaticSettlementLoop();
+    return sendJson(res, 202, result);
   }
   if (req.method === 'POST' && pathname === '/api/matchmaking/join') {
     return sendJson(res, 200, await gameService.joinMatchmaking(await readJson(req)));
@@ -191,24 +225,28 @@ async function routeRequest(req, res, pathname) {
   const gameMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})$/i);
   const joinMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})\/join\/(prepare|submit)$/i);
   const revealMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})\/reveal\/(prepare|submit)$/i);
-  const actionMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})\/(creator_refund|fallback_claim|refund_player)\/(prepare|submit)$/i);
+  const actionMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})\/creator_refund\/(prepare|submit)$/i);
   if (req.method === 'POST' && joinMatch?.[2] === 'prepare') {
     return sendJson(res, 200, await gameService.prepareJoin(joinMatch[1], await readJson(req)));
   }
   if (req.method === 'POST' && joinMatch?.[2] === 'submit') {
-    return sendJson(res, 202, await gameService.submitJoin(joinMatch[1], await readJson(req)));
+    const result = await gameService.submitJoin(joinMatch[1], await readJson(req));
+    wakeAutomaticSettlementLoop();
+    return sendJson(res, 202, result);
   }
   if (req.method === 'POST' && revealMatch?.[2] === 'prepare') {
     return sendJson(res, 200, await gameService.prepareReveal(revealMatch[1], await readJson(req)));
   }
   if (req.method === 'POST' && revealMatch?.[2] === 'submit') {
-    return sendJson(res, 202, await gameService.submitReveal(revealMatch[1], await readJson(req)));
+    const result = await gameService.submitReveal(revealMatch[1], await readJson(req));
+    wakeAutomaticSettlementLoop();
+    return sendJson(res, 202, result);
   }
-  if (req.method === 'POST' && actionMatch?.[3] === 'prepare') {
-    return sendJson(res, 200, await gameService.prepareSafetyAction(actionMatch[1], actionMatch[2], await readJson(req)));
+  if (req.method === 'POST' && actionMatch?.[2] === 'prepare') {
+    return sendJson(res, 200, await gameService.prepareSafetyAction(actionMatch[1], 'creator_refund', await readJson(req)));
   }
-  if (req.method === 'POST' && actionMatch?.[3] === 'submit') {
-    return sendJson(res, 202, await gameService.submitSafetyAction(actionMatch[1], actionMatch[2], await readJson(req)));
+  if (req.method === 'POST' && actionMatch?.[2] === 'submit') {
+    return sendJson(res, 202, await gameService.submitSafetyAction(actionMatch[1], 'creator_refund', await readJson(req)));
   }
   if (req.method === 'GET' && gameMatch) {
     return sendJson(res, 200, await gameService.readGame(gameMatch[1]));
@@ -341,7 +379,7 @@ function routeLabel(pathname) {
   if (/^\/api\/matchmaking\/[0-9a-f-]{36}\/leave$/i.test(pathname)) return '/api/matchmaking/:id/leave';
   if (/^\/api\/matchmaking\/[0-9a-f-]{36}$/i.test(pathname)) return '/api/matchmaking/:id';
   if (/^\/api\/games\/[0-9a-f]{64}\/(join|reveal)\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/:stage/:step';
-  if (/^\/api\/games\/[0-9a-f]{64}\/(creator_refund|fallback_claim|refund_player)\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/:action/:step';
+  if (/^\/api\/games\/[0-9a-f]{64}\/creator_refund\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/:action/:step';
   if (/^\/api\/games\/[0-9a-f]{64}$/i.test(pathname)) return '/api/games/:id';
   if (/^\/api\/relay\/[0-9a-f]{64}$/i.test(pathname)) return '/api/relay/:id';
   if (pathname === '/' || pathname === '/host' || pathname === '/rival' || pathname === '/join' || pathname === '/game') return 'page';
@@ -392,7 +430,7 @@ logger.info('server_started', {
   metricsPort,
   network: configuredNetwork,
   gameFeePublicKey,
-  storePath: process.env.GAME_STORE_PATH ?? '.data/games-v6.json',
+   storePath: process.env.GAME_STORE_PATH ?? '.data/games-v9.json',
   feedbackTelegram: feedbackDeliverer.enabled,
   feedbackSpillPath: process.env.FEEDBACK_SPILL_PATH ?? join('.data', 'feedback-spill.json'),
   logLevel: logger.level,

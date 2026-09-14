@@ -128,9 +128,26 @@ test('network status is served without touching the node or exposing a browser w
   const service = new BackendGameService({ rpc, store: new BackendGameStore(join(directory, 'games.json')), gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
   const status = await service.networkStatus();
   assert.equal(status.network, 'testnet-10');
-  assert.equal(status.protocolVersion, 'EO/v6');
+  assert.equal(status.protocolVersion, 'EO/v9');
   assert.equal(status.gameFeePublicKey, GAME_FEE_PUBLIC_KEY);
   assert.equal(status.wrpcUrl, undefined);
+});
+
+test('automatic scheduler targets the open covenant deadline', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame({
+    gameId: 'a'.repeat(64),
+    status: 'waiting_for_player_b',
+    request: { stakeSompi: '100000000', feeSompi: '0', settleFeeSompi: '1600000', deadlineDaa: '1200' },
+  });
+  const service = new BackendGameService({
+    rpc: { getBlockDagInfo: async () => ({ virtualDaaScore: '1000' }) },
+    store,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  assert.equal(await service.automaticSettlementDelayMs(), 21_000);
 });
 
 test('refreshTelemetry publishes the matchmaking backlog gauge and no game-state gauge', async (t) => {

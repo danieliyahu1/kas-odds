@@ -11,7 +11,7 @@ use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionId, TransactionOutpoi
 use silverscript_abi::{ArtifactValue, SilAbiArtifact, encode_runtime_state_script};
 
 fn usage() -> ! {
-    eprintln!("usage: covenant-oracle <artifact.json> <creator_pubkey_hex(64)> <creator_commit_hex(64)> <stake_sompi> <deadline_daa> <wallet_pubkey_hex(64)>");
+    eprintln!("usage: covenant-oracle <artifact.json> <creator_pubkey_hex(64)> <creator_commit_hex(64)> <stake_sompi> <deadline_daa> <wallet_pubkey_hex(64)> <settle_fee_sompi>");
     std::process::exit(2);
 }
 
@@ -55,6 +55,10 @@ fn main() -> ExitCode {
             Ok(b) if b.len() == 32 => b,
             _ => usage(),
         },
+        None => usage(),
+    };
+    let settle_fee_sompi: i64 = match args.next() {
+        Some(v) => v.parse().unwrap_or_else(|_| usage()),
         None => usage(),
     };
 
@@ -101,6 +105,7 @@ fn main() -> ExitCode {
     values.insert("first_revealer_hash".into(), ArtifactValue::Bytes(vec![0u8; 32]));
     values.insert("game_wallet_hash".into(), ArtifactValue::Bytes(game_wallet_hash.to_vec()));
     values.insert("status".into(), ArtifactValue::Int(0));
+    values.insert("settle_fee".into(), ArtifactValue::Int(settle_fee_sompi));
 
     let state_script = match encode_runtime_state_script(&abi, &contract.runtime_state, &values) {
         Ok(s) => s,

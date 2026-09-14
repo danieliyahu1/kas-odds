@@ -24,9 +24,10 @@ const deadlineDaa = 500000000000;
 const walletPubkeyHex = '11'.repeat(32);
 const walletHashHex = bytesToHex(blake2b256(hexToBytes(walletPubkeyHex))).toLowerCase();
 const playerLockSompi = stakeSompi;
+const settleFeeSompi = 1600000;
 
 function runOracle() {
-  return execFileSync(ORACLE, [ARTIFACT, creatorPubkeyHex, creatorCommitHex, String(stakeSompi), String(deadlineDaa), walletPubkeyHex], {
+  return execFileSync(ORACLE, [ARTIFACT, creatorPubkeyHex, creatorCommitHex, String(stakeSompi), String(deadlineDaa), walletPubkeyHex, String(settleFeeSompi)], {
     encoding: 'utf8',
   });
 }
@@ -77,7 +78,7 @@ test('real Rust covenant-oracle (pinned v2.0.1) yields the WASM-authoritative ge
 
   // The WASM SDK's populateGenesisCovenants binds this exact vector to
   // This vector is pinned by the current covenant artifact and JS derivation.
-   assert.equal(jsCovenantId, 'f90d2258490273d9e0344bdf41e45804552536e326e8feed84cd08a5b46f2ef7');
+   assert.equal(jsCovenantId, 'fe6d36505b28361d2a25e6dea38091533489ba3fc890b795634788e77ea80b7d');
 
   // Reference: the oracle prints its own covenant_id_vector using the
   // versioned SPK encoding; the JS/WASM reuse the SafeJSON versionless form,

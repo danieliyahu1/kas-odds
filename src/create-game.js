@@ -7,6 +7,7 @@ import {
   validateGameFeePublicKey,
   validateNetwork,
   validateSide,
+  AUTOMATION_FEE_SOMPI,
 } from './protocol.js';
 import { serializeInvite } from './invite.js';
 import { deriveGameInstance, EVEN_ODD_TEMPLATE } from './covenant/even-odd.mjs';
@@ -44,6 +45,7 @@ export function prepareCreateGame({
      deadlineDaa: deadline,
      creatorEven: side === 'even',
     gameWalletHash,
+    settleFee: AUTOMATION_FEE_SOMPI,
   });
   return Object.freeze({
     protocolVersion: PROTOCOL_VERSION,
@@ -55,6 +57,7 @@ export function prepareCreateGame({
     feeSompi,
     gameFeePublicKey: feePublicKey,
     gameWalletHash,
+    settleFeeSompi: AUTOMATION_FEE_SOMPI,
     creatorPublicKey: publicKey,
     creatorCommitment: commitment,
     deadlineDaa: deadline,
