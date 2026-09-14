@@ -17,6 +17,10 @@ import { loadWasmSdk } from './wasm-transaction.js';
 import { prepareWithDynamicFee } from './transaction-fee.js';
 
 const MAX_TERMINAL_STORAGE_MASS = 500_000;
+// A broadcast transaction that has not been observed on-chain yet keeps the
+// player's button locked. After this window we let the player try again while
+// keeping the original attempt: the first answer the chain gives wins.
+const PENDING_RETRY_MS = 60_000;
 
 // Application use cases for the Even/Odd game.
 //
@@ -254,7 +258,9 @@ export class BackendGameService {
 
     const confirmedReveals = (gameRecord.reveals ?? []).filter((reveal) => reveal.status === 'confirmed');
     if (confirmedReveals.some((reveal) => reveal.playerAddress === player.address)) throw new ProtocolError('ALREADY_REVEALED', 'This player already revealed');
-    if ((gameRecord.reveals ?? []).some((reveal) => reveal.status !== 'confirmed')) throw new ProtocolError('ACTION_PENDING', 'The previous reveal is still confirming');
+    const pendingMine = (gameRecord.reveals ?? []).some((reveal) => reveal.status !== 'confirmed'
+      && reveal.playerAddress === player.address && !isPendingRetryable(reveal));
+    if (pendingMine) throw new ProtocolError('ACTION_PENDING', 'The previous reveal is still confirming');
     const current = await this.#currentGameUtxo(gameRecord, request, confirmedReveals);
     const first = confirmedReveals[0];
     const state = this.#revealGameState(id, gameRecord, request, current, confirmedReveals);
@@ -336,12 +342,14 @@ export class BackendGameService {
     if (!gameRecord) throw new ProtocolError('GAME_NOT_FOUND', 'Game was not found');
     gameRecord = await this.#refreshActionState(gameRecord);
     gameRecord = await this.#refreshSafetyState(gameRecord);
-    if ((gameRecord.safetyActions ?? []).some((item) => item.status !== 'confirmed')) throw new ProtocolError('ACTION_PENDING', 'The previous recovery action is still confirming');
     const request = deserializeRequest(gameRecord.request);
     const publicKey = normalizePublicKey(input.playerPublicKey, 'player public key');
     const player = action === 'creator_refund' && !gameRecord.join
       ? this.#creator(request, input.playerAddress, publicKey)
       : this.#player(gameRecord, request, input.playerAddress, publicKey);
+    const pendingMine = (gameRecord.safetyActions ?? []).some((item) => item.status !== 'confirmed'
+      && item.action === action && item.playerAddress === player.address && !isPendingRetryable(item));
+    if (pendingMine) throw new ProtocolError('ACTION_PENDING', 'The previous recovery action is still confirming');
     this.#logPlayer(`${action}_prepare`, player.address, { gameId: id, role: player.role });
     const confirmedReveals = (gameRecord.reveals ?? []).filter((item) => item.status === 'confirmed');
     const confirmedRefunds = (gameRecord.safetyActions ?? []).filter((item) => item.action === 'refund_player' && item.status === 'confirmed');
@@ -467,15 +475,22 @@ export class BackendGameService {
     const request = deserializeRequest(refreshed.request);
     const prepared = deserializePrepared(refreshed.prepared);
     const safetyStatus = ['fallback_claimed', 'refunded', 'creator_refunded', 'refund_partial'].includes(refreshed.status);
-    const confirmation = safetyStatus || ['first_revealed', 'settled'].includes(refreshed.status)
+    const confirmedReveals = (refreshed.reveals ?? []).filter((reveal) => reveal.status === 'confirmed');
+    const pendingReveals = (refreshed.reveals ?? []).filter((reveal) => reveal.status !== 'confirmed');
+    const pendingSafety = (refreshed.safetyActions ?? []).filter((item) => item.status !== 'confirmed');
+    const confirmation = safetyStatus || confirmedReveals.length > 0
       ? { status: 'confirmed' }
+      : pendingReveals.length > 0 || pendingSafety.length > 0
+      ? { status: 'observed' }
       : refreshed.join
       ? await this.#confirmJoin(refreshed, request)
       : await this.#chain(request, 1).confirmCreation({ transactionId: id, request, prepared });
-    const confirmedReveals = (refreshed.reveals ?? []).filter((reveal) => reveal.status === 'confirmed');
     const status = safetyStatus ? refreshed.status
-      : refreshed.status === 'settled' ? 'settled'
-      : confirmedReveals.length === 1 ? 'first_revealed'
+      : confirmedReveals.some((reveal) => reveal.winner) ? 'settled'
+      : confirmedReveals.length >= 1 ? 'first_revealed'
+      : pendingReveals.some((reveal) => reveal.winner) ? 'settlement_broadcast'
+      : pendingReveals.length > 0 ? 'reveal_broadcast'
+      : pendingSafety.length > 0 ? `${pendingSafety[0].action}_broadcast`
       : refreshed.join
         ? (confirmation.status === 'confirmed' ? 'joined' : refreshed.status)
       : (confirmation.status === 'confirmed' ? 'waiting_for_player_b' : confirmation.status);
@@ -496,12 +511,14 @@ export class BackendGameService {
       canJoin: status === 'waiting_for_player_b',
       joinTransactionId: refreshed.join?.transactionId,
       revealCount: confirmedReveals.length,
-      firstRevealer: confirmedReveals[0]?.playerAddress,
+      firstRevealer: confirmedReveals.find((reveal) => !reveal.winner)?.playerAddress ?? null,
       winner: refreshed.winner,
       winnerAddress: refreshed.winner === 'creator' ? request.creatorAddress : refreshed.winner === 'joiner' ? refreshed.join?.joinerAddress : null,
       matchmaking: Boolean(refreshed.matchId),
       revealedPicks: Object.fromEntries(confirmedReveals.map((reveal) => [reveal.role, reveal.choice])),
       canReveal: ['joined', 'first_revealed'].includes(status),
+      pendingReveals: pendingReveals.map((reveal) => ({ role: reveal.role, stage: reveal.winner ? 'settlement' : 'first', retryable: isPendingRetryable(reveal) })),
+      pendingSafety: pendingSafety.map((item) => ({ action: item.action, role: item.role, retryable: isPendingRetryable(item) })),
       safetyAction,
       safetyReady: readiness?.ready ?? null,
       safetyRemainingSeconds: readiness?.remainingSeconds ?? null,
@@ -573,51 +590,83 @@ export class BackendGameService {
 
   async #refreshActionState(record) {
     const reveals = [...(record.reveals ?? [])];
-    const pending = reveals.find((reveal) => reveal.status !== 'confirmed');
-    if (!pending) return record;
+    const pending = reveals.filter((reveal) => reveal.status !== 'confirmed');
+    if (pending.length === 0) return record;
     const request = deserializeRequest(record.request);
-    const descriptor = pending.winner
-      ? { transactionId: pending.transactionId, address: pending.payoutAddress, scriptPublicKey: playerScriptPublicKey(pending.winner === 'creator' ? request.creatorPublicKey : record.join.joinerPublicKey), outputIndex: 0 }
-      : { transactionId: pending.transactionId, address: pending.continuationAddress, scriptPublicKey: pending.continuationScriptPublicKey, outputIndex: 0 };
+    for (const attempt of pending) {
+      const confirmedDaaScore = await this.#revealConfirmation(record, request, attempt);
+      if (confirmedDaaScore === null) continue;
+      // The chain answered for this step: keep the winner and drop every other
+      // unconfirmed attempt for the same step (they can never be accepted).
+      const stage = attempt.winner ? 'settlement' : 'first';
+      const updated = reveals
+        .map((reveal) => {
+          if (reveal === attempt) return { ...reveal, status: 'confirmed', confirmedDaaScore: String(confirmedDaaScore) };
+          if (reveal.status !== 'confirmed' && (reveal.winner ? 'settlement' : 'first') === stage) return null;
+          return reveal;
+        })
+        .filter(Boolean);
+      const settled = updated.find((reveal) => reveal.status === 'confirmed' && reveal.winner);
+      const saved = { ...record, reveals: updated, status: settled ? 'settled' : 'first_revealed', ...(settled ? { winner: settled.winner } : {}) };
+      await this.#saveGame(saved);
+      return saved;
+    }
+    return record;
+  }
+
+  async #revealConfirmation(record, request, reveal) {
+    const descriptor = reveal.winner
+      ? { transactionId: reveal.transactionId, address: reveal.payoutAddress, scriptPublicKey: playerScriptPublicKey(reveal.winner === 'creator' ? request.creatorPublicKey : record.join.joinerPublicKey), outputIndex: 0 }
+      : { transactionId: reveal.transactionId, address: reveal.continuationAddress, scriptPublicKey: reveal.continuationScriptPublicKey, outputIndex: 0 };
+    const expected = reveal.winner ? winnerPayoutSompi(request.stakeSompi) : grossPotSompi(request.stakeSompi);
     try {
-      const expected = pending.winner ? winnerPayoutSompi(request.stakeSompi) : grossPotSompi(request.stakeSompi);
       const { entry, currentDaaScore } = await this.#expectedUtxo(descriptor, expected);
-      if (currentDaaScore < BigInt(entry.blockDaaScore) + 1n) return record;
-      const index = reveals.indexOf(pending);
-      reveals[index] = { ...pending, status: 'confirmed', confirmedDaaScore: String(currentDaaScore) };
-      const updated = { ...record, reveals, status: pending.winner ? 'settled' : 'first_revealed', ...(pending.winner ? { winner: pending.winner } : {}) };
-      await this.#saveGame(updated);
-      return updated;
+      if (currentDaaScore < BigInt(entry.blockDaaScore) + 1n) return null;
+      return currentDaaScore;
     } catch (error) {
-      if (error?.code === 'ACTION_NOT_CONFIRMED') return record;
+      if (error?.code === 'ACTION_NOT_CONFIRMED') return null;
       throw error;
     }
   }
 
   async #refreshSafetyState(record) {
     const actions = [...(record.safetyActions ?? [])];
-    const pending = actions.find((item) => item.status !== 'confirmed');
-    if (!pending) return record;
+    const pending = actions.filter((item) => item.status !== 'confirmed');
+    if (pending.length === 0) return record;
     const request = deserializeRequest(record.request);
-    const publicKey = pending.role === 'creator' ? request.creatorPublicKey : record.join?.joinerPublicKey;
-    const value = pending.action === 'fallback_claim' ? winnerPayoutSompi(request.stakeSompi) : playerLockSompi(request.stakeSompi);
-    const descriptor = pending.continuationAddress
-      ? { transactionId: pending.transactionId, address: pending.continuationAddress, scriptPublicKey: pending.continuationScriptPublicKey, outputIndex: pending.continuationOutputIndex ?? 1 }
-      : { transactionId: pending.transactionId, address: pending.playerAddress, scriptPublicKey: playerScriptPublicKey(publicKey), outputIndex: 0 };
+    for (const attempt of pending) {
+      const confirmedDaaScore = await this.#safetyConfirmation(record, request, attempt);
+      if (confirmedDaaScore === null) continue;
+      const updated = actions
+        .map((item) => {
+          if (item === attempt) return { ...item, status: 'confirmed', confirmedDaaScore: String(confirmedDaaScore) };
+          if (item.status !== 'confirmed' && item.action === attempt.action && item.playerAddress === attempt.playerAddress) return null;
+          return item;
+        })
+        .filter(Boolean);
+      const refundCount = updated.filter((item) => item.action === 'refund_player' && item.status === 'confirmed').length;
+      const status = attempt.action === 'fallback_claim' ? 'fallback_claimed'
+        : attempt.action === 'creator_refund' ? 'creator_refunded'
+        : refundCount >= 2 ? 'refunded' : 'refund_partial';
+      const saved = { ...record, safetyActions: updated, status };
+      await this.#saveGame(saved);
+      return saved;
+    }
+    return record;
+  }
+
+  async #safetyConfirmation(record, request, item) {
+    const publicKey = item.role === 'creator' ? request.creatorPublicKey : record.join?.joinerPublicKey;
+    const value = item.action === 'fallback_claim' ? winnerPayoutSompi(request.stakeSompi) : playerLockSompi(request.stakeSompi);
+    const descriptor = item.continuationAddress
+      ? { transactionId: item.transactionId, address: item.continuationAddress, scriptPublicKey: item.continuationScriptPublicKey, outputIndex: item.continuationOutputIndex ?? 1 }
+      : { transactionId: item.transactionId, address: item.playerAddress, scriptPublicKey: playerScriptPublicKey(publicKey), outputIndex: 0 };
     try {
       const { entry, currentDaaScore } = await this.#expectedUtxo(descriptor, value);
-      if (currentDaaScore < BigInt(entry.blockDaaScore) + 1n) return record;
-      const index = actions.indexOf(pending);
-      actions[index] = { ...pending, status: 'confirmed', confirmedDaaScore: String(currentDaaScore) };
-      const refundCount = actions.filter((item) => item.action === 'refund_player' && item.status === 'confirmed').length;
-      const status = pending.action === 'fallback_claim' ? 'fallback_claimed'
-        : pending.action === 'creator_refund' ? 'creator_refunded'
-        : refundCount >= 2 ? 'refunded' : 'refund_partial';
-      const updated = { ...record, safetyActions: actions, status };
-      await this.#saveGame(updated);
-      return updated;
+      if (currentDaaScore < BigInt(entry.blockDaaScore) + 1n) return null;
+      return currentDaaScore;
     } catch (error) {
-      if (error?.code === 'ACTION_NOT_CONFIRMED') return record;
+      if (error?.code === 'ACTION_NOT_CONFIRMED') return null;
       throw error;
     }
   }
@@ -906,6 +955,13 @@ function normalizeHex(value, bytes, name) {
 
 function playerScriptPublicKey(publicKey) {
   return `000020${normalizePublicKey(publicKey)}ac`;
+}
+
+// A pending attempt stops holding the player's button once it is older than the
+// retry window. We keep the attempt: the chain may still confirm it.
+function isPendingRetryable(entry) {
+  const submittedAt = Date.parse(entry?.submittedAt ?? '');
+  return !Number.isFinite(submittedAt) || Date.now() - submittedAt >= PENDING_RETRY_MS;
 }
 
 function serializeRequest(request) {

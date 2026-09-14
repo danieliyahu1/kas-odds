@@ -396,7 +396,9 @@ async function paintGame(gameId, game) {
   const joinerView = role === 'joiner' || (role === 'viewer' && game.canJoin);
   const active = !['settled', 'fallback_claimed', 'refunded', 'creator_refunded'].includes(game.status);
   void forgetRevealSecret(gameId, !active);
-  const revealMine = game.canReveal && (role === 'creator' || role === 'joiner') && !isMyReveal(game, role);
+  const myPendingReveal = (game.pendingReveals ?? []).find((item) => item.role === role) ?? null;
+  const myPendingSafety = (game.pendingSafety ?? []).find((item) => item.role === role) ?? null;
+  const revealMine = (game.canReveal || Boolean(myPendingReveal)) && (role === 'creator' || role === 'joiner') && !isMyReveal(game, role);
   const waiting = active && !joinerView && !revealMine;
 
   app.innerHTML = `
@@ -407,9 +409,9 @@ async function paintGame(gameId, game) {
       </div>
       <div class="game-body">
         ${gameDetails(game)}
-        ${active ? (joinerView ? joinSection(game, yourSide ?? (game.creator?.side === 'even' ? 'odd' : 'even')) : '') + inviteBox(game, waiting) + (revealMine ? revealSection(game) : '') : ''}
+        ${active ? (joinerView ? joinSection(game, yourSide ?? (game.creator?.side === 'even' ? 'odd' : 'even')) : '') + inviteBox(game, waiting) + (revealMine ? revealSection(game, myPendingReveal) : '') : ''}
         ${resultOverlay(game, role)}
-        ${safetySection(game, role)}
+        ${safetySection(game, role, myPendingSafety)}
         ${terminalSection(game)}
       </div>
     </section>`;
@@ -417,7 +419,7 @@ async function paintGame(gameId, game) {
   await bindJoin(gameId, game);
   bindReveal(gameId);
   bindShare();
-  bindSafety(gameId, game);
+  bindSafety(gameId, game, myPendingSafety);
   bindRecoveryCountdown(recoveryFromGame(game), () => refreshGame(gameId));
   bindPlayAgain();
 }
@@ -520,12 +522,16 @@ async function bindJoin(gameId, game) {
   });
 }
 
-function revealSection(game) {
+function revealSection(game, pending) {
+  const waiting = pending && !pending.retryable;
+  const control = waiting
+    ? '<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for confirmation</span></div>'
+    : `<div class="actions"><button type="button" class="primary" data-action="reveal">${pending ? 'Try again' : 'Reveal number'}</button></div>`;
   return `
     <div id="game-action" class="reveal-block">
       <p class="lead">Reveal your number</p>
       <div id="reveal-notice"></div>
-      <div class="actions"><button type="button" class="primary" data-action="reveal">Reveal number</button></div>
+      ${control}
     </div>`;
 }
 
@@ -608,7 +614,15 @@ function flashCopy(button) {
   setTimeout(() => { button.textContent = original; }, 1600);
 }
 
-function safetySection(game, role) {
+function safetySection(game, role, pending) {
+  if (pending) {
+    const labels = { fallback_claim: 'Claim pot', refund_player: 'Refund my stake', creator_refund: 'Cancel game' };
+    const label = labels[pending.action] ?? 'Try again';
+    const pendingControl = pending.retryable
+      ? `<div class="actions"><button type="button" class="outline" data-action="safety" data-safety-action="${escapeHtml(pending.action)}">${escapeHtml(label)}</button></div>`
+      : '<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for confirmation</span></div>';
+    return `<div id="game-safety" class="safety">${pendingControl}</div>`;
+  }
   const control = (label) => recoveryControlHtml(recoveryFromGame(game), label, 'safety');
   const isParticipant = role === 'creator' || role === 'joiner';
   if (game.safetyAction === 'fallback_claim' && game.status === 'first_revealed') {
@@ -646,21 +660,22 @@ function terminalSection(game) {
   return '';
 }
 
-function bindSafety(gameId, game) {
+function bindSafety(gameId, game, pending) {
   const safetyButton = document.querySelector('[data-action="safety"]');
   if (!safetyButton || safetyButton.disabled) return;
+  const safetyAction = pending?.action ?? game.safetyAction;
   safetyButton.addEventListener('click', async () => {
     safetyButton.disabled = true;
     try {
       const { provider, account } = await connectKasware('#game-safety');
-      const prepared = await api(`/api/games/${gameId}/${game.safetyAction}/prepare`, { method: 'POST', body: {
+      const prepared = await api(`/api/games/${gameId}/${safetyAction}/prepare`, { method: 'POST', body: {
         playerAddress: account.address,
         playerPublicKey: account.publicKey,
       } });
       showNotice('#game-safety', 'Confirm in KasWare', `Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
       const signedTxJson = await signWithKasware(provider, prepared.txJson);
       if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
-      await api(`/api/games/${gameId}/${game.safetyAction}/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
+      await api(`/api/games/${gameId}/${safetyAction}/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
       await refreshGame(gameId);
     } catch (error) {
       safetyButton.disabled = false;
@@ -933,7 +948,9 @@ function gameSignature(game) {
   // (wiping the joiner's number selection). The countdown note updates itself
   // locally via `bindRecoveryCountdown`, and the flip of `safetyReady` is the
   // authoritative signal that forces a re-paint.
-  return [game.status, game.safetyAction, game.safetyReady, game.firstRevealer, game.winner].join('|');
+  return [game.status, game.safetyAction, game.safetyReady, game.firstRevealer, game.winner,
+    (game.pendingReveals ?? []).map((item) => `${item.role}:${item.retryable}`).join(','),
+    (game.pendingSafety ?? []).map((item) => `${item.action}:${item.role}:${item.retryable}`).join(',')].join('|');
 }
 
 async function connectKasware(selector) {

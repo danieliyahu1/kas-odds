@@ -122,7 +122,7 @@ test('server serves the browser application and health probe', async (t) => {
   // Regression: safety actions are role-scoped. Viewers and non-participants
   // must never be shown creator-only, first-revealer-only, or player-only
   // recovery controls.
-  assert.match(browserSource, /function safetySection\(game, role\)/);
+  assert.match(browserSource, /function safetySection\(game, role, pending\)/);
   assert.match(browserSource, /const isParticipant = role === 'creator' \|\| role === 'joiner'/);
   assert.match(browserSource, /if \(role !== 'creator'\) return ''/);
   assert.match(browserSource, /connectedAddress\(\) !== game\.firstRevealer/);
