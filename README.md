@@ -79,7 +79,7 @@ from SilverScript `v1.0.0` (whose emitted artifact/compiler identifier remains
 `0.1.0`) from `covenant/even_odd.sil` into
 `covenant/even_odd.template.artifact.json`:
 
-- **contract**: `EvenOdd`, template hash `305aa97a…f61bae5`
+- **contract**: `EvenOdd`, template hash `f411b38a…d9953f`
 - **state span**: `offset 1, len 252` (12 fields: `creator_hash`,
   `joiner_hash`, `creator_commit`, `joiner_commit`, `stake`, `deadline_daa`,
   `creator_even`, `creator_choice`, `joiner_choice`, `first_revealer_hash`,
@@ -169,9 +169,10 @@ Runtime details:
   (the SDK resolver is the fallback). The browser never talks to a node
   directly; all chain reads, fee estimation, transaction preparation, and
   broadcast happen server-side.
-- The 1% on-chain game fee: `GAME_FEE_ADDRESS` is the `kaspatest:` wallet
-  address of the game wallet that receives 1% of the total locked pot when a
-  game settles with a winner (second reveal or fallback claim). Kaspa
+- The conditional on-chain game fee: `GAME_FEE_ADDRESS` is the `kaspatest:`
+  wallet address of the game wallet that receives 1% of the total locked pot
+  when the pot is at least 100 KAS and the game settles with a winner (second
+  reveal or fallback claim). Smaller pots have no platform fee. Kaspa
   version-0 (PubKey) addresses embed the recipient's x-only public key
 directly, so the server decodes the address at startup and bakes that key
   into every game's covenant state. Each player locks exactly the displayed

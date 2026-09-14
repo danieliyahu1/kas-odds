@@ -128,7 +128,7 @@ test('network status is served without touching the node or exposing a browser w
   const service = new BackendGameService({ rpc, store: new BackendGameStore(join(directory, 'games.json')), gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
   const status = await service.networkStatus();
   assert.equal(status.network, 'testnet-10');
-  assert.equal(status.protocolVersion, 'EO/v5');
+  assert.equal(status.protocolVersion, 'EO/v6');
   assert.equal(status.gameFeePublicKey, GAME_FEE_PUBLIC_KEY);
   assert.equal(status.wrpcUrl, undefined);
 });

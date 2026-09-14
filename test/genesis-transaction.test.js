@@ -42,10 +42,10 @@ test('constructs output zero with exact escrow, P2SH, and genesis binding', () =
   const output = createGenesisGameOutput({ request, authorizingInput: 0, authorizingOutpoint: input() });
   assert.deepEqual(output, {
     value: '100000000',
-     scriptPublicKey: '0000aa2059f141713a835b62fa2a9b863a0ba3f3cbe9040bf96ae3ff4aeca5096000a94c87',
+     scriptPublicKey: '0000aa20176525ad3f8b3b6bdfad783387ec894dcb83e951992cdef93c32e2cbebafb97987',
     covenant: {
       authorizingInput: 0,
-       covenantId: '9aa23d19a044c258da777994ece7e6b9f7e992f50ff2cce904562b9127734f63',
+       covenantId: '12bab4ea357d45881f3970805f6a6647d4ebba8db7eb4ec6704f79f3e28df955',
     },
   });
 });

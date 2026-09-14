@@ -229,6 +229,7 @@ function assertRefundContinuation(transaction, value) {
 }
 
 function assertGameFeeOutput(transaction, value) {
+  if (value === 0n) return;
   const fees = transaction.outputs.filter((output) => BigInt(output?.value ?? -1) === value && !output?.covenant);
   if (fees.length !== 1) {
     throw new ProtocolError('INVALID_TRANSACTION', 'Transaction must contain exactly one game fee output');

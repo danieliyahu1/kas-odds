@@ -6,16 +6,16 @@ pragma silverscript ^0.1.0;
 //   0 = waiting for a joiner (creator funds their escrow alone)
 //   1 = joined (both escrows locked; outcome settled at reveal)
 //   2 = first reveal confirmed
-//   3 = settled (stakes paid to the winner, game fee to the operator)
+//   3 = settled (stakes paid to the winner, with an optional fee to the operator)
 //   4 = fallback claim confirmed
 //   5 = creator refunded; joiner escrow remains
 //   6 = joiner refunded; creator escrow remains
 //
-// Protocol v5 economics: the entered stake IS the complete per-player lock.
+// Protocol v6 economics: the entered stake IS the complete per-player lock.
 // The joined covenant holds `stake + stake` (the gross pot). Completed games
 // pay the winner `(stake + stake) - ((stake + stake) / 100)` at output index 0
-// and the game wallet `(stake + stake) / 100` at output index 1 — a single 1%
-// fee of the total pot, charged only when a winner exists. Canceled or
+// and the game wallet `(stake + stake) / 100` at output index 1 for pots of at
+// least 100 KAS. Smaller pots pay the winner the complete pot. Canceled or
 // no-reveal games refund each player their full lock `stake` — the game fee is
 // never charged without a winner.
 //
@@ -166,10 +166,14 @@ contract EvenOdd(
             byte[36] winner_spk = new ScriptPubKeyP2PK(payout_pk);
             byte[36] game_fee_spk = new ScriptPubKeyP2PK(wallet_pk);
             int gross_pot = stake + stake;
-            require(tx.outputs[0].value == gross_pot - (gross_pot / 100));
             require(tx.outputs[0].scriptPubKey == byte[](winner_spk));
-            require(tx.outputs[1].value == gross_pot / 100);
-            require(tx.outputs[1].scriptPubKey == byte[](game_fee_spk));
+            if (gross_pot >= 10000000000) {
+                require(tx.outputs[0].value == gross_pot - (gross_pot / 100));
+                require(tx.outputs[1].value == gross_pot / 100);
+                require(tx.outputs[1].scriptPubKey == byte[](game_fee_spk));
+            } else {
+                require(tx.outputs[0].value == gross_pot);
+            }
         }
     }
 
@@ -184,10 +188,14 @@ contract EvenOdd(
         byte[36] game_fee_spk = new ScriptPubKeyP2PK(wallet_pk);
         int gross_pot = stake + stake;
         require(OpAuthOutputCount(this.activeInputIndex) == 0);
-        require(tx.outputs[0].value == gross_pot - (gross_pot / 100));
         require(tx.outputs[0].scriptPubKey == byte[](player_spk));
-        require(tx.outputs[1].value == gross_pot / 100);
-        require(tx.outputs[1].scriptPubKey == byte[](game_fee_spk));
+        if (gross_pot >= 10000000000) {
+            require(tx.outputs[0].value == gross_pot - (gross_pot / 100));
+            require(tx.outputs[1].value == gross_pot / 100);
+            require(tx.outputs[1].scriptPubKey == byte[](game_fee_spk));
+        } else {
+            require(tx.outputs[0].value == gross_pot);
+        }
     }
 
     entry refund_player(pubkey player_pk) {

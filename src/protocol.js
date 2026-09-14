@@ -1,20 +1,22 @@
 import { bech32Decode } from './hashes/bech32.mjs';
 
-export const PROTOCOL_VERSION = 'EO/v5';
+export const PROTOCOL_VERSION = 'EO/v6';
 export const NETWORK = 'testnet-10';
 export const ADDRESS_PREFIX = 'kaspatest';
 export const MIN_STAKE_KAS = 1;
 export const MAX_STAKE_KAS = 1_000_000;
 export const SOMPI_PER_KAS = 100_000_000n;
 export const MIN_STAKE_SOMPI = BigInt(MIN_STAKE_KAS) * SOMPI_PER_KAS;
-// Protocol v5: the entered stake IS the complete per-player lock — no extra fee
+// Protocol v6: the entered stake IS the complete per-player lock — no extra fee
 // is added on top. Both players fund `stake`, so the joined covenant holds
 // `grossPot = stake * 2`. When a winner exists (second reveal or fallback claim)
-// a single 1% fee of the total pot goes to the game wallet and the winner
-// receives the remainder. Canceled/no-reveal games refund each player their
-// full lock; the game fee is never charged without a winner.
+// For a pot of at least 100 KAS, 1% goes to the game wallet and the winner
+// receives the remainder. Smaller pots pay the winner in full. Canceled/no-
+// reveal games refund each player their full lock; the game fee is never
+// charged without a winner.
 export const GAME_FEE_DENOMINATOR = 100n;
 export const GAME_FEE_NUMERATOR = 1n;
+export const GAME_FEE_MINIMUM_SOMPI = SOMPI_PER_KAS;
 
 export class ProtocolError extends Error {
   constructor(code, message, options = {}) {
@@ -53,9 +55,10 @@ export function grossPotSompi(stakeSompi) {
   return assertStakeSompi(stakeSompi) * 2n;
 }
 
-// Single game fee: 1% of the total pot, charged only when a winner exists.
+// Single game fee: 1% of the total pot only when that fee is at least 1 KAS.
 export function gameFeeSompi(stakeSompi) {
-  return grossPotSompi(stakeSompi) * GAME_FEE_NUMERATOR / GAME_FEE_DENOMINATOR;
+  const fee = grossPotSompi(stakeSompi) * GAME_FEE_NUMERATOR / GAME_FEE_DENOMINATOR;
+  return fee >= GAME_FEE_MINIMUM_SOMPI ? fee : 0n;
 }
 
 // Winner payout: the gross pot minus the single game fee.

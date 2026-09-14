@@ -14,14 +14,13 @@ use kaspa_txscript_errors::TxScriptError;
 use secp256k1::{Keypair, Secp256k1, SecretKey};
 use silverscript_abi::{ArtifactValue, SilAbiArtifact, encode_contract_entry_sig_script, encode_runtime_state_script};
 
-// Protocol v5 economics: each player locks stake, settled games pay the winner
-// 2*stake - 1% of the total pot (index 0) and the game wallet that 1% (index 1),
-// canceled or no-reveal games refund the full lock.
+// Protocol v6 economics: pots below 100 KAS pay the winner in full. Larger pots
+// pay the winner 99% and the game wallet 1%; canceled games refund the full lock.
 const STAKE: u64 = 100_000_000;
 const ESCROW: u64 = STAKE;
 const JOINED: u64 = STAKE + STAKE;
-const WINNER: u64 = JOINED - JOINED / 100;
-const FEE: u64 = JOINED / 100;
+const WINNER: u64 = JOINED;
+const FEE: u64 = 0;
 const DEADLINE_DAA: u64 = 500_000_000;
 
 struct Player {
@@ -139,10 +138,7 @@ fn vm_accepts_normal_reveals_and_rejects_invalid_reveals() {
         &joiner_nonce,
         &joiner,
         None,
-        vec![
-            TransactionOutput { value: WINNER, script_public_key: player_script(&joiner), covenant: None },
-            TransactionOutput { value: FEE, script_public_key: player_script(&wallet), covenant: None },
-        ],
+        vec![TransactionOutput { value: WINNER, script_public_key: player_script(&joiner), covenant: None }],
         true,
     );
 
@@ -157,10 +153,7 @@ fn vm_accepts_normal_reveals_and_rejects_invalid_reveals() {
         &even_joiner_nonce,
         &creator,
         None,
-        vec![
-            TransactionOutput { value: WINNER, script_public_key: player_script(&creator), covenant: None },
-            TransactionOutput { value: FEE, script_public_key: player_script(&wallet), covenant: None },
-        ],
+        vec![TransactionOutput { value: WINNER, script_public_key: player_script(&creator), covenant: None }],
         true,
     );
 }
@@ -237,10 +230,7 @@ fn assert_fallback_claim(artifact: &SilAbiArtifact, state_script: &[u8], player:
         UtxoEntry::new(JOINED, pay_to_script_hash_script(&script), DEADLINE_DAA, false, Some(covenant_id)),
         UtxoEntry::new(1_000_000, player_script(player), DEADLINE_DAA, false, None),
     ];
-    let outputs = vec![
-        TransactionOutput { value: WINNER, script_public_key: player_script(player), covenant: None },
-        TransactionOutput { value: FEE, script_public_key: player_script(wallet), covenant: None },
-    ];
+    let outputs = vec![TransactionOutput { value: WINNER, script_public_key: player_script(player), covenant: None }];
     let age_daa = daa.checked_sub(DEADLINE_DAA).expect("test daa is after input daa");
     let mut input = tx_input(0, invocation);
     input.sequence = age_daa;

@@ -78,7 +78,7 @@ export async function recoverTerminalAction({ operationKey, action, request, cha
 
 export function terminalOperationKey({ action, request, prepared }) {
   if (!action || !request?.caller || !prepared?.preparedHash) throw new ProtocolError('INVALID_TRANSACTION', 'Terminal operation identity is incomplete');
-  return ['EO/v5', action, request.caller, prepared.preparedHash].join('\u0000');
+  return ['EO/v6', action, request.caller, prepared.preparedHash].join('\u0000');
 }
 
 export function terminalStatusMessage(action, status) {

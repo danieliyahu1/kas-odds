@@ -467,7 +467,7 @@ function joinSection(game, yourSide) {
             <button type="button" class="choice num" data-join-number="0" aria-pressed="false"><span class="num-big">2</span><small class="num-tag">Even</small></button>
           </div>
         </fieldset>
-        <p class="fate">Each player locks ${escapeHtml(theirStake)} KAS. The winner receives about ${escapeHtml(winnerKas(theirStake))} KAS after the 1% total-pot fee.</p>
+        <p class="fate">Each player locks ${escapeHtml(theirStake)} KAS. ${winnerSummary(theirStake)}</p>
         <div id="join-notice"></div>
         <p class="muted-note">Your number is saved only in this browser. Clearing site data before you reveal forfeits your stake.</p>
         <div class="actions">
@@ -630,7 +630,7 @@ function safetySection(game, role, pending) {
     return `
       <div id="game-safety" class="safety">
         <p class="lead">If your ${game.matchmaking ? 'rival' : 'friend'} never reveals</p>
-        <p class="muted-note">You can claim the pot minus the 1% total-pot fee after the wait.</p>
+        <p class="muted-note">You can claim the pot after the wait. ${feeSummary(game.stakeKas)}</p>
         ${control('Claim pot')}
       </div>`;
   }
@@ -1070,7 +1070,18 @@ function isGameId(value) { return /^[0-9a-f]{64}$/i.test(value ?? ''); }
 function formatKas(sompi) { return (Number(sompi) / 100_000_000).toFixed(8).replace(/0+$/, '').replace(/\.$/, ''); }
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]); }
 function lockKas(stakeKas) { return Number(stakeKas); }
-function winnerKas(stakeKas) { const pot = Number(stakeKas) * 2; return pot - pot / 100; }
+function winnerKas(stakeKas) { const pot = Number(stakeKas) * 2; return pot - platformFeeKas(stakeKas); }
+function platformFeeKas(stakeKas) { const pot = Number(stakeKas) * 2; return pot >= 100 ? pot / 100 : 0; }
+function feeSummary(stakeKas) {
+  const fee = platformFeeKas(stakeKas);
+  return fee === 0 ? 'There is no platform fee below a 100 KAS pot.' : `A 1% platform fee (${formatKas(String(Math.round(fee * 100_000_000)))} KAS) applies to this pot.`;
+}
+function winnerSummary(stakeKas) {
+  const fee = platformFeeKas(stakeKas);
+  return fee === 0
+    ? `The winner receives the full ${escapeHtml(Number(stakeKas) * 2)} KAS pot with no platform fee.`
+    : `The winner receives about ${escapeHtml(winnerKas(stakeKas))} KAS after the 1% total-pot fee.`;
+}
 let cachedConfig = null;
 async function gameFeePublicKey() {
   if (!cachedConfig) cachedConfig = await api('/api/config');

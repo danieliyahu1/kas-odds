@@ -33,7 +33,8 @@ export function prepareFallbackClaimTransaction({ game, caller, currentDaaScore,
   const decision = resolveFallbackClaim({ game, caller, currentDaaScore });
   if (!decision.available) throw new ProtocolError('ACTION_UNAVAILABLE', decision.message);
   if (typeof walletPublicKey !== 'string' || walletPublicKey.length === 0) throw new ProtocolError('INVALID_TRANSACTION', 'Game wallet public key is required');
-  if (typeof feeScriptPublicKey !== 'string' || feeScriptPublicKey.length === 0) throw new ProtocolError('INVALID_TRANSACTION', 'Game fee script public key is required');
+  const gameFee = gameFeeSompi(game.stakeSompi);
+  if (gameFee > 0n && (typeof feeScriptPublicKey !== 'string' || feeScriptPublicKey.length === 0)) throw new ProtocolError('INVALID_TRANSACTION', 'Game fee script public key is required');
   return prepareTerminalTransaction({
     action: TERMINAL_ENTRIES.fallbackClaim,
     gameInput,
@@ -41,7 +42,7 @@ export function prepareFallbackClaimTransaction({ game, caller, currentDaaScore,
     args: [publicKey, walletPublicKey],
     payoutValue: winnerPayoutSompi(game.stakeSompi),
     recipientScriptPublicKey,
-    extraOutputs: [{ value: gameFeeSompi(game.stakeSompi), scriptPublicKey: feeScriptPublicKey }],
+    extraOutputs: gameFee > 0n ? [{ value: gameFee, scriptPublicKey: feeScriptPublicKey }] : [],
     feeInputs,
     feeSompi,
     change,
@@ -55,7 +56,8 @@ export function prepareRevealTransaction({ game, caller, currentDaaScore, secret
   if (isFirstReveal && (typeof continuationScriptPublicKey !== 'string' || continuationScriptPublicKey.length === 0 || !continuationCovenant)) {
     throw new ProtocolError('INVALID_TRANSACTION', 'Reveal continuation script public key is required');
   }
-  if (!isFirstReveal && (typeof recipientScriptPublicKey !== 'string' || recipientScriptPublicKey.length === 0 || typeof feeScriptPublicKey !== 'string' || feeScriptPublicKey.length === 0)) {
+  const gameFee = isFirstReveal ? 0n : gameFeeSompi(game.stakeSompi);
+  if (!isFirstReveal && (typeof recipientScriptPublicKey !== 'string' || recipientScriptPublicKey.length === 0 || (gameFee > 0n && (typeof feeScriptPublicKey !== 'string' || feeScriptPublicKey.length === 0)))) {
     throw new ProtocolError('INVALID_TRANSACTION', 'Winner and game fee script public keys are required');
   }
   if (typeof walletPublicKey !== 'string' || walletPublicKey.length === 0) {
@@ -83,7 +85,7 @@ export function prepareRevealTransaction({ game, caller, currentDaaScore, secret
     args: revealArgs,
     payoutValue: winnerPayoutSompi(game.stakeSompi),
     recipientScriptPublicKey,
-    extraOutputs: [{ value: gameFeeSompi(game.stakeSompi), scriptPublicKey: feeScriptPublicKey }],
+    extraOutputs: gameFee > 0n ? [{ value: gameFee, scriptPublicKey: feeScriptPublicKey }] : [],
     feeInputs,
     feeSompi,
     change,
@@ -190,6 +192,7 @@ function assertSinglePayout(transaction, value, scriptPublicKey, name) {
 }
 
 function assertGameFeeOutput(transaction, value) {
+  if (value === 0n) return;
   const fees = transaction.outputs.filter((output) => BigInt(output?.value ?? -1) === BigInt(value) && !output?.covenant);
   if (fees.length !== 1) {
     throw new ProtocolError('INVALID_TRANSACTION', 'Transaction must contain exactly one game fee output');

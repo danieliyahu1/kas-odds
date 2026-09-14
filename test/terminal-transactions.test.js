@@ -79,10 +79,8 @@ test('prepares and serializes an authorized fallback claim transaction', () => {
   });
   const transaction = JSON.parse(serializeTerminalTransaction(prepared));
   assert.equal(transaction.inputs[0].sequence, '3000');
-   assert.equal(transaction.outputs[0].value, '198000000');
-  assert.equal(transaction.outputs[1].value, '2000000');
-  assert.equal(transaction.outputs[1].scriptPublicKey, gameFeeScriptPublicKey);
-  assert.equal(transaction.outputs[2].value, '999000');
+   assert.equal(transaction.outputs[0].value, '200000000');
+   assert.equal(transaction.outputs[1].value, '999000');
   assert.match(transaction.inputs[0].signatureScript, /e8bae487$/);
 });
 
@@ -149,10 +147,9 @@ test('prepares first reveal as covenant continuation and second reveal as winner
     feeScriptPublicKey: gameFeeScriptPublicKey,
   });
   const secondTx = JSON.parse(serializeTerminalTransaction(second));
-   assert.equal(secondTx.outputs[0].value, '198000000');
-  assert.equal(secondTx.outputs[0].scriptPublicKey, '000052');
-  assert.equal(secondTx.outputs[1].value, '2000000');
-  assert.equal(secondTx.outputs[1].scriptPublicKey, gameFeeScriptPublicKey);
+   assert.equal(secondTx.outputs[0].value, '200000000');
+   assert.equal(secondTx.outputs[0].scriptPublicKey, '000052');
+   assert.equal(secondTx.outputs[1].value, '999000');
   assert.equal(validateRevealTemplate({ game: secondGame, caller: 'joiner', currentDaaScore: 2_010n, secret: joinerSecret, transaction: secondTx }), secondTx);
 });
 

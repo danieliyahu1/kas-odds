@@ -18,11 +18,8 @@ const JOINER_ADDRESS = 'kaspatest:joiner';
 const CREATOR_PUBLIC_KEY = 'aa'.repeat(32);
 const JOINER_PUBLIC_KEY = 'bb'.repeat(32);
 
-// Every 1 KAS lock paid out as a second-reveal settlement carries two outputs
-// (winner 0.2 KAS game-fee + winner payout) plus a change output. A single
-// large funding UTXO pushes stored value so high the storage mass exceeds the
-// 500,000 consensus limit; two smaller UTXOs keep it under. The service must
-// select funding that keeps the prepared transaction relayable.
+// A no-fee settlement below the 100 KAS pot threshold should remain relayable
+// even when the player has only one large ordinary funding UTXO.
 function storageMass(tx) {
   return Number(loadWasmSdk().calculateStorageMass(
     NETWORK,
@@ -50,7 +47,7 @@ function gameRecord() {
   const request = serializedRequest();
   return {
     gameId: 'ff'.repeat(32),
-    protocolVersion: 'EO/v5',
+    protocolVersion: 'EO/v6',
     status: 'first_revealed',
     request,
     join: {
@@ -121,11 +118,9 @@ async function withService(t, ordinaryUtxos) {
   return service;
 }
 
-test('second-reveal settlement selects storage-mass-safe funding instead of one huge UTXO', async (t) => {
+test('second-reveal settlement accepts one huge UTXO when no platform fee applies', async (t) => {
   const huge = ordinaryUtxo(7, 2_535_839_900);
-  const smallA = ordinaryUtxo(8, 100_000_000);
-  const smallB = ordinaryUtxo(9, 100_000_000);
-  const service = await withService(t, [huge, smallA, smallB]);
+  const service = await withService(t, [huge]);
   const prepared = await service.prepareReveal('ff'.repeat(32), {
     playerAddress: CREATOR_ADDRESS,
     playerPublicKey: normalizePublicKey(CREATOR_PUBLIC_KEY),
@@ -133,23 +128,20 @@ test('second-reveal settlement selects storage-mass-safe funding instead of one 
     nonceHex: creatorSecret.nonceHex,
   });
   const tx = JSON.parse(prepared.txJson);
-  const feeOutPoint = String(tx.outputs.map((output) => BigInt(output.value)).includes(2_000_000n) ? 1 : 0);
-  assert.equal(feeOutPoint, '1');
+  assert.ok(!tx.outputs.some((output) => BigInt(output.value) === 2_000_000n));
   assert.ok(storageMass(tx) <= 500_000, `storage mass ${storageMass(tx)} must stay under 500000`);
-  const selectedTxids = tx.inputs.slice(1).map((input) => input.transactionId);
-  assert.ok(!selectedTxids.includes(huge.outpoint.transactionId), 'the single huge UTXO must not be selected');
-  assert.equal(selectedTxids.length, 2, 'two small funding UTXOs should fund the settlement');
+  assert.equal(tx.inputs.slice(1).length, 1, 'the single large funding UTXO should fund the settlement');
 });
 
-test('second-reveal settlement fails early with a typed error when only one huge UTXO exists', async (t) => {
+test('second-reveal settlement keeps the complete pot below the fee threshold', async (t) => {
   const service = await withService(t, [ordinaryUtxo(7, 2_535_839_900)]);
-  await assert.rejects(
-    service.prepareReveal('ff'.repeat(32), {
-      playerAddress: CREATOR_ADDRESS,
-      playerPublicKey: normalizePublicKey(CREATOR_PUBLIC_KEY),
-      choice: creatorSecret.choice,
-      nonceHex: creatorSecret.nonceHex,
-    }),
-    { code: 'STORAGE_MASS_EXCEEDED' },
-  );
+  const prepared = await service.prepareReveal('ff'.repeat(32), {
+    playerAddress: CREATOR_ADDRESS,
+    playerPublicKey: normalizePublicKey(CREATOR_PUBLIC_KEY),
+    choice: creatorSecret.choice,
+    nonceHex: creatorSecret.nonceHex,
+  });
+  const tx = JSON.parse(prepared.txJson);
+  assert.equal(tx.outputs.filter((output) => output.covenant).length, 0);
+  assert.ok(tx.outputs.some((output) => BigInt(output.value) === 200_000_000n));
 });

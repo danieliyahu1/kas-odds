@@ -106,12 +106,12 @@ test('refund is refused after any valid reveal and reports completed own refund'
   );
 });
 
-test('validates fallback claim payout and fee separation', () => {
+test('validates a no-fee fallback claim and fee separation', () => {
   const tx = templateTx({
     inputAmount: 200_010_000n,
-    outputValue: 198_000_000n,
+    outputValue: 200_000_000n,
     scriptPublicKey: '000051',
-    extraOutputs: [{ value: '2000000', scriptPublicKey: '000055' }],
+    extraOutputs: [],
   });
   assert.equal(validateFallbackClaimTemplate({
     game: { ...game, firstReveal: { player: 'creator', confirmedDaaScore: 2_000n } },
@@ -126,9 +126,9 @@ test('validates fallback claim payout and fee separation', () => {
     currentDaaScore: 5_000n,
     transaction: templateTx({
        inputAmount: 199_999_999n,
-       outputValue: 198_000_000n,
+       outputValue: 200_000_000n,
       scriptPublicKey: '000051',
-      extraOutputs: [{ value: '2000000', scriptPublicKey: '000055' }],
+       extraOutputs: [],
     }),
   }), { code: 'FEE_SUBSTITUTION' });
 });
