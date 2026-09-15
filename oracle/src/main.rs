@@ -10,9 +10,48 @@ use kaspa_consensus_core::hashing;
 use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionId, TransactionOutpoint, TransactionOutput};
 use silverscript_abi::{ArtifactValue, SilAbiArtifact, encode_runtime_state_script};
 
-fn usage() -> ! {
-    eprintln!("usage: covenant-oracle <artifact.json> <creator_pubkey_hex(64)> <creator_commit_hex(64)> <stake_sompi> <deadline_daa> <wallet_pubkey_hex(64)> <settle_fee_sompi>");
-    std::process::exit(2);
+struct OracleArgs {
+    artifact_path: String,
+    creator_pk: Vec<u8>,
+    creator_commit: Vec<u8>,
+    stake_sompi: i64,
+    deadline_daa: i64,
+    wallet_pubkey: Vec<u8>,
+    settle_fee_sompi: i64,
+}
+
+fn usage() -> String {
+    "usage: covenant-oracle <artifact.json> <creator_pubkey_hex(64)> <creator_commit_hex(64)> <stake_sompi> <deadline_daa> <wallet_pubkey_hex(64)> <settle_fee_sompi>".into()
+}
+
+fn parse_args<I>(args: I) -> Result<OracleArgs, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let values: Vec<_> = args.into_iter().collect();
+    if values.len() != 7 {
+        return Err(usage());
+    }
+    let bytes = |value: &str, name: &str| -> Result<Vec<u8>, String> {
+        let decoded = decode_hex(value).map_err(|_| format!("{name} must be hexadecimal"))?;
+        if decoded.len() != 32 { return Err(format!("{name} must be exactly 32 bytes")); }
+        Ok(decoded)
+    };
+    let stake_sompi = values[3].parse::<i64>().map_err(|_| "stake_sompi must be an integer".to_string())?;
+    let deadline_daa = values[4].parse::<i64>().map_err(|_| "deadline_daa must be an integer".to_string())?;
+    let settle_fee_sompi = values[6].parse::<i64>().map_err(|_| "settle_fee_sompi must be an integer".to_string())?;
+    if stake_sompi < 100_000_000 { return Err("stake_sompi must be at least 100000000".into()); }
+    if deadline_daa <= 0 { return Err("deadline_daa must be positive".into()); }
+    if settle_fee_sompi <= 0 || settle_fee_sompi % 2 != 0 { return Err("settle_fee_sompi must be a positive even integer".into()); }
+    Ok(OracleArgs {
+        artifact_path: values[0].clone(),
+        creator_pk: bytes(&values[1], "creator_pubkey")?,
+        creator_commit: bytes(&values[2], "creator_commit")?,
+        stake_sompi,
+        deadline_daa,
+        wallet_pubkey: bytes(&values[5], "wallet_pubkey")?,
+        settle_fee_sompi,
+    })
 }
 
 fn blake2b256(data: &[u8]) -> [u8; 32] {
@@ -23,51 +62,17 @@ fn blake2b256(data: &[u8]) -> [u8; 32] {
 }
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let artifact_path = match args.next() {
-        Some(p) => p,
-        None => usage(),
-    };
-    let creator_pk = match args.next() {
-        Some(h) => match decode_hex(&h) {
-            Ok(b) if b.len() == 32 => b,
-            _ => usage(),
-        },
-        None => usage(),
-    };
-    let creator_commit = match args.next() {
-        Some(h) => match decode_hex(&h) {
-            Ok(b) if b.len() == 32 => b,
-            _ => usage(),
-        },
-        None => usage(),
-    };
-    let stake_sompi: i64 = match args.next() {
-        Some(v) => v.parse().unwrap_or_else(|_| usage()),
-        None => usage(),
-    };
-    let deadline_daa: i64 = match args.next() {
-        Some(v) => v.parse().unwrap_or_else(|_| usage()),
-        None => usage(),
-    };
-    let wallet_pubkey = match args.next() {
-        Some(h) => match decode_hex(&h) {
-            Ok(b) if b.len() == 32 => b,
-            _ => usage(),
-        },
-        None => usage(),
-    };
-    let settle_fee_sompi: i64 = match args.next() {
-        Some(v) => v.parse().unwrap_or_else(|_| usage()),
-        None => usage(),
+    let args = match parse_args(std::env::args().skip(1)) {
+        Ok(args) => args,
+        Err(error) => { eprintln!("error: {error}"); return ExitCode::from(2); }
     };
 
     let mut buf = String::new();
-    if fs::File::open(&artifact_path)
+    if fs::File::open(&args.artifact_path)
         .and_then(|mut f| f.read_to_string(&mut buf))
         .is_err()
     {
-        eprintln!("error: cannot read artifact {}", artifact_path);
+        eprintln!("error: cannot read artifact {}", args.artifact_path);
         return ExitCode::FAILURE;
     }
     let abi: SilAbiArtifact = match serde_json::from_str(&buf) {
@@ -90,22 +95,22 @@ fn main() -> ExitCode {
         }
     };
 
-    let creator_hash = blake2b256(&creator_pk);
-    let game_wallet_hash = blake2b256(&wallet_pubkey);
+    let creator_hash = blake2b256(&args.creator_pk);
+    let game_wallet_hash = blake2b256(&args.wallet_pubkey);
     let mut values = BTreeMap::new();
     values.insert("creator_hash".into(), ArtifactValue::Bytes(creator_hash.to_vec()));
     values.insert("joiner_hash".into(), ArtifactValue::Bytes(vec![0u8; 32]));
-    values.insert("creator_commit".into(), ArtifactValue::Bytes(creator_commit.clone()));
+    values.insert("creator_commit".into(), ArtifactValue::Bytes(args.creator_commit.clone()));
     values.insert("joiner_commit".into(), ArtifactValue::Bytes(vec![0u8; 32]));
-    values.insert("stake".into(), ArtifactValue::Int(stake_sompi));
-    values.insert("deadline_daa".into(), ArtifactValue::Int(deadline_daa));
+    values.insert("stake".into(), ArtifactValue::Int(args.stake_sompi));
+    values.insert("deadline_daa".into(), ArtifactValue::Int(args.deadline_daa));
     values.insert("creator_even".into(), ArtifactValue::Int(0));
     values.insert("creator_choice".into(), ArtifactValue::Int(0));
     values.insert("joiner_choice".into(), ArtifactValue::Int(0));
     values.insert("first_revealer_hash".into(), ArtifactValue::Bytes(vec![0u8; 32]));
     values.insert("game_wallet_hash".into(), ArtifactValue::Bytes(game_wallet_hash.to_vec()));
     values.insert("status".into(), ArtifactValue::Int(0));
-    values.insert("settle_fee".into(), ArtifactValue::Int(settle_fee_sompi));
+    values.insert("settle_fee".into(), ArtifactValue::Int(args.settle_fee_sompi));
 
     let state_script = match encode_runtime_state_script(&abi, &contract.runtime_state, &values) {
         Ok(s) => s,
@@ -147,7 +152,7 @@ fn main() -> ExitCode {
 
     let genesis_outpoint = TransactionOutpoint { transaction_id: TransactionId::from_bytes([0x11; 32]), index: 2 };
     // The displayed stake is the complete per-player lock.
-    let escrow_sompi = stake_sompi as u64;
+    let escrow_sompi = args.stake_sompi as u64;
     let genesis_output = TransactionOutput {
         value: escrow_sompi,
         script_public_key: ScriptPublicKey::new(0, spk.into()),
