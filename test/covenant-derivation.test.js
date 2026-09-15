@@ -31,10 +31,10 @@ test('blake2b-256 multi-block matches the covenant-oracle digest', () => {
   const creatorPubkey = new Array(32).fill(7);
   const creatorCommit = new Array(32).fill(9);
   const inst = deriveGameInstance({ creatorPubkey, creatorCommit, stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash });
-   assert.equal(inst.redeemScript.length, 1649);
+  assert.equal(inst.redeemScript.length, 1782);
   assert.equal(
     Buffer.from(blake2b256(Uint8Array.from(inst.redeemScript))).toString('hex'),
-      'aa3d4e6c5672a09622955ddc6312764505185951871a9f2915fa1ff9e8b4cee2'
+    'e652a1428b4e01a531806a3c6d12773590de23e92d40b44b9b495f2509619778'
   );
 });
 
@@ -69,10 +69,10 @@ test('bech32 decode round-trips and rejects a corrupt checksum', () => {
 test('pinned template hash verifies against the compiled artifact', () => {
   const v = verifyTemplateHash();
   assert.equal(v.computed, EVEN_ODD_TEMPLATE.templateHash);
-    assert.equal(v.computed, '4db84ab2f438706977ca6fd512fbb706b2c466b8f8816385fac50e157fb9d13f');
+  assert.equal(v.computed, '711a7f1a3e88015ea111e810c9fbd2c4f314d3ba8b910e7f82c8c2ba873aaba5');
   assert.equal(v.prefixLen, 1);
-    assert.equal(v.suffixLen, 1387);
-   assert.equal(v.state.length, 261);
+  assert.equal(v.suffixLen, 1520);
+  assert.equal(v.state.length, 261);
 });
 
 test('reproducibility manifest matches covenant source and artifact bytes', () => {
@@ -98,10 +98,10 @@ test('per-game instance matches the covenant-oracle P2SH address', () => {
   const inst = deriveGameInstance({ creatorPubkey, creatorCommit, stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash });
   // Governed by the Rust covenant-oracle: encode_runtime_state_script + script_parts
   // + Address::new(Testnet, ScriptHash, blake2b256(instance)).
-    assert.equal(inst.address, 'kaspatest:pz4r6nnv2ee2p93zj4wacccjwezs2xze2xr348efzhapl70gkn8wy4227fnw4');
+  assert.equal(inst.address, 'kaspatest:prn99g2z3d8qrff3sp4rcmgjwu6eph3rayk5pdztndy47fgfvxthsy5xshmg9');
   assert.equal(
     inst.p2shScript.toString('hex'),
-      'aa20aa3d4e6c5672a09622955ddc6312764505185951871a9f2915fa1ff9e8b4cee287'
+    'aa20e652a1428b4e01a531806a3c6d12773590de23e92d40b44b9b495f250961977887'
   );
   assert.equal(inst.templateHash, EVEN_ODD_TEMPLATE.templateHash);
   assert.equal(inst.address.startsWith('kaspatest:'), true);

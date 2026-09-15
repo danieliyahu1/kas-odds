@@ -59,6 +59,8 @@ contract EvenOdd(
     // matched. No game value is ever used for fees (KEO-1 safeguard).
     entry refund(pubkey creator_pk) {
         require(stake >= 100000000);
+        require(creator_even == 0 || creator_even == 1);
+        require(settle_fee > 0 && settle_fee % 2 == 0);
         require(status == 0);
         require(blake2b(byte[](creator_pk)) == creator_hash);
         byte[36] creator_spk = new ScriptPubKeyP2PK(creator_pk);
@@ -75,6 +77,8 @@ contract EvenOdd(
     // deadline. The fixed creator payout makes the relayer non-custodial.
     entry refund_open(pubkey creator_pk) {
         require(stake >= 100000000);
+        require(creator_even == 0 || creator_even == 1);
+        require(settle_fee > 0 && settle_fee < stake && settle_fee % 2 == 0);
         require(status == 0);
         require(tx.inputs[this.activeInputIndex].value == stake);
         require(tx.daa >= deadline_daa);
@@ -91,6 +95,8 @@ contract EvenOdd(
     // state.
     entry join(pubkey joiner_pk, byte[32] new_joiner_commit) {
         require(stake >= 100000000);
+        require(creator_even == 0 || creator_even == 1);
+        require(settle_fee > 0 && settle_fee % 2 == 0);
         require(status == 0);
         byte[32] next_joiner_hash = blake2b(byte[](joiner_pk));
         require(next_joiner_hash != creator_hash);
@@ -128,6 +134,8 @@ contract EvenOdd(
 
     entry reveal(pubkey player_pk, int choice, byte[32] nonce, pubkey payout_pk, pubkey wallet_pk) {
         require(stake >= 100000000);
+        require(creator_even == 0 || creator_even == 1);
+        require(settle_fee > 0 && settle_fee % 2 == 0);
         require(status == 1 || status == 2);
         require(choice == 0 || choice == 1);
         require(blake2b(byte[](wallet_pk)) == game_wallet_hash);
@@ -209,6 +217,8 @@ contract EvenOdd(
     // the winner payout and burned as the transaction's network fee.
     entry fallback_claim(pubkey player_pk, pubkey wallet_pk) {
         require(stake >= 100000000);
+        require(creator_even == 0 || creator_even == 1);
+        require(settle_fee > 0 && settle_fee % 2 == 0);
         require(status == 2);
         require(this.ageDaa >= 3000);
         require(tx.inputs[this.activeInputIndex].value == stake + stake);
@@ -235,6 +245,8 @@ contract EvenOdd(
     // charged without a winner.
     entry refund_all(pubkey creator_pk, pubkey joiner_pk) {
         require(stake >= 100000000);
+        require(creator_even == 0 || creator_even == 1);
+        require(settle_fee > 0 && settle_fee < stake + stake && settle_fee % 2 == 0);
         require(status == 1);
         require(tx.inputs[this.activeInputIndex].value == stake + stake);
         require(stake + stake > settle_fee);
