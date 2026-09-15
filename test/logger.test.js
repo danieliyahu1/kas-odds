@@ -58,6 +58,11 @@ test('sanitizeFields coerces errors and truncates long values', () => {
   assert.ok(safe.long.length <= 201);
 });
 
+test('logger sanitizes sensitive values embedded in error messages', () => {
+  const safe = sanitizeFields({ message: `WASM rejected ${'a'.repeat(64)} for kaspatest:qabc` });
+  assert.equal(safe.message, 'WASM rejected <txid> for <address>');
+});
+
 test('logger preserves a bounded sanitized node rejection', () => {
   const safe = sanitizeFields({
     nodeMessage: `Rejected transaction ${'a'.repeat(64)} for kaspatest:qabc ${'x'.repeat(2500)}`,

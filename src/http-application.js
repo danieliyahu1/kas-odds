@@ -9,7 +9,7 @@ const CONTENT_SECURITY_POLICY = ["default-src 'self'", "script-src 'self' 'wasm-
 export function createHttpApplication({ gameService, store, relay, metrics, feedbackService, mutatingLimiter, feedbackLimiter, paths, maxRequestBytes, trustedProxy = false, startedAt = new Date().toISOString(), wakeAutomaticSettlementLoop = () => {}, logger = console }) {
   const requestHandler = (req, res) => {
     const requestId = randomUUID();
-    req.requestId = requestId;
+    const trace = { requestId, requestBytesRead: 0, contentLength: req.headers['content-length'] ?? undefined };
     res.setHeader('x-request-id', requestId);
     const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     const route = routeLabel(pathname);
@@ -20,7 +20,7 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
       recorded = true;
       const durationSeconds = (performance.now() - startedAtMs) / 1000;
       metrics.recordHttp({ method: req.method ?? 'GET', route, status: res.statusCode, durationSeconds });
-      const fields = { requestId, method: req.method ?? 'GET', route, status: res.statusCode, requestBytes: req.requestBytes ?? 0, durationMs: Math.round(durationSeconds * 1000) };
+      const fields = { requestId, method: req.method ?? 'GET', route, status: res.statusCode, requestBytesRead: trace.requestBytesRead, contentLength: trace.contentLength, durationMs: Math.round(durationSeconds * 1000) };
       if (res.statusCode >= 500) logger.error('http_request', fields);
       else if (res.statusCode >= 400) logger.warn('http_request', fields);
       else if (isStaticRoute(route)) logger.debug('http_request', fields);
@@ -32,7 +32,7 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
     res.setHeader('x-frame-options', 'DENY');
     res.setHeader('referrer-policy', 'no-referrer');
     res.setHeader('content-security-policy', CONTENT_SECURITY_POLICY);
-    void routeRequest(req, res, pathname).catch((error) => sendError(res, error, { route, pathname, requestId }, logger));
+    void routeRequest(req, res, pathname, trace).catch((error) => sendError(res, error, { route, requestId }, logger));
   };
 
   const metricsHandler = (req, res) => {
@@ -41,7 +41,7 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
     return sendJson(res, 404, { error: 'not_found' });
   };
 
-  async function routeRequest(req, res, pathname) {
+  async function routeRequest(req, res, pathname, trace) {
     if (req.method === 'POST' && pathname.startsWith('/api/')) {
       const decision = mutatingLimiter.check(clientAddress(req, trustedProxy));
       if (!decision.allowed) {
@@ -58,30 +58,30 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
     if (req.method === 'POST' && pathname === '/api/feedback') {
       const decision = feedbackLimiter.check(clientAddress(req, trustedProxy));
       if (!decision.allowed) { res.setHeader('retry-after', String(decision.retryAfterSeconds)); return sendJson(res, 429, { error: 'RATE_LIMITED', message: 'Too many submissions; please wait a bit before sending more feedback' }); }
-      return sendJson(res, 202, await feedbackService.submit(await readJson(req, maxRequestBytes)));
+      return sendJson(res, 202, await feedbackService.submit(await readJson(req, maxRequestBytes, trace)));
     }
-    if (req.method === 'POST' && pathname === '/api/games/prepare') return sendJson(res, 200, await gameService.prepareCreation(await readJson(req, maxRequestBytes)));
-    if (req.method === 'POST' && pathname === '/api/games/submit') { const result = await gameService.submitCreation(await readJson(req, maxRequestBytes)); wakeAutomaticSettlementLoop(); return sendJson(res, 202, result); }
-    if (req.method === 'POST' && pathname === '/api/matchmaking/join') return sendJson(res, 200, await gameService.joinMatchmaking(await readJson(req, maxRequestBytes)));
+    if (req.method === 'POST' && pathname === '/api/games/prepare') return sendJson(res, 200, await gameService.prepareCreation(await readJson(req, maxRequestBytes, trace)));
+    if (req.method === 'POST' && pathname === '/api/games/submit') { const result = await gameService.submitCreation(await readJson(req, maxRequestBytes, trace)); wakeAutomaticSettlementLoop(); return sendJson(res, 202, result); }
+    if (req.method === 'POST' && pathname === '/api/matchmaking/join') return sendJson(res, 200, await gameService.joinMatchmaking(await readJson(req, maxRequestBytes, trace)));
     const matchStatus = pathname.match(/^\/api\/matchmaking\/([0-9a-f-]{36})$/i);
     const matchLeave = pathname.match(/^\/api\/matchmaking\/([0-9a-f-]{36})\/leave$/i);
     if (req.method === 'GET' && matchStatus) return sendJson(res, 200, await gameService.matchmakingStatus(matchStatus[1], new URL(req.url ?? '/', 'http://localhost').searchParams.get('address')));
-    if (req.method === 'POST' && matchLeave) { const body = await readJson(req, maxRequestBytes); return sendJson(res, 200, await gameService.leaveMatchmaking(matchLeave[1], body.address)); }
+    if (req.method === 'POST' && matchLeave) { const body = await readJson(req, maxRequestBytes, trace); return sendJson(res, 200, await gameService.leaveMatchmaking(matchLeave[1], body.address)); }
     const gameMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})$/i);
     const joinMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})\/join\/(prepare|submit)$/i);
     const revealMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})\/reveal\/(prepare|submit)$/i);
     const actionMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})\/creator_refund\/(prepare|submit)$/i);
-    if (req.method === 'POST' && joinMatch?.[2] === 'prepare') return sendJson(res, 200, await gameService.prepareJoin(joinMatch[1], await readJson(req, maxRequestBytes)));
-    if (req.method === 'POST' && joinMatch?.[2] === 'submit') { const result = await gameService.submitJoin(joinMatch[1], await readJson(req, maxRequestBytes)); wakeAutomaticSettlementLoop(); return sendJson(res, 202, result); }
-    if (req.method === 'POST' && revealMatch?.[2] === 'prepare') return sendJson(res, 200, await gameService.prepareReveal(revealMatch[1], await readJson(req, maxRequestBytes)));
-    if (req.method === 'POST' && revealMatch?.[2] === 'submit') { const result = await gameService.submitReveal(revealMatch[1], await readJson(req, maxRequestBytes)); wakeAutomaticSettlementLoop(); return sendJson(res, 202, result); }
-    if (req.method === 'POST' && actionMatch?.[2] === 'prepare') return sendJson(res, 200, await gameService.prepareSafetyAction(actionMatch[1], 'creator_refund', await readJson(req, maxRequestBytes)));
-    if (req.method === 'POST' && actionMatch?.[2] === 'submit') return sendJson(res, 202, await gameService.submitSafetyAction(actionMatch[1], 'creator_refund', await readJson(req, maxRequestBytes)));
+    if (req.method === 'POST' && joinMatch?.[2] === 'prepare') return sendJson(res, 200, await gameService.prepareJoin(joinMatch[1], await readJson(req, maxRequestBytes, trace)));
+    if (req.method === 'POST' && joinMatch?.[2] === 'submit') { const result = await gameService.submitJoin(joinMatch[1], await readJson(req, maxRequestBytes, trace)); wakeAutomaticSettlementLoop(); return sendJson(res, 202, result); }
+    if (req.method === 'POST' && revealMatch?.[2] === 'prepare') return sendJson(res, 200, await gameService.prepareReveal(revealMatch[1], await readJson(req, maxRequestBytes, trace)));
+    if (req.method === 'POST' && revealMatch?.[2] === 'submit') { const result = await gameService.submitReveal(revealMatch[1], await readJson(req, maxRequestBytes, trace)); wakeAutomaticSettlementLoop(); return sendJson(res, 202, result); }
+    if (req.method === 'POST' && actionMatch?.[2] === 'prepare') return sendJson(res, 200, await gameService.prepareSafetyAction(actionMatch[1], 'creator_refund', await readJson(req, maxRequestBytes, trace)));
+    if (req.method === 'POST' && actionMatch?.[2] === 'submit') return sendJson(res, 202, await gameService.submitSafetyAction(actionMatch[1], 'creator_refund', await readJson(req, maxRequestBytes, trace)));
     if (req.method === 'GET' && gameMatch) return sendJson(res, 200, await gameService.readGame(gameMatch[1]));
     const relayMatch = pathname.match(/^\/api\/relay\/([0-9a-f]{64})$/i);
     if (relayMatch) {
       const relayId = relayMatch[1].toLowerCase();
-      if (req.method === 'POST') { relay.set(relayId, await readJson(req, maxRequestBytes)); metrics.setRelayEntries(relay.size()); return sendJson(res, 200, { ok: true }); }
+      if (req.method === 'POST') { relay.set(relayId, await readJson(req, maxRequestBytes, trace)); metrics.setRelayEntries(relay.size()); return sendJson(res, 200, { ok: true }); }
       if (req.method === 'GET') { const payload = relay.get(relayId); metrics.setRelayEntries(relay.size()); return payload ? sendJson(res, 200, payload) : sendJson(res, 404, { error: 'not_found' }); }
     }
     if (req.method === 'GET' && ['/', '/host', '/rival', '/join', '/game'].includes(pathname)) { if (pathname === '/') metrics.recordPageVisit(); return serveFile(paths.publicRoot, 'index.html', res); }
@@ -101,13 +101,13 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
   return { requestHandler, metricsHandler };
 }
 
-function readJson(req, maxRequestBytes) {
+function readJson(req, maxRequestBytes, trace) {
   return new Promise((resolve, reject) => {
     let body = ''; let size = 0; let settled = false;
-    const fail = (error) => { if (settled) return; settled = true; req.requestBytes = size; req.resume(); reject(error); };
+    const fail = (error) => { if (settled) return; settled = true; trace.requestBytesRead = size; req.resume(); reject(error); };
     req.setEncoding('utf8');
     req.on('data', (chunk) => { if (settled) return; size += Buffer.byteLength(chunk); if (size > maxRequestBytes) return fail(new ProtocolError('REQUEST_TOO_LARGE', 'Request body is too large')); body += chunk; });
-    req.on('end', () => { if (settled) return; settled = true; req.requestBytes = size; try { resolve(JSON.parse(body || '{}')); } catch { reject(new ProtocolError('INVALID_JSON', 'Request body must be valid JSON')); } });
+    req.on('end', () => { if (settled) return; settled = true; trace.requestBytesRead = size; try { resolve(JSON.parse(body || '{}')); } catch { reject(new ProtocolError('INVALID_JSON', 'Request body must be valid JSON')); } });
     req.on('error', fail); req.on('aborted', () => fail(new ProtocolError('REQUEST_ABORTED', 'Request was aborted')));
   });
 }
@@ -120,8 +120,15 @@ function sendError(res, error, context, logger) {
   res.kaspaError = { code, message: error?.message ?? 'Operation failed' };
   const fields = { requestId: context.requestId, route: context.route, code, message: error?.message };
   if (error?.cause) logger.error('rpc_transaction_rejected', { ...fields, nodeMessage: error.cause?.message ?? String(error.cause), ...error.transactionDiagnostics });
-  else logger.error(clientError ? 'client_request_rejected' : 'server_error', { ...fields, stack: clientError ? undefined : error?.stack });
-  sendJson(res, notFound ? 404 : code === 'REQUEST_TOO_LARGE' ? 413 : clientError ? 400 : 502, { error: code, message: clientError ? error.message : 'Kaspa testnet10 backend is unavailable', requestId: context.requestId });
+  else if (clientError) logger.warn('client_request_rejected', fields);
+  else logger.error('server_error', { ...fields, stack: error?.stack });
+  sendJson(res, responseStatus(code, clientError, notFound), { error: code, message: clientError ? error.message : 'Kaspa testnet10 backend is unavailable', requestId: context.requestId });
+}
+
+function responseStatus(code, clientError, notFound) {
+  if (notFound) return 404;
+  if (code === 'REQUEST_TOO_LARGE') return 413;
+  return clientError ? 400 : 502;
 }
 
 function sendJson(res, status, body) { if (res.writableEnded || res.destroyed) return; res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); }

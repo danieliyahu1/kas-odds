@@ -11,6 +11,7 @@
 const LEVELS = Object.freeze({ debug: 10, info: 20, warn: 30, error: 40 });
 const SECRET_FIELD = /(nonce|key|signature|private|secret|txjson|preparedhash|commitment|body|ip)/i;
 const ADDRESS_FIELD = /address/i;
+const MESSAGE_FIELD = /message/i;
 const MAX_VALUE_LENGTH = 200;
 const MAX_NODE_MESSAGE_LENGTH = 2000;
 
@@ -61,7 +62,7 @@ export function sanitizeFields(fields = {}, { redactAddresses = true } = {}) {
 
 function sanitizeValue(value, fieldName) {
   if (typeof value === 'string') {
-    const sanitized = fieldName === 'nodeMessage'
+    const sanitized = fieldName === 'nodeMessage' || MESSAGE_FIELD.test(fieldName)
       ? value.replace(/kaspatest:[a-z0-9]+/gi, '<address>')
         .replace(/\b[0-9a-f]{64}\b/gi, '<txid>')
         .replace(/\b[0-9a-f]{65,}\b/gi, '<hex>')

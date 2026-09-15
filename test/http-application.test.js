@@ -66,7 +66,7 @@ test('oversized requests return a traceable 413 instead of dropping the connecti
     metrics: { recordHttp: () => {}, recordPageVisit: () => {}, setRelayEntries: () => {}, render: () => '' },
     feedbackService: {}, mutatingLimiter: { check: () => ({ allowed: true }) }, feedbackLimiter: { check: () => ({ allowed: true }) },
     paths: {}, maxRequestBytes: 10,
-    logger: { info: (...args) => logs.push(['info', ...args]), warn: () => {}, error: (...args) => logs.push(['error', ...args]), debug: () => {} },
+    logger: { info: (...args) => logs.push(['info', ...args]), warn: (...args) => logs.push(['warn', ...args]), error: (...args) => logs.push(['error', ...args]), debug: () => {} },
   });
   const server = createServer(application.requestHandler);
   t.after(() => server.close());
@@ -78,7 +78,7 @@ test('oversized requests return a traceable 413 instead of dropping the connecti
   assert.equal(response.status, 413);
   assert.equal(body.error, 'REQUEST_TOO_LARGE');
   assert.equal(response.headers.get('x-request-id'), body.requestId);
-  const errorLog = logs.find(([level, event]) => level === 'error' && event === 'client_request_rejected');
+  const errorLog = logs.find(([level, event]) => level === 'warn' && event === 'client_request_rejected');
   assert.equal(errorLog[2].requestId, body.requestId);
   assert.equal(errorLog[2].code, 'REQUEST_TOO_LARGE');
 });
