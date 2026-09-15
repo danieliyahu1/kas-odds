@@ -1,9 +1,8 @@
-import { randomUUID } from 'node:crypto';
 import { normalizePublicKey, prepareCreateGame } from './create-game.js';
 import { verifySignedCreationSafeJson } from './genesis-transaction.js';
 import { deriveGameInstance } from './covenant/even-odd.mjs';
 import { verifySignedJoinTransaction } from './join-transactions.js';
-import { DEFAULT_RELAY_FLOOR_RATE, selectOrdinaryUtxos } from './fee-policy.js';
+import { DEFAULT_RELAY_FLOOR_RATE } from './fee-policy.js';
 import { prepareRevealTransaction, prepareTerminalTransaction, prepareCovenantOnlyTransaction, prepareOpenRefundTransaction, serializeTerminalTransaction, verifySignedTerminalTransaction } from './terminal-transactions.js';
 import { parityOutcome, verifyRevealPreimage } from './reveal.js';
 import { createTransactionIntent } from './transaction-intent.js';
@@ -14,11 +13,11 @@ import { noopMetrics } from './metrics.js';
 import { EphemeralPreparations } from './ephemeral-preparations.js';
 import { KaspaChainAdapter } from './chain-adapter.js';
 import { logger } from './logger.js';
-import { loadWasmSdk } from './wasm-transaction.js';
-import { prepareWithDynamicFee } from './transaction-fee.js';
 import { assertSignedTransactionFee, signedTransactionFeeDiagnostics } from './transaction-mass.js';
+import { TerminalFundingSelector } from './terminal-funding.js';
+import { deriveAvailableActions, deriveGameStatus } from './game-projection.js';
+import { assignedSide as matchmakingAssignedSide, findMatchPlayer, MatchmakingService } from './matchmaking-service.js';
 
-const MAX_TERMINAL_STORAGE_MASS = 500_000;
 // A broadcast transaction that has not been observed on-chain yet keeps the
 // player's button locked. After this window we let the player try again while
 // keeping the original attempt: the first answer the chain gives wins.
@@ -34,6 +33,8 @@ const PENDING_RETRY_MS = 60_000;
 export class BackendGameService {
   constructor({ rpc, chain, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey }) {
     this.chain = chain ?? new KaspaChainAdapter({ rpc });
+    this.funding = null;
+    this.matchmaking = new MatchmakingService({ store, metrics, logPlayer: (event, address, fields) => this.#logPlayer(event, address, fields) });
     this.store = store;
     this.metrics = metrics;
     this.ephemeral = ephemeral;
@@ -49,38 +50,15 @@ export class BackendGameService {
   // --- Matchmaking ---------------------------------------------------------
 
   async joinMatchmaking(input) {
-    const address = this.#matchmakingAddress(input.address);
-    const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
-    const limitKas = input.limitKas === undefined ? MIN_STAKE_KAS : Number(input.limitKas);
-    stakeToSompi(limitKas);
-    const match = await this.store.joinMatchmaking({ matchId: randomUUID(), address, publicKey, limitKas });
-    this.#logPlayer('matchmaking_join', address, { matchId: match.matchId, status: match.status, limitKas });
-    if (match.status === 'matched' && match.players.length === 2) {
-      this.#logPlayer('matchmaking_paired', match.players[0].address, { matchId: match.matchId, opponentAddress: match.players[1].address, stakeKas: match.stakeKas });
-    }
-    this.metrics.recordGameEvent('matchmaking_join');
-    await this.#recordMatchmakingBacklog();
-    return this.#matchResponse(match, address);
+    return this.matchmaking.join(input);
   }
 
   async matchmakingStatus(matchId, address) {
-    const match = await this.store.loadMatch(matchId);
-    const playerAddress = this.#matchmakingAddress(address);
-    this.#logPlayer('matchmaking_status', playerAddress, { matchId });
-    this.#matchPlayer(match, playerAddress);
-    await this.store.touchMatch(matchId, playerAddress);
-    return this.#matchResponse(await this.store.loadMatch(matchId), playerAddress);
+    return this.matchmaking.status(matchId, address);
   }
 
   async leaveMatchmaking(matchId, address) {
-    const playerAddress = this.#matchmakingAddress(address);
-    this.#logPlayer('matchmaking_leave', playerAddress, { matchId });
-    const match = await this.store.loadMatch(matchId);
-    this.#matchPlayer(match, playerAddress);
-    await this.store.leaveMatch(matchId, playerAddress);
-    this.metrics.recordGameEvent('matchmaking_leave');
-    await this.#recordMatchmakingBacklog();
-    return { matchId, status: 'left' };
+    return this.matchmaking.leave(matchId, address);
   }
 
   // --- Game lifecycle ------------------------------------------------------
@@ -681,20 +659,10 @@ export class BackendGameService {
       : refreshed.join
       ? await this.#confirmJoin(refreshed, request)
       : await this.chain.confirmCreation({ transactionId: id, request, prepared });
-    const status = safetyStatus ? refreshed.status
-      : automaticBroadcast ? `${refreshed.automaticSettlement.action}_broadcast`
-      : confirmedReveals.some((reveal) => reveal.winner) ? 'settled'
-      : confirmedReveals.length >= 1 ? 'first_revealed'
-      : pendingReveals.some((reveal) => reveal.winner) ? 'settlement_broadcast'
-      : pendingReveals.length > 0 ? 'reveal_broadcast'
-      : pendingSafety.length > 0 ? `${pendingSafety[0].action}_broadcast`
-      : refreshed.join
-        ? (confirmation.status === 'confirmed' ? 'joined' : refreshed.status)
-      : (confirmation.status === 'confirmed' ? 'waiting_for_player_b' : confirmation.status);
+    const status = deriveGameStatus({ record: refreshed, confirmation, safetyStatus, automaticBroadcast, confirmedReveals, pendingReveals, pendingSafety });
     if (status !== refreshed.status) await this.#saveGame({ ...refreshed, status, confirmation, updatedAt: new Date().toISOString() });
-    const safetyAction = status === 'waiting_for_player_b' ? 'creator_refund' : null;
-    const automaticAction = ['waiting_for_player_b', 'refund_open_broadcast'].includes(status) ? 'refund_open'
-      : status === 'first_revealed' ? 'fallback_claim' : status === 'joined' ? 'refund_all' : null;
+    const actions = deriveAvailableActions({ status, firstRevealer: confirmedReveals.find((reveal) => !reveal.winner)?.playerAddress });
+    const { safetyAction, automaticAction } = actions;
     const readiness = await this.#safetyReadiness(refreshed, request, automaticAction ?? safetyAction);
     return {
       gameId: id,
@@ -708,12 +676,12 @@ export class BackendGameService {
        canJoin: status === 'waiting_for_player_b' && !(automaticAction === 'refund_open' && readiness?.ready),
       joinTransactionId: refreshed.join?.transactionId,
       revealCount: confirmedReveals.length,
-      firstRevealer: confirmedReveals.find((reveal) => !reveal.winner)?.playerAddress ?? null,
+       firstRevealer: actions.firstRevealer,
       winner: refreshed.winner,
       winnerAddress: refreshed.winner === 'creator' ? request.creatorAddress : refreshed.winner === 'joiner' ? refreshed.join?.joinerAddress : null,
       matchmaking: Boolean(refreshed.matchId),
       revealedPicks: Object.fromEntries(confirmedReveals.map((reveal) => [reveal.role, reveal.choice])),
-      canReveal: ['joined', 'first_revealed'].includes(status),
+       canReveal: actions.canReveal,
       pendingReveals: pendingReveals.map((reveal) => ({ role: reveal.role, stage: reveal.winner ? 'settlement' : 'first', retryable: isPendingRetryable(reveal) })),
       pendingSafety: pendingSafety.map((item) => ({ action: item.action, role: item.role, retryable: isPendingRetryable(item) })),
        safetyAction,
@@ -912,54 +880,8 @@ export class BackendGameService {
   }
 
   async #actionFunding(address, measure) {
-    const response = await this.chain.getUtxos(address);
-    const entries = response.entries ?? response;
-    const ordinary = entries.filter((entry) => !entry.covenantId);
-    if (ordinary.length === 0) {
-      selectOrdinaryUtxos({ utxos: entries, targetSompi: 1n });
-    }
-    const candidates = fundingCandidates(ordinary, 1n);
-    if (candidates.length === 0) selectOrdinaryUtxos({ utxos: entries, targetSompi: 1n });
-    const priorityFeerate = await this.chain.getPriorityFeerate();
-    let best;
-    let bestMass = Number.POSITIVE_INFINITY;
-    let sawMassFailure = false;
-    let lastFundingError;
-    for (const inputs of candidates) {
-      const total = inputs.reduce((sum, entry) => sum + BigInt(entry.amount), 0n);
-      try {
-        const changeScriptPublicKey = inputs[0].scriptPublicKey ?? inputs[0].utxo?.scriptPublicKey;
-        const repriced = prepareWithDynamicFee({
-          network: NETWORK,
-          priorityFeerate,
-          fundingSompi: total,
-          changeScriptPublicKey,
-          build: ({ feeSompi, change }) => measure({ inputs, feeSompi, change }),
-        });
-        const mass = terminalStorageMass(repriced.transaction);
-        if (mass <= MAX_TERMINAL_STORAGE_MASS && mass < bestMass) {
-          best = {
-            inputs,
-            feeSompi: repriced.feeSompi,
-            mass: repriced.mass,
-            assumedSignedInputs: repriced.assumedSignedInputs,
-            priorityFeerate,
-            change: total > repriced.feeSompi
-              ? { value: total - repriced.feeSompi, scriptPublicKey: changeScriptPublicKey }
-              : undefined,
-          };
-          bestMass = mass;
-        } else {
-          sawMassFailure = true;
-        }
-      } catch (error) {
-        if (!(error instanceof ProtocolError)) throw error;
-        lastFundingError = error;
-      }
-    }
-    if (best) return best;
-    if (!sawMassFailure && lastFundingError) throw lastFundingError;
-    throw new ProtocolError('STORAGE_MASS_EXCEEDED', `No fee UTXO combination keeps this transaction below the ${MAX_TERMINAL_STORAGE_MASS} storage-mass limit`);
+    this.funding ??= new TerminalFundingSelector({ chain: this.chain });
+    return this.funding.select(address, measure);
   }
 
   async #safetyReadiness(record, request, safetyAction) {
@@ -1003,7 +925,7 @@ export class BackendGameService {
   async #attachMatchGame(matchId, request, gameId) {
     const match = await this.store.loadMatch(matchId);
     if (!match) throw new ProtocolError('MATCH_NOT_FOUND', 'Matchmaking session was not found');
-    const creator = this.#matchPlayer(match, request.creatorAddress);
+    const creator = findMatchPlayer(match, request.creatorAddress);
     const creatorIndex = match.players.indexOf(creator);
     if (match.status !== 'matched' || creatorIndex !== match.creatorIndex) {
       throw new ProtocolError('MATCH_NOT_READY', 'Only the match creator can publish the game');
@@ -1027,9 +949,9 @@ export class BackendGameService {
 
   async #validateMatchCreation(input) {
     const match = await this.store.loadMatch(input.matchId);
-    const player = this.#matchPlayer(match, input.creatorAddress);
+    const player = findMatchPlayer(match, input.creatorAddress);
     const playerIndex = match.players.indexOf(player);
-    const assignedSide = this.#assignedSide(match, playerIndex);
+    const assignedSide = matchmakingAssignedSide(match, playerIndex);
     if (match.status !== 'matched' || match.players.length !== 2 || playerIndex !== match.creatorIndex || input.stakeKas !== match.stakeKas || input.side !== assignedSide) {
       throw new ProtocolError('MATCH_NOT_READY', 'This matchmaking game is not ready to start');
     }
@@ -1037,27 +959,10 @@ export class BackendGameService {
 
   async #validateMatchJoin(matchId, gameId, address) {
     const match = await this.store.loadMatch(matchId);
-    const player = this.#matchPlayer(match, address);
+    const player = findMatchPlayer(match, address);
     const playerIndex = match.players.indexOf(player);
     if (match.status !== 'started' || match.gameId !== gameId || playerIndex === match.creatorIndex) {
       throw new ProtocolError('MATCH_NOT_READY', 'This matchmaking game is not ready for you');
-    }
-  }
-
-  #assignedSide(match, playerIndex) {
-    return match.creatorSide === (playerIndex === match.creatorIndex ? 'even' : 'odd') ? 'even' : 'odd';
-  }
-
-  #matchmakingAddress(value) {
-    if (typeof value !== 'string' || !value.startsWith('kaspatest:')) throw new ProtocolError('INVALID_ADDRESS', 'Matchmaking requires a testnet wallet');
-    return value;
-  }
-
-  async #recordMatchmakingBacklog() {
-    try {
-      this.metrics.setMatchmakingWaiting(await this.store.countWaitingMatches());
-    } catch {
-      // Backlog is best-effort telemetry; never let it affect a request.
     }
   }
 
@@ -1084,7 +989,7 @@ export class BackendGameService {
   // Recompute the matchmaking gauge from the store. Called on startup and
   // periodically so the gauge stays correct across restarts.
   async refreshTelemetry() {
-    await this.#recordMatchmakingBacklog();
+    await this.matchmaking.recordBacklog();
   }
 
   async reconcilePendingSubmissions() {
@@ -1143,35 +1048,6 @@ export class BackendGameService {
       await this.store.saveOperation({ ...base, status: 'failed', lastError: publicError(error), updatedAt: new Date().toISOString() });
       throw error;
     }
-  }
-
-  #matchPlayer(match, address) {
-    if (!match || !Array.isArray(match.players)) throw new ProtocolError('MATCH_NOT_FOUND', 'Matchmaking session was not found');
-    const index = match.players.findIndex((player) => player.address === address);
-    if (index < 0) throw new ProtocolError('NOT_A_PLAYER', 'This wallet is not part of the matchmaking session');
-    return match.players[index];
-  }
-
-  #matchResponse(match, address) {
-    if (!match) throw new ProtocolError('MATCH_NOT_FOUND', 'Matchmaking session was not found');
-    const index = match.players.findIndex((player) => player.address === address);
-    if (index < 0) throw new ProtocolError('NOT_A_PLAYER', 'This wallet is not part of the matchmaking session');
-    const isCreator = match.status !== 'waiting' && index === match.creatorIndex;
-    const side = match.status === 'waiting' ? null : this.#assignedSide(match, index);
-    const mine = match.players[index];
-    const rival = match.players.length === 2 ? match.players[1 - index] : null;
-    return {
-      matchId: match.matchId,
-      status: match.status,
-      role: match.status === 'waiting' ? null : isCreator ? 'creator' : 'joiner',
-      side: match.status === 'waiting' ? null : side,
-      gameId: match.gameId ?? null,
-      creation: match.creation ?? null,
-      stakeKas: match.stakeKas ?? null,
-      myLimitKas: mine.limitKas ?? MIN_STAKE_KAS,
-      rivalLimitKas: rival ? rival.limitKas ?? MIN_STAKE_KAS : null,
-      opponentConnected: match.players.length === 2,
-    };
   }
 
   #player(record, request, address, publicKey) {
@@ -1284,68 +1160,6 @@ function feeLogFields(diagnostics) {
     outputCount: diagnostics.outputCount,
     signedInputCount: diagnostics.signedInputCount,
   };
-}
-
-function terminalStorageMass(transaction) {
-  const wasm = loadWasmSdk();
-  return Number(wasm.calculateStorageMass(
-    NETWORK,
-    transaction.inputs.map((input) => Number(input.utxo.amount)),
-    transaction.outputs.map((output) => Number(output.value)),
-  ));
-}
-
-function fundingCandidates(entries, targetSompi) {
-  const byOutpoint = (entry) => {
-    const outpoint = entry.outpoint ?? entry;
-    return `${outpoint.transactionId.toLowerCase()}:${outpoint.index}`;
-  };
-  const byAmount = (a, b) => {
-    const amount = BigInt(a.amount) === BigInt(b.amount) ? 0 : BigInt(a.amount) > BigInt(b.amount) ? 1 : -1;
-    return amount !== 0 ? amount : byOutpoint(a).localeCompare(byOutpoint(b));
-  };
-  const ascending = [...entries].sort(byAmount);
-  // Storage mass is dominated by the funded value each input adds, so smallest
-  // values tend to produce the lowest-mass settlements. Bound the search pool
-  // to the ten smallest UTXOs and subsets of up to four inputs.
-  const pool = ascending.slice(0, 10);
-  const MAX_CANDIDATES = 600;
-  const candidates = [];
-  const seen = new Set();
-  const consider = (selected) => {
-    if (selected.reduce((sum, entry) => sum + BigInt(entry.amount), 0n) < targetSompi) return;
-    const key = selected.map(byOutpoint).sort().join('|');
-    if (seen.has(key)) return;
-    seen.add(key);
-    candidates.push(selected);
-  };
-  for (const entry of pool) consider([entry]);
-  for (let size = 2; size <= 4 && candidates.length < MAX_CANDIDATES; size += 1) {
-    for (let a = 0; a < pool.length && candidates.length < MAX_CANDIDATES; a += 1) {
-      for (let b = a + 1; b < pool.length && candidates.length < MAX_CANDIDATES; b += 1) {
-        if (size === 2) { consider([pool[a], pool[b]]); continue; }
-        for (let c = b + 1; c < pool.length && candidates.length < MAX_CANDIDATES; c += 1) {
-          if (size === 3) { consider([pool[a], pool[b], pool[c]]); continue; }
-          for (let d = c + 1; d < pool.length && candidates.length < MAX_CANDIDATES; d += 1) {
-            consider([pool[a], pool[b], pool[c], pool[d]]);
-          }
-        }
-      }
-    }
-  }
-  // Keep the legacy deterministic choice available for wallets with more than
-  // ten small UTXOs; the mass-aware candidates are tried first.
-  try {
-    const { selected } = selectOrdinaryUtxos({ utxos: entries, targetSompi });
-    const legacy = entries.filter((entry) => selected.some((item) => {
-      const outpoint = entry.outpoint ?? entry;
-      return outpoint.transactionId.toLowerCase() === item.transactionId && outpoint.index === item.index;
-    }));
-    consider(legacy);
-  } catch {
-    // The caller produces the existing typed funding error below.
-  }
-  return candidates;
 }
 
 function deserializePrepared(prepared) {
