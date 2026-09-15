@@ -14,13 +14,12 @@ secret, commitment preimage, wallet key, or transaction template.
 - `src/protocol.js` validates sides, stake, sompi arithmetic, network, and
   fee separation.
 - `src/invite.js` parses and serializes the URL invite.
-- `src/create-game.js` validates the creation intent, requires a chain service
-  to prepare and verify Rusty Kaspa v2 SafeJSON, delegates signing only to
-  KasWare, checkpoints the non-secret lifecycle for recovery, and shares the
-  confirmed transaction ID only after authoritative revalidation.
-- `src/join-game.js` parses direct invites, re-reads confirmed game state,
-  enforces the joining deadline and exact matching stake, and checkpoints the
-  join signing, broadcast, confirmation, and recovery lifecycle.
+- `src/backend-game-service.js` is the production game use-case boundary. It
+  owns creation, joining, reveal, refund, claim, matchmaking, persistence, and
+  recovery orchestration behind the HTTP application.
+- `src/create-game.js`, `src/join-game.js`, and `src/terminal-lifecycle.js` are
+  exported protocol/lifecycle building blocks used by focused tests and library
+  consumers; they are not the server's production request path.
 - `src/join-transactions.js` builds the join covenant input and doubled-pot
   continuation with ordinary joiner fee inputs kept separate.
 - `src/covenant-artifact.js` validates a pinned SilverScript artifact before
@@ -42,19 +41,12 @@ secret, commitment preimage, wallet key, or transaction template.
 - `src/terminal-transactions.js` builds KCC entry scripts and Rusty Kaspa v2
   SafeJSON templates for reveal-adjacent terminal actions, claims, and refunds;
   the browser still signs only the prepared transaction.
-- `src/terminal-lifecycle.js` provides the authoritative read, idempotent
-  checkpoint, sign, submit, confirmation, and recovery lifecycle for terminal
-  actions.
 - `src/recovery.js` reconstructs game state from accepted chain history with a
   one-confirmation buffer, invalidates removed-block checkpoints, classifies
   external transactions, and provides memory and durable JSON recovery stores.
-- `src/backend-game-service.js` is the game use-case layer. It owns chain
-  communication end to end: it prepares create/join/reveal/refund/claim
-  transactions, verifies KasWare-signed SafeJSON, and broadcasts to the node.
-  The browser only ever sends the commitment hash until the reveal, when the
-  number becomes public on-chain anyway, so the server never learns a hidden
-  number before both commitments are confirmed. It also pairs matchmaking
-  players and attaches the creator's on-chain game to the match.
+- `public/app.js` is the browser composition root. `public/app-controller.js`
+  owns cancellable polling and stale-response protection; browser secrets and
+  IndexedDB remain behind `public/secrets.js`.
 - `src/backend-game-store.js` persists game records, matchmaking sessions, and
   non-secret transaction preparations atomically on disk. Reveal preimages are
   never stored here; they live only in the short-lived in-memory
@@ -121,7 +113,11 @@ cd oracle && cargo build --release && cd ..
 
 The repository includes a production container and Kubernetes manifests under
 `deploy/`. The runtime process exposes Kubernetes probe endpoints only; the
-protocol implementation remains the module exported by `src/index.js`.
+production request path is `src/server.js` -> `src/http-application.js` ->
+`src/backend-game-service.js`. `src/index.js` is a convenience aggregate for
+library consumers, not the server entry point. See
+[`docs/architecture.md`](docs/architecture.md) for the dependency direction and
+recovery boundaries.
 
 `git push` to `main` is the deploy button. CI builds the `linux/arm64` image,
 smoke-tests the published artifact against `/readyz` and `/metrics`, pushes the

@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
   createAndConfirmTerminalAction,
   MemoryTerminalStore,
-  terminalOperationKey,
 } from '../src/terminal-lifecycle.js';
 import { createRevealSecret } from '../src/reveal.js';
 import { prepareRevealTransaction, serializeTerminalTransaction } from '../src/terminal-transactions.js';
@@ -69,12 +68,7 @@ test('runs a normal second reveal through mocked wallet and chain settlement', a
   });
   assert.deepEqual(result, { status: 'confirmed', transactionId: 'ee'.repeat(32), message: 'Reveal confirmed.' });
 });
-
 test('fails closed when the chain state is unknown or conflicting', async () => {
   const chain = { readGameState: async () => ({ ...game, confirmationStatus: 'pending' }) };
   await assert.rejects(() => createAndConfirmTerminalAction({ action: 'refund_all', request, chain, wallet: { sign: async () => '' }, store: new MemoryTerminalStore() }), { code: 'CHAIN_UNAVAILABLE' });
 });
-
-function requestForBuilder() {
-  return { game, caller: 'creator', currentDaaScore: 4_000n, gameInput: request.gameInput, recipientScriptPublicKey: request.recipientScriptPublicKey, continuationScriptPublicKey: request.continuationScriptPublicKey, continuationCovenant: request.continuationCovenant, feeInputs: request.feeInputs, feeSompi: request.feeSompi, change: request.change, publicKey: request.publicKey };
-}
