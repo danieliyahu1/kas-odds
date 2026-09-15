@@ -133,6 +133,37 @@ test('network status is served without touching the node or exposing a browser w
   assert.equal(status.wrpcUrl, undefined);
 });
 
+test('application service uses the injected chain gateway instead of raw RPC', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-gateway-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let preparedRequest;
+  const chain = {
+    getCurrentDaaScore: async () => 100n,
+    prepareCreation: async (request) => {
+      preparedRequest = request;
+      return {
+        preparedHash: 'p'.repeat(64),
+        txJson: JSON.stringify({ inputs: [], outputs: [] }),
+        feeSompi: 0n,
+        policy: { changeScriptPublicKey: 'change' },
+        mass: 1,
+        assumedSignedInputs: 0,
+        feerate: 0,
+      };
+    },
+  };
+  const service = new BackendGameService({ chain, store: new BackendGameStore(join(directory, 'games.json')), gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+  const result = await service.prepareCreation({
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'a'.repeat(64),
+    creatorCommitment: 'e'.repeat(64),
+    side: 'even',
+    stakeKas: 1,
+  });
+  assert.equal(result.preparedHash, 'p'.repeat(64));
+  assert.equal(preparedRequest.deadlineDaa, 100n + 3_000n);
+});
+
 test('automatic scheduler targets the open covenant deadline', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

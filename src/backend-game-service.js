@@ -32,8 +32,8 @@ const PENDING_RETRY_MS = 60_000;
 // broadcasts to the node. The service therefore never learns a player's number
 // before both commitments are confirmed on-chain and the number is public.
 export class BackendGameService {
-  constructor({ rpc, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey }) {
-    this.rpc = rpc;
+  constructor({ rpc, chain, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey }) {
+    this.chain = chain ?? new KaspaChainAdapter({ rpc });
     this.store = store;
     this.metrics = metrics;
     this.ephemeral = ephemeral;
@@ -88,20 +88,20 @@ export class BackendGameService {
   async prepareCreation(input) {
     if (!this.gameFeePublicKey) throw new ProtocolError('INVALID_GAME_FEE', 'Game fee recipient is not configured yet (GAME_FEE_ADDRESS)');
     if (input.matchId) await this.#validateMatchCreation(input);
-    const dag = await this.rpc.getBlockDagInfo();
+    const currentDaaScore = await this.chain.getCurrentDaaScore();
     const request = prepareCreateGame({
       network: NETWORK,
       creatorAddress: input.creatorAddress,
       creatorPublicKey: input.creatorPublicKey,
       creatorCommitment: input.creatorCommitment,
-      deadlineDaa: BigInt(dag.virtualDaaScore ?? dag.virtualDaaScoreString) + FIVE_MINUTE_DAA_OFFSET,
+      deadlineDaa: currentDaaScore + FIVE_MINUTE_DAA_OFFSET,
       side: input.side,
       stakeKas: input.stakeKas,
       feeSompi: 0n,
       gameFeePublicKey: this.gameFeePublicKey,
     });
     this.#logPlayer('creation_prepare', request.creatorAddress, { matchId: input.matchId ?? null });
-    const prepared = await this.#chain(request).prepareCreation(request);
+    const prepared = await this.chain.prepareCreation(request);
     logPreparedTransaction('creation', prepared);
     await this.store.savePrepared({
       preparedHash: prepared.preparedHash,
@@ -171,7 +171,7 @@ export class BackendGameService {
          settleFee: request.settleFeeSompi,
          status: 1,
     });
-    const prepared = await this.#chain(request).prepareJoin({
+    const prepared = await this.chain.prepareJoin({
       request: {
         network: NETWORK,
         gameId: id,
@@ -377,7 +377,7 @@ export class BackendGameService {
            });
            const txJson = serializeTerminalTransaction(prepared);
            const feeDiagnostics = await this.#validateAutomaticFee('refund_open', txJson, request.settleFeeSompi);
-           const transactionId = validateGameId(await this.rpc.submitSafeJson(txJson));
+           const transactionId = validateGameId(await this.chain.submitSafeJson(txJson));
           await this.#saveGame({ ...current, status: 'refund_open_broadcast', automaticSettlement: {
             action: 'refund_open', transactionId, txJson, status: 'broadcast', submittedAt: new Date().toISOString(),
             payouts: [{ outputIndex: 0, value: String(playerLockSompi(request.stakeSompi) - request.settleFeeSompi), scriptPublicKey: playerScriptPublicKey(request.creatorPublicKey), address: request.creatorAddress }],
@@ -419,7 +419,7 @@ export class BackendGameService {
          });
          const txJson = serializeTerminalTransaction(prepared);
           const feeDiagnostics = await this.#validateAutomaticFee(action, txJson, prepared.feeSompi);
-         const transactionId = validateGameId(await this.rpc.submitSafeJson(txJson));
+          const transactionId = validateGameId(await this.chain.submitSafeJson(txJson));
         const payoutAddresses = action === 'refund_all'
           ? [request.creatorAddress, current.join.joinerAddress]
           : [reveals[0].role === 'creator' ? request.creatorAddress : current.join.joinerAddress];
@@ -485,8 +485,7 @@ export class BackendGameService {
   }
 
   async #validateAutomaticFee(action, txJson, reservedFeeSompi) {
-    const estimate = await this.rpc.getFeeEstimate();
-    const estimatedRate = Number(estimate?.estimate?.priorityBucket?.[0]?.feerate ?? DEFAULT_RELAY_FLOOR_RATE);
+    const estimatedRate = await this.chain.getPriorityFeerate();
     const priorityFeerate = Number.isFinite(estimatedRate) && estimatedRate >= 0 ? estimatedRate : DEFAULT_RELAY_FLOOR_RATE;
     const diagnostics = signedTransactionFeeDiagnostics({ network: NETWORK, signedTxJson: txJson, priorityFeerate });
     if (diagnostics.paidFeeSompi < diagnostics.requiredFeeSompi) {
@@ -623,7 +622,7 @@ export class BackendGameService {
       ? { status: 'observed' }
       : refreshed.join
       ? await this.#confirmJoin(refreshed, request)
-      : await this.#chain(request, 1).confirmCreation({ transactionId: id, request, prepared });
+      : await this.chain.confirmCreation({ transactionId: id, request, prepared });
     const status = safetyStatus ? refreshed.status
       : automaticBroadcast ? `${refreshed.automaticSettlement.action}_broadcast`
       : confirmedReveals.some((reveal) => reveal.winner) ? 'settled'
@@ -820,21 +819,13 @@ export class BackendGameService {
   }
 
   async #expectedUtxo(descriptor, valueSompi) {
-    const [utxos, dag] = await Promise.all([this.rpc.getUtxosByAddresses([descriptor.address]), this.rpc.getBlockDagInfo()]);
-    const outputIndex = descriptor.outputIndex ?? 0;
-    const entry = (utxos.entries ?? utxos).find((candidate) => {
-      const outpoint = candidate.outpoint ?? candidate;
-      return outpoint.transactionId === descriptor.transactionId && outpoint.index === outputIndex
-        && BigInt(candidate.amount) === valueSompi && candidate.scriptPublicKey === descriptor.scriptPublicKey;
-    });
-    if (!entry) throw new ProtocolError('ACTION_NOT_CONFIRMED', 'The expected game output is not available yet');
-    return { entry, currentDaaScore: BigInt(dag.virtualDaaScore ?? dag.virtualDaaScoreString) };
+    return this.chain.findExpectedUtxo(descriptor, valueSompi);
   }
 
   async #openCreationUtxo(gameId, request, prepared) {
-    const [utxos, dag] = await Promise.all([
-      this.rpc.getUtxosByAddresses([request.covenantAddress]),
-      this.rpc.getBlockDagInfo(),
+    const [utxos, currentDaaScore] = await Promise.all([
+      this.chain.getUtxos(request.covenantAddress),
+      this.chain.getCurrentDaaScore(),
     ]);
     const entry = (utxos.entries ?? utxos).find((candidate) => {
       const outpoint = candidate.outpoint ?? candidate;
@@ -843,15 +834,14 @@ export class BackendGameService {
         && candidate.scriptPublicKey === prepared.scriptPublicKey;
     });
     if (!entry) throw new ProtocolError('GAME_NOT_OPEN', 'The game deposit is no longer available');
-    const currentDaaScore = BigInt(dag.virtualDaaScore ?? dag.virtualDaaScoreString);
     if (currentDaaScore < BigInt(entry.blockDaaScore) + 1n) throw new ProtocolError('GAME_NOT_CONFIRMED', 'The game deposit is still confirming');
     return { entry, currentDaaScore };
   }
 
   async #confirmJoin(record, request) {
-    const [utxos, dag] = await Promise.all([
-      this.rpc.getUtxosByAddresses([record.join.joinedAddress]),
-      this.rpc.getBlockDagInfo(),
+    const [utxos, currentDaaScore] = await Promise.all([
+      this.chain.getUtxos(record.join.joinedAddress),
+      this.chain.getCurrentDaaScore(),
     ]);
     const entry = (utxos.entries ?? utxos).find((candidate) => {
       const outpoint = candidate.outpoint ?? candidate;
@@ -860,12 +850,11 @@ export class BackendGameService {
         && candidate.scriptPublicKey === record.join.joinedScriptPublicKey;
     });
     if (!entry) return { status: 'observed' };
-    const currentDaaScore = BigInt(dag.virtualDaaScore ?? dag.virtualDaaScoreString);
     return { status: currentDaaScore >= BigInt(entry.blockDaaScore) + 1n ? 'confirmed' : 'observed' };
   }
 
   async #actionFunding(address, measure) {
-    const response = await this.rpc.getUtxosByAddresses([address]);
+    const response = await this.chain.getUtxos(address);
     const entries = response.entries ?? response;
     const ordinary = entries.filter((entry) => !entry.covenantId);
     if (ordinary.length === 0) {
@@ -873,7 +862,7 @@ export class BackendGameService {
     }
     const candidates = fundingCandidates(ordinary, 1n);
     if (candidates.length === 0) selectOrdinaryUtxos({ utxos: entries, targetSompi: 1n });
-    const priorityFeerate = await this.#readPriorityFeerate();
+    const priorityFeerate = await this.chain.getPriorityFeerate();
     let best;
     let bestMass = Number.POSITIVE_INFINITY;
     let sawMassFailure = false;
@@ -915,14 +904,6 @@ export class BackendGameService {
     throw new ProtocolError('STORAGE_MASS_EXCEEDED', `No fee UTXO combination keeps this transaction below the ${MAX_TERMINAL_STORAGE_MASS} storage-mass limit`);
   }
 
-  async #readPriorityFeerate() {
-    if (typeof this.rpc.getFeeEstimate !== 'function') return 0;
-    const response = await this.rpc.getFeeEstimate();
-    const buckets = response?.estimate?.priorityBucket ?? response?.estimate?.buckets ?? [];
-    const bucket = buckets[0];
-    return typeof bucket?.feerate === 'number' && bucket.feerate >= 0 ? bucket.feerate : 0;
-  }
-
   async #safetyReadiness(record, request, safetyAction) {
     if (!safetyAction) return null;
     const currentDaa = await this.#currentDaaScore();
@@ -940,12 +921,11 @@ export class BackendGameService {
   }
 
   async #currentDaaScore() {
-    const dag = await this.rpc.getBlockDagInfo();
-    return BigInt(dag.virtualDaaScore ?? dag.virtualDaaScoreString);
+    return this.chain.getCurrentDaaScore();
   }
 
   async #outputBlockDaaScore({ address, outputIndex = 0, scriptPublicKey }) {
-    const utxos = await this.rpc.getUtxosByAddresses([address]);
+    const utxos = await this.chain.getUtxos(address);
     const entry = (utxos.entries ?? utxos).find((candidate) => {
       const outpoint = candidate.outpoint ?? candidate;
       const index = outpoint.index ?? candidate.index;
@@ -1093,16 +1073,6 @@ export class BackendGameService {
     return { role: 'creator', address, publicKey, commitment: request.creatorCommitment };
   }
 
-  #chain(request, attempts = 30) {
-    return new KaspaChainAdapter({
-      rpc: this.rpc,
-      covenantAddress: request.covenantAddress,
-      scriptPublicKey: request.covenantScriptPublicKey,
-      confidenceAttempts: attempts,
-      confidenceIntervalMs: attempts === 1 ? 0 : 2_000,
-    });
-  }
-
   #logPlayer(event, address, fields = {}) {
     if (process.env.LOG_WALLET_ADDRESSES !== '1') return;
     logger.info(event, { address, ...fields });
@@ -1119,7 +1089,7 @@ export class BackendGameService {
     const fields = { action, ...feeLogFields(diagnostics) };
     logger.info('signed_transaction_fee_validated', fields);
     try {
-      return validateGameId(await this.rpc.submitSafeJson(signedTxJson));
+      return validateGameId(await this.chain.submitSafeJson(signedTxJson));
     } catch (error) {
       error.transactionDiagnostics = fields;
       throw error;

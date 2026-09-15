@@ -11,6 +11,7 @@ import { RelayStore } from './relay-store.js';
 import { RateLimiter } from './rate-limit.js';
 import { FeedbackService, FeedbackSpill, TelegramFeedback } from './feedback.js';
 import { logger } from './logger.js';
+import { KaspaChainAdapter } from './chain-adapter.js';
 
 const port = Number.parseInt(process.env.PORT ?? '3000', 10);
 const metricsPort = Number.parseInt(process.env.METRICS_PORT ?? '9464', 10);
@@ -55,8 +56,9 @@ const metrics = new Metrics();
 metrics.setProductInfo(PROTOCOL_VERSION);
 const chainClient = new WrpcClient({ network: configuredNetwork });
 const rpc = withRpcMetrics(chainClient, metrics);
+const chain = new KaspaChainAdapter({ rpc });
 const store = new BackendGameStore(process.env.GAME_STORE_PATH ?? '.data/games-v9.json', { metrics });
-const gameService = new BackendGameService({ rpc, store, metrics, gameFeePublicKey });
+const gameService = new BackendGameService({ chain, store, metrics, gameFeePublicKey });
 
 // Optional, untrusted relay: clients publish non-secret game state here so the
 // opponent can discover it. Every payload is re-verified on-chain by the

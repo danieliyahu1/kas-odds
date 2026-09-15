@@ -27,3 +27,28 @@ test('prepareCreation surfaces an empty wallet as no ordinary UTXOs', async () =
     { code: 'NO_UTXOS' },
   );
 });
+
+test('gateway exposes validated DAA, UTXO, fee, and submission capabilities', async () => {
+  const rpc = {
+    getBlockDagInfo: async () => ({ virtualDaaScore: '42' }),
+    getUtxosByAddresses: async () => ({ entries: [{ transactionId: 'a'.repeat(64), index: 0, amount: '10', scriptPublicKey: 'script' }] }),
+    getFeeEstimate: async () => ({ estimate: { priorityBucket: [{ feerate: 123 }] } }),
+    submitSafeJson: async () => 'b'.repeat(64),
+  };
+  const adapter = new KaspaChainAdapter({ rpc });
+  assert.equal(await adapter.getCurrentDaaScore(), 42n);
+  assert.equal((await adapter.getUtxos('kaspatest:address')).entries.length, 1);
+  assert.equal(await adapter.getPriorityFeerate(), 123);
+  assert.equal(await adapter.submitSafeJson('{}'), 'b'.repeat(64));
+});
+
+test('gateway rejects malformed chain responses', async () => {
+  const adapter = new KaspaChainAdapter({
+    rpc: {
+      getBlockDagInfo: async () => ({}),
+      getUtxosByAddresses: async () => ({ invalid: true }),
+    },
+  });
+  await assert.rejects(() => adapter.getCurrentDaaScore(), { code: 'RPC_INVALID_RESPONSE' });
+  await assert.rejects(() => adapter.getUtxos('kaspatest:address'), { code: 'RPC_INVALID_RESPONSE' });
+});

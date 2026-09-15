@@ -62,10 +62,10 @@ export class KaspaChainAdapter {
   async confirmCreation({ transactionId, request, prepared }) {
     // The node reports UTXOs with the versioned output script, so match against
     // the versioned SPK the prepared tx actually carries.
-    const scriptPublicKey = prepared?.scriptPublicKey ?? this.scriptPublicKey;
+    const scriptPublicKey = prepared?.scriptPublicKey ?? request.covenantScriptPublicKey ?? this.scriptPublicKey;
     const confirmer = new KaspaCreationConfirmer({
       rpc: this.rpc,
-      covenantAddress: this.covenantAddress,
+      covenantAddress: request.covenantAddress ?? this.covenantAddress,
       playerLockSompi: playerLockSompi(request.stakeSompi),
       scriptPublicKey,
       outputIndex: this.outputIndex,
@@ -73,6 +73,48 @@ export class KaspaChainAdapter {
       intervalMs: this.confidenceIntervalMs,
     });
     return confirmer.confirmCreation({ transactionId });
+  }
+
+  async getCurrentDaaScore() {
+    const dag = await this.rpc.getBlockDagInfo();
+    const value = dag?.virtualDaaScore ?? dag?.virtualDaaScoreString;
+    if (value === undefined || value === null) throw new ProtocolError('RPC_INVALID_RESPONSE', 'Kaspa RPC did not return a virtual DAA score');
+    try {
+      return BigInt(value);
+    } catch (error) {
+      throw new ProtocolError('RPC_INVALID_RESPONSE', 'Kaspa RPC returned an invalid virtual DAA score', { cause: error });
+    }
+  }
+
+  async getUtxos(address) {
+    const response = await readAddressUtxos({ rpc: this.rpc, addresses: [address] });
+    if (!Array.isArray(response) && !Array.isArray(response?.entries)) {
+      throw new ProtocolError('RPC_INVALID_RESPONSE', 'Kaspa RPC returned an invalid UTXO response');
+    }
+    return response;
+  }
+
+  async getPriorityFeerate() {
+    return this.#readPriorityFeerate();
+  }
+
+  async submitSafeJson(txJson) {
+    if (typeof this.rpc.submitSafeJson !== 'function') throw new ProtocolError('RPC_UNAVAILABLE', 'Kaspa RPC client is required');
+    const transactionId = await this.rpc.submitSafeJson(txJson);
+    if (typeof transactionId !== 'string' || transactionId.length === 0) throw new ProtocolError('SUBMISSION_FAILED', 'Kaspa RPC did not return a transaction identifier');
+    return transactionId;
+  }
+
+  async findExpectedUtxo(descriptor, valueSompi) {
+    const utxos = await this.getUtxos(descriptor.address);
+    const outputIndex = descriptor.outputIndex ?? 0;
+    const entry = (utxos.entries ?? utxos).find((candidate) => {
+      const outpoint = candidate.outpoint ?? candidate;
+      return outpoint.transactionId === descriptor.transactionId && outpoint.index === outputIndex
+        && BigInt(candidate.amount) === BigInt(valueSompi) && candidate.scriptPublicKey === descriptor.scriptPublicKey;
+    });
+    if (!entry) throw new ProtocolError('ACTION_NOT_CONFIRMED', 'The expected game output is not available yet');
+    return { entry, currentDaaScore: await this.getCurrentDaaScore() };
   }
 
   async prepareJoin({ request, game }) {
