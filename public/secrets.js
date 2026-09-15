@@ -14,6 +14,8 @@ const DB_NAME = 'kaspa-even-odd';
 const STORE_NAME = 'reveal-secrets';
 const SECRET_PREFIX = 's:';
 const LINK_PREFIX = 'g:';
+const OPERATION_PREFIX = 'o:';
+let writeQueue = Promise.resolve();
 
 export function randomNonce() {
   if (!globalThis.crypto?.getRandomValues) throw new Error('Secure randomness is unavailable in this browser');
@@ -62,6 +64,19 @@ function openDb() {
   });
 }
 
+async function transaction(mode, action) {
+  const db = await openDb();
+  const tx = db.transaction(STORE_NAME, mode);
+  const store = tx.objectStore(STORE_NAME);
+  return new Promise((resolve, reject) => {
+    let result;
+    tx.oncomplete = () => { db.close(); resolve(result); };
+    tx.onerror = () => { db.close(); reject(tx.error ?? new Error('IndexedDB transaction failed')); };
+    tx.onabort = () => { db.close(); reject(tx.error ?? new Error('IndexedDB transaction aborted')); };
+    try { result = action(store); } catch (error) { tx.abort(); reject(error); }
+  });
+}
+
 function requestResult(request) {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -69,32 +84,50 @@ function requestResult(request) {
   });
 }
 
-async function put(record) {
-  const db = await openDb();
-  await requestResult(db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put(record));
+async function get(key) {
+  return transaction('readonly', (store) => requestResult(store.get(key)));
 }
 
-async function get(key) {
-  const db = await openDb();
-  return requestResult(db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(key));
+function queueWrite(action) {
+  const operation = writeQueue.then(action);
+  writeQueue = operation.then(() => undefined, () => undefined);
+  return operation;
 }
 
 // Generates a fresh secret, persists it, and returns only the opaque secretId
 // and commitment. The nonce and choice never leave this function's caller and
-// are only re-read at reveal. The await on put() guarantees the secret is
-// durable before the wallet is ever asked to lock funds.
-export async function createRevealSecret(choice) {
+// are only re-read at reveal. The transaction completion event guarantees the
+// secret is durable before the wallet is ever asked to lock funds.
+export async function createRevealSecret(choice, { operationKey = randomId() } = {}) {
   if (choice !== 0 && choice !== 1) throw new Error('Choice must be 0 or 1');
-  const nonce = randomNonce();
-  const secretId = randomId();
-  const record = { key: `${SECRET_PREFIX}${secretId}`, choice, nonceHex: bytesToHex(nonce), commitment: commitmentFor(choice, nonce) };
-  await put(record);
-  return { secretId, commitment: record.commitment };
+  if (typeof operationKey !== 'string' || operationKey.length === 0) throw new Error('operationKey is required');
+  return queueWrite(async () => {
+    const existing = await get(`${OPERATION_PREFIX}${operationKey}`);
+    if (existing?.secretId) {
+      const record = await get(`${SECRET_PREFIX}${existing.secretId}`);
+      if (!record) throw new Error('Stored reveal operation is missing its secret');
+      if (record.choice !== choice) throw new Error('A different number is already committed for this pending action');
+      return { secretId: existing.secretId, commitment: record.commitment };
+    }
+    const nonce = randomNonce();
+    const secretId = randomId();
+    const record = { key: `${SECRET_PREFIX}${secretId}`, choice, nonceHex: bytesToHex(nonce), commitment: commitmentFor(choice, nonce) };
+    await transaction('readwrite', (store) => {
+      store.put(record);
+      store.put({ key: `${OPERATION_PREFIX}${operationKey}`, secretId, operationKey, status: 'prepared' });
+    });
+    return { secretId, commitment: record.commitment };
+  });
 }
 
 export async function bindSecretToGame(gameId, secretId) {
   if (!gameId || !secretId) throw new Error('gameId and secretId are required');
-  await put({ key: `${LINK_PREFIX}${gameId}`, secretId });
+  return queueWrite(async () => {
+    const record = await get(`${SECRET_PREFIX}${secretId}`);
+    if (!record) throw new Error('Reveal secret does not exist');
+    const operation = await getBySecretId(secretId);
+    await transaction('readwrite', (store) => store.put({ key: `${LINK_PREFIX}${gameId}`, secretId, operationKey: operation?.operationKey }));
+  });
 }
 
 export async function loadSecretForGame(gameId) {
@@ -109,14 +142,45 @@ export async function loadSecretForGame(gameId) {
 // longer needed (settled, claimed, or refunded). Safe to call repeatedly.
 export async function deleteSecretForGame(gameId) {
   if (!gameId) return;
-  const link = await get(`${LINK_PREFIX}${gameId}`);
-  const db = await openDb();
-  const store = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME);
-  store.delete(`${LINK_PREFIX}${gameId}`);
-  if (link?.secretId) store.delete(`${SECRET_PREFIX}${link.secretId}`);
-  await new Promise((resolve, reject) => {
-    store.transaction.oncomplete = () => resolve();
-    store.transaction.onerror = () => reject(store.transaction.error ?? new Error('IndexedDB delete failed'));
-    store.transaction.onabort = () => reject(store.transaction.error ?? new Error('IndexedDB delete aborted'));
+  return queueWrite(async () => {
+    const link = await get(`${LINK_PREFIX}${gameId}`);
+    if (!link) return;
+    const operation = link.operationKey ? await get(`${OPERATION_PREFIX}${link.operationKey}`) : null;
+    await transaction('readwrite', (store) => {
+      store.delete(`${LINK_PREFIX}${gameId}`);
+      if (link.secretId) store.delete(`${SECRET_PREFIX}${link.secretId}`);
+      if (operation) store.delete(`${OPERATION_PREFIX}${link.operationKey}`);
+    });
   });
+}
+
+export async function reconcileRevealSecrets() {
+  const records = await transaction('readonly', (store) => requestResult(store.getAll()));
+  const links = records.filter((record) => record.key.startsWith(LINK_PREFIX));
+  const operations = records.filter((record) => record.key.startsWith(OPERATION_PREFIX));
+  const linkedSecretIds = new Set(links.map((link) => link.secretId));
+  return Object.freeze({
+    bound: Object.freeze(links.map(({ key, secretId, operationKey }) => ({ gameId: key.slice(LINK_PREFIX.length), secretId, operationKey }))),
+    pending: Object.freeze(operations.map(({ operationKey, secretId, status }) => ({ operationKey, secretId, status, bound: linkedSecretIds.has(secretId) }))),
+  });
+}
+
+// Explicitly abandons a draft that was never funded. This is intentionally not
+// part of automatic reconciliation: an unbound secret may belong to a broadcast
+// whose response was lost.
+export async function abandonRevealOperation(operationKey) {
+  if (!operationKey) return;
+  return queueWrite(async () => {
+    const operation = await get(`${OPERATION_PREFIX}${operationKey}`);
+    if (!operation) return;
+    await transaction('readwrite', (store) => {
+      store.delete(`${OPERATION_PREFIX}${operationKey}`);
+      store.delete(`${SECRET_PREFIX}${operation.secretId}`);
+    });
+  });
+}
+
+async function getBySecretId(secretId) {
+  const records = await transaction('readonly', (store) => requestResult(store.getAll()));
+  return records.find((record) => record.key.startsWith(OPERATION_PREFIX) && record.secretId === secretId);
 }

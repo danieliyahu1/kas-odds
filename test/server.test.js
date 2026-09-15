@@ -99,7 +99,7 @@ test('server serves the browser application and health probe', async (t) => {
   assert.match(browserSource, /data-action="reveal"/);
   assert.match(browserSource, /data-commit-number/);
   assert.match(browserSource, /data-join-number/);
-  assert.match(browserSource, /createRevealSecret\(number\)/);
+  assert.match(browserSource, /createRevealSecret\(number/);
   assert.match(browserSource, /verifyCreation\(/);
   assert.match(browserSource, /loadSecretForGame/);
   assert.match(browserSource, /bindSecretToGame/);
@@ -130,6 +130,9 @@ test('server serves the browser application and health probe', async (t) => {
   assert.match(secretsSource, /getRandomValues/);
   assert.match(secretsSource, /indexedDB/);
   assert.match(secretsSource, /deleteSecretForGame/);
+  assert.match(secretsSource, /operationKey/);
+  assert.match(secretsSource, /oncomplete/);
+  assert.match(secretsSource, /reconcileRevealSecrets/);
   assert.doesNotMatch(secretsSource, /fill\(1\)|FIXED_NONCE|transientCommitment/);
 
   const modulePaths = [

@@ -181,7 +181,7 @@ function renderMatchmaking() {
   async function startCreation() {
     try {
       content.innerHTML = `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Preparing your ${escapeHtml(match.stakeKas)} KAS game</span></div>`;
-      const secret = await createRevealSecret(number);
+      const secret = await createRevealSecret(number, { operationKey: `creation:${match.matchId}` });
       const prepared = await api('/api/games/prepare', { method: 'POST', body: {
         creatorAddress: account.address,
         creatorPublicKey: account.publicKey,
@@ -206,7 +206,7 @@ function renderMatchmaking() {
     try {
       content.innerHTML = `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Preparing your ${escapeHtml(match.stakeKas)} KAS game</span></div>`;
       await waitForJoinableGame(match.gameId);
-      const secret = await createRevealSecret(number);
+      const secret = await createRevealSecret(number, { operationKey: `join:${match.gameId}` });
       await bindSecretToGame(match.gameId, secret.secretId);
       const prepared = await api(`/api/games/${match.gameId}/join/prepare`, { method: 'POST', body: {
         joinerAddress: account.address,
@@ -339,7 +339,7 @@ function renderCreate() {
     try {
       const { provider, account } = await connectKasware('#create-notice');
       rememberAddress(account.address);
-      const secret = await createRevealSecret(number);
+      const secret = await createRevealSecret(number, { operationKey: `creation:${account.address}:${side}:${stake}` });
       const prepared = await api('/api/games/prepare', { method: 'POST', body: {
         creatorAddress: account.address,
         creatorPublicKey: account.publicKey,
@@ -503,7 +503,7 @@ async function bindJoin(gameId, game) {
     try {
       const { provider, account } = await connectKasware('#join-notice');
       rememberAddress(account.address);
-      const secret = await createRevealSecret(number);
+      const secret = await createRevealSecret(number, { operationKey: `join:${gameId}` });
       await bindSecretToGame(gameId, secret.secretId);
       const prepared = await api(`/api/games/${gameId}/join/prepare`, { method: 'POST', body: {
         joinerAddress: account.address,
