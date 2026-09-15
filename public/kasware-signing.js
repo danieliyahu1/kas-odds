@@ -22,6 +22,6 @@ export function signingInputsFor(txJson) {
   return signInputs;
 }
 
-export function signWithKasware(provider, txJson) {
-  return provider.signPskt({ txJsonString: txJson, options: { signInputs: signingInputsFor(txJson) } });
+export function signWithKasware(provider, txJson, signInputs) {
+  return provider.signPskt({ txJsonString: txJson, options: { signInputs: signInputs ?? signingInputsFor(txJson) } });
 }

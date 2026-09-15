@@ -6,6 +6,7 @@ import { verifySignedJoinTransaction } from './join-transactions.js';
 import { DEFAULT_RELAY_FLOOR_RATE, selectOrdinaryUtxos } from './fee-policy.js';
 import { prepareRevealTransaction, prepareTerminalTransaction, prepareCovenantOnlyTransaction, prepareOpenRefundTransaction, serializeTerminalTransaction, verifySignedTerminalTransaction } from './terminal-transactions.js';
 import { parityOutcome, verifyRevealPreimage } from './reveal.js';
+import { createTransactionIntent } from './transaction-intent.js';
 import { blake2b256 } from './hashes/blake2b.mjs';
 import { FALLBACK_CLAIM_DAA_OFFSET, FIVE_MINUTE_DAA_OFFSET, NO_REVEAL_REFUND_DAA_OFFSET, TESTNET10_DAA_PER_SECOND, safetyReadiness } from './terminal-actions.js';
 import { playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, automaticFallbackPayoutSompi, automaticRefundPayoutSompi, AUTOMATION_FEE_SOMPI, MIN_STAKE_KAS, stakeToSompi, NETWORK, PROTOCOL_VERSION, ProtocolError, validateGameFeePublicKey, validateGameId } from './protocol.js';
@@ -110,7 +111,7 @@ export class BackendGameService {
       ...(input.matchId ? { matchId: input.matchId } : {}),
     });
     this.metrics.recordGameEvent('creation_prepared');
-    return { network: NETWORK, preparedHash: prepared.preparedHash, txJson: prepared.txJson, feeSompi: String(prepared.feeSompi), deadlineDaa: String(request.deadlineDaa) };
+    return { network: NETWORK, preparedHash: prepared.preparedHash, txJson: prepared.txJson, feeSompi: String(prepared.feeSompi), deadlineDaa: String(request.deadlineDaa), changeScriptPublicKey: prepared.policy?.changeScriptPublicKey };
   }
 
   async submitCreation({ preparedHash, signedTxJson, matchId }) {
@@ -210,7 +211,7 @@ export class BackendGameService {
       ...(gameRecord.matchId ? { matchId: gameRecord.matchId } : {}),
     });
     this.metrics.recordGameEvent('join_prepared');
-    return { gameId: id, preparedHash: prepared.preparedHash, txJson: prepared.txJson, stakeSompi: String(request.stakeSompi), feeSompi: String(prepared.feeSompi) };
+    return { gameId: id, preparedHash: prepared.preparedHash, txJson: prepared.txJson, stakeSompi: String(request.stakeSompi), feeSompi: String(prepared.feeSompi), verification: createTransactionIntent({ action: 'join', txJson: prepared.txJson, feeSompi: prepared.feeSompi }) };
   }
 
   async submitJoin(gameId, { preparedHash, signedTxJson }) {
@@ -313,7 +314,7 @@ export class BackendGameService {
       createdAt: new Date().toISOString(),
     });
     this.metrics.recordGameEvent('reveal_prepared');
-    return { gameId: id, preparedHash, txJson, feeSompi: String(funding.feeSompi), stage: first ? 'settlement' : 'first_reveal' };
+    return { gameId: id, preparedHash, txJson, feeSompi: String(funding.feeSompi), stage: first ? 'settlement' : 'first_reveal', verification: createTransactionIntent({ action: 'reveal', txJson, feeSompi: funding.feeSompi }) };
   }
 
   async submitReveal(gameId, { preparedHash, signedTxJson }) {
@@ -576,7 +577,7 @@ export class BackendGameService {
       createdAt: new Date().toISOString(),
     });
     this.metrics.recordGameEvent(`${action}_prepared`);
-    return { gameId: id, preparedHash, txJson, feeSompi: String(funding.feeSompi), action };
+    return { gameId: id, preparedHash, txJson, feeSompi: String(funding.feeSompi), action, verification: createTransactionIntent({ action: 'refund', txJson, feeSompi: funding.feeSompi }) };
   }
 
   async submitSafetyAction(gameId, action, { preparedHash, signedTxJson }) {

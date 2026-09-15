@@ -7,7 +7,7 @@
 // delegated to the app server, which only ever sees the commitment hash (not
 // the number) until the reveal makes it public on-chain.
 import { bindSecretToGame, createRevealSecret, deleteSecretForGame, loadSecretForGame } from '/secrets.js';
-import { verifyCreation } from '/verify.js';
+import { verifyCreation, verifyPreparedTransaction } from '/verify.js';
 import { logDebug, logInfo, logWarn, logError } from '/log.js';
 import { signWithKasware as kaswareSignPskt } from '/kasware-signing.js';
 
@@ -190,9 +190,9 @@ function renderMatchmaking() {
         stakeKas: match.stakeKas,
         matchId: match.matchId,
       } });
-      await verifyCreation({ txJson: prepared.txJson, creatorPublicKey: account.publicKey, creatorCommitment: secret.commitment, side: match.side, stakeKas: match.stakeKas, deadlineDaa: prepared.deadlineDaa, gameFeePublicKey: await gameFeePublicKey() });
+      const verified = await verifyCreation({ txJson: prepared.txJson, creatorPublicKey: account.publicKey, creatorCommitment: secret.commitment, side: match.side, stakeKas: match.stakeKas, deadlineDaa: prepared.deadlineDaa, gameFeePublicKey: await gameFeePublicKey(), feeSompi: prepared.feeSompi, changeScriptPublicKey: prepared.changeScriptPublicKey });
       showNotice('#matchmaking-content', 'Confirm in KasWare', `Approve ${lockKas(match.stakeKas)} KAS (your full stake).`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson);
+      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
       if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
       const game = await api('/api/games/submit', { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson, matchId: match.matchId } });
       await bindSecretToGame(game.gameId, secret.secretId);
@@ -214,8 +214,9 @@ function renderMatchmaking() {
         joinerCommitment: secret.commitment,
         matchId: match.matchId,
       } });
+      const verified = verifyPreparedTransaction(prepared, 'join');
       showNotice('#matchmaking-content', 'Confirm in KasWare', `Approve ${lockKas(match.stakeKas)} KAS (your full stake).`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson);
+      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
       if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
       await api(`/api/games/${match.gameId}/join/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
       location.href = `/game?id=${match.gameId}`;
@@ -346,9 +347,9 @@ function renderCreate() {
         side,
         stakeKas: stake,
       } });
-      await verifyCreation({ txJson: prepared.txJson, creatorPublicKey: account.publicKey, creatorCommitment: secret.commitment, side, stakeKas: stake, deadlineDaa: prepared.deadlineDaa, gameFeePublicKey: await gameFeePublicKey() });
+      const verified = await verifyCreation({ txJson: prepared.txJson, creatorPublicKey: account.publicKey, creatorCommitment: secret.commitment, side, stakeKas: stake, deadlineDaa: prepared.deadlineDaa, gameFeePublicKey: await gameFeePublicKey(), feeSompi: prepared.feeSompi, changeScriptPublicKey: prepared.changeScriptPublicKey });
       showNotice('#create-notice', 'Confirm in KasWare', `Approve ${lockKas(stake)} KAS (your full stake). Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson);
+      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
       if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
       const game = await api('/api/games/submit', { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
       await bindSecretToGame(game.gameId, secret.secretId);
@@ -509,8 +510,9 @@ async function bindJoin(gameId, game) {
         joinerPublicKey: account.publicKey,
         joinerCommitment: secret.commitment,
       } });
+      const verified = verifyPreparedTransaction(prepared, 'join');
       showNotice('#join-notice', 'Confirm in KasWare', `Lock ${lockKas(theirStake)} KAS. Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson);
+      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
       if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
       await api(`/api/games/${gameId}/join/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
       await refreshGame(gameId);
@@ -573,8 +575,9 @@ function bindReveal(gameId) {
         choice: secret.choice,
         nonceHex: secret.nonceHex,
       } });
+      const verified = verifyPreparedTransaction(prepared, 'reveal');
       showNotice('#reveal-notice', 'Confirm in KasWare', `Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson);
+      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
       if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
       await api(`/api/games/${gameId}/reveal/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
       await refreshGame(gameId);
@@ -669,8 +672,9 @@ function bindSafety(gameId, game, pending) {
         playerAddress: account.address,
         playerPublicKey: account.publicKey,
       } });
+      const verified = verifyPreparedTransaction(prepared, 'refund');
       showNotice('#game-safety', 'Confirm in KasWare', `Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson);
+      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
       if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
       await api(`/api/games/${gameId}/${safetyAction}/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
       await refreshGame(gameId);

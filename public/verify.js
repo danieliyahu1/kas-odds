@@ -10,6 +10,7 @@ import { deriveGameInstance, parseTemplateArtifact, verifyTemplateHash, bytesToH
 import { blake2b256 } from '/src/hashes/blake2b.mjs';
 import { createGenesisGameOutput } from '/src/genesis-transaction.js';
 import { AUTOMATION_FEE_SOMPI } from '/src/protocol.js';
+import { verifyTransactionIntent } from '/src/transaction-intent.js';
 
 const SOMPI_PER_KAS = 100_000_000n;
 
@@ -42,7 +43,7 @@ export async function deriveCovenant({ creatorPublicKey, creatorCommitment, side
   }, { template });
 }
 
-export async function verifyCreation({ txJson, creatorPublicKey, creatorCommitment, side, stakeKas, deadlineDaa, gameFeePublicKey }) {
+export async function verifyCreation({ txJson, creatorPublicKey, creatorCommitment, side, stakeKas, deadlineDaa, gameFeePublicKey, feeSompi, changeScriptPublicKey }) {
   const stakeSompi = BigInt(stakeKas) * SOMPI_PER_KAS;
   const instance = await deriveCovenant({ creatorPublicKey, creatorCommitment, side, stakeSompi, deadlineDaa: BigInt(deadlineDaa), gameFeePublicKey });
 
@@ -72,12 +73,39 @@ export async function verifyCreation({ txJson, creatorPublicKey, creatorCommitme
     || String(covenant.covenantId ?? '').toLowerCase() !== expected.covenant.covenantId) {
     throw new Error('Prepared game does not match your number, side, and stake');
   }
+  if (feeSompi !== undefined) {
+    const totalIn = transaction.inputs.reduce((sum, input) => sum + BigInt(input?.utxo?.amount ?? 0), 0n);
+    const totalOut = transaction.outputs.reduce((sum, output) => sum + BigInt(output?.value ?? 0), 0n);
+    const actualFee = totalIn - totalOut;
+    if (actualFee !== BigInt(feeSompi) || actualFee < 0n) throw new Error('Prepared transaction fee does not match the approved fee');
+    if (transaction.outputs.length > 2) throw new Error('Prepared transaction has an unexpected output');
+    if (transaction.outputs.length === 2
+      && (transaction.outputs[1].scriptPublicKey !== changeScriptPublicKey || transaction.outputs[1].covenant !== null)) {
+      throw new Error('Prepared change output does not return to the approved creator script');
+    }
+  }
+
+  const signInputs = transaction.inputs
+    .map((input, index) => ({ input, index }))
+    .filter(({ input }) => input?.signatureScript === '')
+    .map(({ index }) => ({ index, sighashType: 1 }));
+  if (signInputs.length === 0) throw new Error('Prepared transaction has no wallet inputs to sign');
 
   return Object.freeze({
     templateHash: instance.templateHash,
     covenantId: expected.covenant.covenantId,
     covenantAddress: instance.address,
+    signInputs,
   });
+}
+
+export { verifyTransactionIntent };
+
+export function verifyPreparedTransaction(prepared, action) {
+  if (!prepared?.verification || prepared.verification.action !== action) {
+    throw new Error('The server did not provide a complete transaction intent');
+  }
+  return verifyTransactionIntent({ action, txJson: prepared.txJson, intent: prepared.verification });
 }
 
 export function parseTemplateHash() {
