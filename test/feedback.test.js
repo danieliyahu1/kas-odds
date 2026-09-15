@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -95,6 +95,36 @@ test('FeedbackSpill persists entries to disk and loads them on construction', as
   await second.drain(async () => { throw new Error('keep'); });
   assert.equal(second.entries.length, 1);
   assert.equal(second.entries[0].id, entry.id);
+});
+
+test('FeedbackSpill fails closed on malformed persisted JSON', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'feedback-spill-corrupt-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const filePath = join(dir, 'spill.json');
+  await writeFile(filePath, '{not json', 'utf8');
+  await assert.rejects(() => new FeedbackSpill({ filePath }).add({ message: 'no overwrite' }), { code: 'STORAGE_CORRUPT' });
+  assert.equal(await readFile(filePath, 'utf8'), '{not json');
+});
+
+test('FeedbackSpill preserves read failures instead of treating them as empty', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'feedback-spill-unreadable-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await assert.rejects(() => new FeedbackSpill({ filePath: dir }).add({ message: 'no overwrite' }), { code: 'STORAGE_UNAVAILABLE' });
+});
+
+test('FeedbackSpill serializes concurrent additions', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'feedback-spill-concurrent-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const spill = new FeedbackSpill({ filePath: join(dir, 'nested', 'spill.json') });
+  await Promise.all(Array.from({ length: 20 }, (_, index) => spill.add({ message: `entry-${index}` })));
+  assert.equal(spill.entries.length, 20);
+  assert.equal(JSON.parse(await readFile(spill.filePath, 'utf8')).length, 20);
+});
+
+test('FeedbackSpill preserves invalid persistence paths', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'feedback-spill-write-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await assert.rejects(() => new FeedbackSpill({ filePath: dir }).add({ message: 'cannot use directory' }), { code: 'STORAGE_UNAVAILABLE' });
 });
 
 test('FeedbackSpill.remove deletes an entry by id', async (t) => {

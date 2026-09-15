@@ -24,13 +24,31 @@ export const GAME_FEE_MINIMUM_SOMPI = SOMPI_PER_KAS;
 // even because refund_all splits it equally between both players.
 export const AUTOMATION_FEE_SOMPI = 1_600_000n;
 
+export const ERROR_CATEGORIES = Object.freeze({
+  DOMAIN: 'domain',
+  VALIDATION: 'validation',
+  CONFLICT: 'conflict',
+  DEPENDENCY: 'dependency',
+  INTERNAL: 'internal',
+});
+
 export class ProtocolError extends Error {
   constructor(code, message, options = {}) {
     super(message);
     this.name = 'ProtocolError';
     this.code = code;
+    this.category = options.category ?? categoryForCode(code);
     if (options.cause) this.cause = options.cause;
   }
+}
+
+function categoryForCode(code) {
+  if (code === 'INTERNAL_ERROR') return ERROR_CATEGORIES.INTERNAL;
+  if (code.startsWith('STORAGE_') || code.startsWith('RPC_') || code.startsWith('WASM_')) return ERROR_CATEGORIES.DEPENDENCY;
+  if (code.startsWith('INVALID_') || code.startsWith('WRONG_') || code.startsWith('REQUEST_') || code.startsWith('FEEDBACK_')) return ERROR_CATEGORIES.VALIDATION;
+  if (code.includes('ALREADY') || code.includes('PENDING') || code.includes('CONFLICT') || code === 'MATCH_NOT_READY') return ERROR_CATEGORIES.CONFLICT;
+  if (code.startsWith('GAME_') || code.startsWith('MATCH_') || code.startsWith('ACTION_') || code === 'NOT_A_PLAYER') return ERROR_CATEGORIES.DOMAIN;
+  return ERROR_CATEGORIES.INTERNAL;
 }
 
 function assertStakeSompi(value, name = 'stake sompi') {

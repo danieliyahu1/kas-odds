@@ -14,8 +14,9 @@
 // queue and delivered once the bot is configured, and a `feedback_delivery_disabled`
 // warning is logged so the missing bot is noticed without breaking the app.
 import { randomUUID } from 'node:crypto';
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { ProtocolError } from './protocol.js';
+import { dirname } from 'node:path';
 
 export const FEEDBACK_MAX_MESSAGE = 1500;
 
@@ -61,64 +62,98 @@ export class TelegramFeedback {
 
 export class FeedbackSpill {
   constructor({ filePath, now = () => new Date() } = {}) {
+    if (!filePath) throw new ProtocolError('STORAGE_UNAVAILABLE', 'Feedback spill path is required');
     this.filePath = filePath;
     this.now = now;
     this.entries = [];
     this.loaded = false;
+    this.writeQueue = Promise.resolve();
   }
 
   async add(feedback) {
-    await this.#load();
-    this.entries.push({ id: randomUUID(), receivedAt: this.now().toISOString(), ...feedback });
-    await this.#persist();
-    return this.entries[this.entries.length - 1];
+    return this.#mutate(() => {
+      const entry = { id: randomUUID(), receivedAt: this.now().toISOString(), ...feedback };
+      this.entries.push(entry);
+      return entry;
+    });
   }
 
   async remove(entry) {
-    await this.#load();
-    const next = this.entries.filter((candidate) => candidate.id !== entry.id);
-    if (next.length === this.entries.length) return;
-    this.entries = next;
-    await this.#persist();
+    return this.#mutate(() => {
+      const next = this.entries.filter((candidate) => candidate.id !== entry.id);
+      if (next.length === this.entries.length) return undefined;
+      this.entries = next;
+      return true;
+    }, { persistWhen: (changed) => changed === true });
   }
 
   // Retries every queued entry once. Entries the handler accepts are removed;
   // failures stay queued for the next drain.
   async drain(handler) {
-    await this.#load();
-    const remaining = [];
-    let changed = false;
-    for (const entry of this.entries) {
-      try {
-        await handler(entry);
-        changed = true;
-      } catch {
-        remaining.push(entry);
+    return this.#mutate(async () => {
+      const remaining = [];
+      let changed = false;
+      for (const entry of this.entries) {
+        try {
+          await handler(entry);
+          changed = true;
+        } catch {
+          remaining.push(entry);
+        }
       }
-    }
-    if (changed) {
       this.entries = remaining;
-      await this.#persist();
-    }
+      return changed;
+    }, { persistWhen: Boolean });
   }
 
   async #load() {
     if (this.loaded) return;
-    this.loaded = true;
     try {
       const raw = await readFile(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) this.entries = parsed;
-    } catch {
-      // First run, empty file, or unreadable file: start with an empty queue.
+      this.entries = validateEntries(JSON.parse(raw));
+      this.loaded = true;
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        this.entries = [];
+        this.loaded = true;
+        return;
+      }
+      if (error instanceof ProtocolError) throw error;
+      const code = error instanceof SyntaxError ? 'STORAGE_CORRUPT' : 'STORAGE_UNAVAILABLE';
+      throw new ProtocolError(code, `Unable to read feedback spill: ${error.message}`, { cause: error });
     }
   }
 
   async #persist() {
-    const temporary = `${this.filePath}.tmp`;
-    await writeFile(temporary, JSON.stringify(this.entries), 'utf8');
-    await rename(temporary, this.filePath);
+    await mkdir(dirname(this.filePath), { recursive: true });
+    const temporary = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify(this.entries), 'utf8');
+      await rename(temporary, this.filePath);
+    } catch (error) {
+      await unlink(temporary).catch(() => {});
+      throw new ProtocolError('STORAGE_WRITE_FAILED', `Unable to persist feedback spill: ${error.message}`, { cause: error });
+    }
   }
+
+  async #mutate(change, { persistWhen = () => true } = {}) {
+    const operation = this.writeQueue.then(async () => {
+      await this.#load();
+      const result = await change();
+      if (persistWhen(result)) await this.#persist();
+      return structuredClone(result);
+    });
+    this.writeQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+}
+
+function validateEntries(value) {
+  if (!Array.isArray(value) || value.some((entry) => !entry || typeof entry !== 'object'
+    || typeof entry.id !== 'string' || typeof entry.receivedAt !== 'string' || typeof entry.message !== 'string')) {
+    throw new ProtocolError('STORAGE_CORRUPT', 'Feedback spill contains an invalid entry list');
+  }
+  return value;
 }
 
 export class FeedbackService {

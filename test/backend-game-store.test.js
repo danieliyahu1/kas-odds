@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BackendGameStore } from '../src/backend-game-store.js';
@@ -115,4 +115,43 @@ test('startup pruning removes expired durable preparations', async (t) => {
 
   assert.equal(await store.loadPrepared('old'), null);
   assert.ok(await store.loadPrepared('new'));
+});
+
+test('rejects malformed store JSON without replacing it', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-corrupt-store-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = join(directory, 'games.json');
+  await writeFile(filePath, '{not json', 'utf8');
+  await assert.rejects(() => new BackendGameStore(filePath).loadGame('missing'), { code: 'STORAGE_CORRUPT' });
+  assert.equal(await readFile(filePath, 'utf8'), '{not json');
+});
+
+test('rejects malformed store schemas', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-schema-store-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = join(directory, 'games.json');
+  await writeFile(filePath, JSON.stringify({ games: [] }), 'utf8');
+  await assert.rejects(() => new BackendGameStore(filePath).loadGame('missing'), { code: 'STORAGE_CORRUPT' });
+});
+
+test('preserves store path failures and their causes', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-write-store-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(directory);
+  await assert.rejects(() => store.saveGame({ gameId: 'g'.repeat(64) }), (error) => {
+    assert.equal(error.code, 'STORAGE_UNAVAILABLE');
+    assert.equal(error.cause.code, 'EISDIR');
+    return true;
+  });
+});
+
+test('serializes concurrent store mutations and isolates returned clones', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-concurrent-store-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await Promise.all(Array.from({ length: 20 }, (_, index) => store.saveGame({ gameId: `${index}`.padStart(64, '0'), status: 'waiting' })));
+  const games = await store.listGames();
+  assert.equal(games.length, 20);
+  games[0].status = 'mutated';
+  assert.equal((await store.listGames())[0].status, 'waiting');
 });

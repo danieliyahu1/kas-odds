@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rename, writeFile, constants } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, unlink, writeFile, constants } from 'node:fs/promises';
 import { randomInt } from 'node:crypto';
 import { dirname } from 'node:path';
 import { ProtocolError } from './protocol.js';
@@ -198,9 +198,14 @@ export class BackendGameStore {
       const data = await this.#readRaw();
       const result = change(data);
       await mkdir(dirname(this.filePath), { recursive: true });
-      const temporary = `${this.filePath}.${process.pid}.tmp`;
-      await writeFile(temporary, JSON.stringify(data, null, 2));
-      await renameWithRetry(temporary, this.filePath);
+      const temporary = `${this.filePath}.${process.pid}.${randomInt(1_000_000_000)}.tmp`;
+      try {
+        await writeFile(temporary, JSON.stringify(data, null, 2));
+        await renameWithRetry(temporary, this.filePath);
+      } catch (error) {
+        await unlink(temporary).catch(() => {});
+        throw new ProtocolError('STORAGE_WRITE_FAILED', `Unable to persist backend game store: ${error.message}`, { cause: error });
+      }
       return clone(result);
     }));
     this.writeQueue = operation.then(() => undefined, () => undefined);
@@ -212,13 +217,20 @@ export class BackendGameStore {
   }
 
   async #readRaw() {
+    let raw;
     try {
-      const value = JSON.parse(await readFile(this.filePath, 'utf8'));
-      return normalizeData(value);
+      raw = await readFile(this.filePath, 'utf8');
     } catch (error) {
       if (error?.code === 'ENOENT') return normalizeData({});
-      throw new ProtocolError('STORAGE_UNAVAILABLE', `Unable to read backend game store: ${error.message}`);
+      throw new ProtocolError('STORAGE_UNAVAILABLE', `Unable to read backend game store: ${error.message}`, { cause: error });
     }
+    let value;
+    try {
+      value = JSON.parse(raw);
+    } catch (error) {
+      throw new ProtocolError('STORAGE_CORRUPT', `Backend game store contains invalid JSON: ${error.message}`, { cause: error });
+    }
+    return normalizeData(value);
   }
 
   async #timed(operation, run) {
@@ -247,6 +259,15 @@ async function renameWithRetry(from, to) {
 }
 
 function normalizeData(value) {
+  if (!isRecord(value)) throw new ProtocolError('STORAGE_CORRUPT', 'Backend game store root must be an object');
+  for (const name of ['prepared', 'games', 'joinPrepared', 'actionPrepared', 'matches']) {
+    if (value[name] !== undefined && !isRecord(value[name])) {
+      throw new ProtocolError('STORAGE_CORRUPT', `Backend game store field ${name} must be an object`);
+    }
+  }
+  if (value.queue !== undefined && !Array.isArray(value.queue)) {
+    throw new ProtocolError('STORAGE_CORRUPT', 'Backend game store field queue must be an array');
+  }
   return {
     prepared: value.prepared ?? {},
     games: value.games ?? {},
@@ -255,6 +276,10 @@ function normalizeData(value) {
     queue: value.queue ?? [],
     matches: value.matches ?? {},
   };
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function clone(value) {
