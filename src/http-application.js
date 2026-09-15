@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { extname, join, normalize } from 'node:path';
 import { ProtocolError, NETWORK } from './protocol.js';
 
@@ -7,6 +8,9 @@ const CONTENT_SECURITY_POLICY = ["default-src 'self'", "script-src 'self' 'wasm-
 
 export function createHttpApplication({ gameService, store, relay, metrics, feedbackService, mutatingLimiter, feedbackLimiter, paths, maxRequestBytes, trustedProxy = false, startedAt = new Date().toISOString(), wakeAutomaticSettlementLoop = () => {}, logger = console }) {
   const requestHandler = (req, res) => {
+    const requestId = randomUUID();
+    req.requestId = requestId;
+    res.setHeader('x-request-id', requestId);
     const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     const route = routeLabel(pathname);
     const startedAtMs = performance.now();
@@ -16,7 +20,7 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
       recorded = true;
       const durationSeconds = (performance.now() - startedAtMs) / 1000;
       metrics.recordHttp({ method: req.method ?? 'GET', route, status: res.statusCode, durationSeconds });
-      const fields = { method: req.method ?? 'GET', route, status: res.statusCode, durationMs: Math.round(durationSeconds * 1000) };
+      const fields = { requestId, method: req.method ?? 'GET', route, status: res.statusCode, requestBytes: req.requestBytes ?? 0, durationMs: Math.round(durationSeconds * 1000) };
       if (res.statusCode >= 500) logger.error('http_request', fields);
       else if (res.statusCode >= 400) logger.warn('http_request', fields);
       else if (isStaticRoute(route)) logger.debug('http_request', fields);
@@ -28,7 +32,7 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
     res.setHeader('x-frame-options', 'DENY');
     res.setHeader('referrer-policy', 'no-referrer');
     res.setHeader('content-security-policy', CONTENT_SECURITY_POLICY);
-    void routeRequest(req, res, pathname).catch((error) => sendError(res, error, { route, pathname }, logger));
+    void routeRequest(req, res, pathname).catch((error) => sendError(res, error, { route, pathname, requestId }, logger));
   };
 
   const metricsHandler = (req, res) => {
@@ -100,10 +104,10 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
 function readJson(req, maxRequestBytes) {
   return new Promise((resolve, reject) => {
     let body = ''; let size = 0; let settled = false;
-    const fail = (error) => { if (settled) return; settled = true; req.destroy(); reject(error); };
+    const fail = (error) => { if (settled) return; settled = true; req.requestBytes = size; req.resume(); reject(error); };
     req.setEncoding('utf8');
     req.on('data', (chunk) => { if (settled) return; size += Buffer.byteLength(chunk); if (size > maxRequestBytes) return fail(new ProtocolError('REQUEST_TOO_LARGE', 'Request body is too large')); body += chunk; });
-    req.on('end', () => { if (settled) return; settled = true; try { resolve(JSON.parse(body || '{}')); } catch { reject(new ProtocolError('INVALID_JSON', 'Request body must be valid JSON')); } });
+    req.on('end', () => { if (settled) return; settled = true; req.requestBytes = size; try { resolve(JSON.parse(body || '{}')); } catch { reject(new ProtocolError('INVALID_JSON', 'Request body must be valid JSON')); } });
     req.on('error', fail); req.on('aborted', () => fail(new ProtocolError('REQUEST_ABORTED', 'Request was aborted')));
   });
 }
@@ -114,9 +118,10 @@ function sendError(res, error, context, logger) {
   const clientError = error instanceof ProtocolError || ['INVALID_JSON', 'REQUEST_TOO_LARGE', 'RELAY_PAYLOAD_TOO_LARGE', 'REQUEST_ABORTED'].includes(code);
   const notFound = ['GAME_NOT_FOUND', 'PREPARATION_NOT_FOUND', 'MATCH_NOT_FOUND'].includes(code);
   res.kaspaError = { code, message: error?.message ?? 'Operation failed' };
-  if (error?.cause) logger.error('rpc_transaction_rejected', { code, route: context.route, path: context.pathname, nodeMessage: error.cause?.message ?? String(error.cause), ...error.transactionDiagnostics });
-  else if (!clientError) logger.error('server_error', { code, message: error?.message, stack: error?.stack });
-  sendJson(res, notFound ? 404 : clientError ? 400 : 502, { error: code, message: clientError ? error.message : 'Kaspa testnet10 backend is unavailable' });
+  const fields = { requestId: context.requestId, route: context.route, code, message: error?.message };
+  if (error?.cause) logger.error('rpc_transaction_rejected', { ...fields, nodeMessage: error.cause?.message ?? String(error.cause), ...error.transactionDiagnostics });
+  else logger.error(clientError ? 'client_request_rejected' : 'server_error', { ...fields, stack: clientError ? undefined : error?.stack });
+  sendJson(res, notFound ? 404 : code === 'REQUEST_TOO_LARGE' ? 413 : clientError ? 400 : 502, { error: code, message: clientError ? error.message : 'Kaspa testnet10 backend is unavailable', requestId: context.requestId });
 }
 
 function sendJson(res, status, body) { if (res.writableEnded || res.destroyed) return; res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); }
