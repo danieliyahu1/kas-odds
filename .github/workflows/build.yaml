@@ -46,7 +46,9 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run check
+       - run: npm run lint
+
+       - run: npm run format:check
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
@@ -61,7 +63,13 @@ jobs:
       - name: Build covenant oracle
         run: cargo build --release --locked --manifest-path oracle/Cargo.toml
 
-      - run: npm test
+       - run: npm test
+
+       - name: Run JavaScript coverage
+         run: npm run coverage
+
+       - name: Run Rust tests
+         run: cargo test --locked --manifest-path oracle/Cargo.toml
 
       - name: Install kubectl
         run: |

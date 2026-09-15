@@ -7,7 +7,13 @@
   "scripts": {
     "start": "node --env-file=.env src/server.js",
     "test": "node --test \"test/*.test.js\"",
-    "check": "node --check src/index.js && node --check src/server.js && node --check src/feedback.js && node --check src/wrpc.mjs && node --check src/wasm-loader.mjs && node --check src/funding.mjs && node --check src/covenant/even-odd-core.mjs && node --check src/covenant/template.mjs && node --check src/metrics.js && node --check src/relay-store.js && node --check src/rate-limit.js && node --check src/backend-game-service.js && node --check src/backend-game-store.js && node --check src/chain-adapter.js && node --check src/transaction-fee.js && node --check src/ephemeral-preparations.js && node --check src/kasware-wallet.js && node --check src/transaction-diagnostics.js && node --check src/logger.js && node --check public/app.js && node --check public/secrets.js && node --check public/verify.js && node --check public/log.js && node --check public/kasware-signing.js"
+    "syntax": "node scripts/quality-gates.mjs --syntax",
+    "lint": "node scripts/quality-gates.mjs --lint",
+    "format:check": "node scripts/quality-gates.mjs --format",
+    "coverage": "node --test --experimental-test-coverage \"test/*.test.js\"",
+    "test:rust": "cargo test --locked --manifest-path oracle/Cargo.toml",
+    "test:all": "npm run lint && npm run format:check && npm run test && npm run test:rust",
+    "check": "npm run syntax"
   },
   "engines": {
     "node": ">=20"
