@@ -32,7 +32,7 @@ test('server serves the browser application and health probe', async (t) => {
   t.after(() => rm(directory, { recursive: true, force: true }));
 
   await waitForServer(`http://127.0.0.1:${port}/readyz`);
-  const [page, host, rival, health, missing, demoApi, appScript, secretsScript, verifyScript, coreScript, genesisScript, artifact, pins, wasmJs, icon] = await Promise.all([
+  const [page, host, rival, health, missing, demoApi, appScript, mainScript, secretsScript, verifyScript, coreScript, genesisScript, artifact, pins, wasmJs, icon] = await Promise.all([
     fetch(`http://127.0.0.1:${port}/`),
     fetch(`http://127.0.0.1:${port}/host`),
     fetch(`http://127.0.0.1:${port}/rival`),
@@ -40,6 +40,7 @@ test('server serves the browser application and health probe', async (t) => {
     fetch(`http://127.0.0.1:${port}/public-game-list`),
     fetch(`http://127.0.0.1:${port}/api/demo/games`),
     fetch(`http://127.0.0.1:${port}/app.js`),
+    fetch(`http://127.0.0.1:${port}/main.js`),
     fetch(`http://127.0.0.1:${port}/secrets.js`),
     fetch(`http://127.0.0.1:${port}/verify.js`),
     fetch(`http://127.0.0.1:${port}/src/covenant/even-odd-core.mjs`),
@@ -57,6 +58,8 @@ test('server serves the browser application and health probe', async (t) => {
   assert.match(pageHtml, /Even\/Odd/);
   assert.match(pageHtml, /Connect Wallet/);
   assert.match(pageHtml, /id="wallet-button"/);
+  assert.match(pageHtml, /<script type="module" src="\/main\.js"><\/script>/);
+  assert.doesNotMatch(pageHtml, /<script type="module">import/);
   assert.deepEqual(await health.json().then(({ ok, service, network }) => ({ ok, service, network })), { ok: true, service: 'kaspa-even-odd', network: 'testnet-10' });
   assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/api/config`)).json(), {
     network: 'testnet-10',
@@ -76,6 +79,8 @@ test('server serves the browser application and health probe', async (t) => {
   const browserSource = await appScript.text();
   const secretsSource = await secretsScript.text();
   assert.equal(verifyScript.status, 200);
+  assert.equal(mainScript.status, 200);
+  assert.match(await mainScript.text(), /import \{ boot \} from '\/app\.js';\s*\nboot\(\);/);
   assert.equal(coreScript.status, 200);
   assert.equal(genesisScript.status, 200);
   assert.equal(artifact.status, 200);
@@ -161,7 +166,7 @@ test('server serves the browser application and health probe', async (t) => {
   // without the deleted client-side transaction engine.
   const origin = `http://127.0.0.1:${port}`;
   const seen = new Set();
-  const queue = ['/app.js', '/secrets.js', '/verify.js'];
+  const queue = ['/main.js', '/app.js', '/secrets.js', '/verify.js'];
   while (queue.length) {
     const modulePath = queue.shift();
     if (seen.has(modulePath)) continue;
