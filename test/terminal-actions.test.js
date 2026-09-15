@@ -5,12 +5,10 @@ import {
   FALLBACK_CLAIM_DAA_OFFSET,
   NO_REVEAL_REFUND_DAA_OFFSET,
   resolveFallbackClaim,
-  resolveIndividualRefund,
   safetyReadiness,
   TERMINAL_COPY,
   terminalActionView,
   validateFallbackClaimTemplate,
-  validateIndividualRefundTemplate,
 } from '../src/terminal-actions.js';
 
 const game = {
@@ -83,29 +81,6 @@ test('confirmed fallback claim defeats later reveals', () => {
   assert.equal(result.message, TERMINAL_COPY.fallbackConfirmed);
 });
 
-test('refund is available only after no-reveal deadline and only to participants', () => {
-  assert.equal(resolveIndividualRefund({ game, caller: 'observer', currentDaaScore: 4_000n }).message, TERMINAL_COPY.refundNotPlayer);
-  assert.equal(resolveIndividualRefund({ game, caller: 'creator', currentDaaScore: 3_999n }).available, false);
-  assert.deepEqual(resolveIndividualRefund({ game, caller: 'creator', currentDaaScore: 4_000n }), {
-    status: 'available',
-    available: true,
-    message: 'Refund is available.',
-    action: 'individual_refund',
-    player: 'creator',
-  });
-});
-
-test('refund is refused after any valid reveal and reports completed own refund', () => {
-  assert.equal(
-    resolveIndividualRefund({ game: { ...game, firstReveal: { player: 'joiner', confirmedDaaScore: 2_000n } }, caller: 'creator', currentDaaScore: 4_000n }).message,
-    TERMINAL_COPY.refundRevealExists,
-  );
-  assert.equal(
-    resolveIndividualRefund({ game: { ...game, refunds: { creator: true } }, caller: 'creator', currentDaaScore: 4_000n }).message,
-    TERMINAL_COPY.refundAlreadyComplete,
-  );
-});
-
 test('validates a no-fee fallback claim and fee separation', () => {
   const tx = templateTx({
     inputAmount: 200_010_000n,
@@ -133,41 +108,12 @@ test('validates a no-fee fallback claim and fee separation', () => {
   }), { code: 'FEE_SUBSTITUTION' });
 });
 
-test('validates individual refund pays only caller escrow', () => {
-  const tx = templateTx({
-    inputAmount: 200_010_000n,
-    outputValue: 100_000_000n,
-    scriptPublicKey: '000052',
-    extraOutputs: [{ value: '100000000', scriptPublicKey: '0000aa20' + '00'.repeat(32) + '87', covenant: { authorizingInput: 0, covenantId: '33'.repeat(32) } }],
-  });
-  assert.equal(validateIndividualRefundTemplate({ game, caller: 'joiner', currentDaaScore: 4_000n, transaction: tx }), tx);
-  assert.throws(() => validateIndividualRefundTemplate({
-    game,
-    caller: 'joiner',
-    currentDaaScore: 4_000n,
-    transaction: templateTx({ inputAmount: 200_010_000n, outputValue: 100_000_000n, scriptPublicKey: '000052', extraOutputs: [{ value: '100000000', scriptPublicKey: '000051' }] }),
-  }), { code: 'INVALID_TRANSACTION' });
-  assert.throws(() => validateIndividualRefundTemplate({
-    game,
-    caller: 'joiner',
-    currentDaaScore: 4_000n,
-    transaction: templateTx({ inputAmount: 200_000_000n, outputValue: 200_000_000n, scriptPublicKey: '000052' }),
-  }), { code: 'INVALID_TRANSACTION' });
-});
-
 test('projects terminal decisions into browser action states', () => {
   assert.deepEqual(terminalActionView('fallback_claim', resolveFallbackClaim({ game, caller: 'creator', currentDaaScore: 1_000n })), {
     action: 'fallback_claim',
     state: 'unavailable',
     canSubmit: false,
     message: TERMINAL_COPY.fallbackUnavailable,
-    availableDaaScore: undefined,
-  });
-  assert.deepEqual(terminalActionView('individual_refund', resolveIndividualRefund({ game, caller: 'creator', currentDaaScore: 4_000n })), {
-    action: 'individual_refund',
-    state: 'available',
-    canSubmit: true,
-    message: 'Refund is available.',
     availableDaaScore: undefined,
   });
 });

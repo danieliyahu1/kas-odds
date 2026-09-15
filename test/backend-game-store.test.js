@@ -59,12 +59,12 @@ test('persists games and transaction preparations', async (t) => {
 
   await store.savePrepared({ preparedHash: 'p1', request: { stakeSompi: '1' }, createdAt: 'now' });
   await store.saveJoinPrepared({ preparedHash: 'j1', gameId: 'g'.repeat(64) });
-  await store.saveActionPrepared({ preparedHash: 'a1', action: 'refund_player' });
+  await store.saveActionPrepared({ preparedHash: 'a1', action: 'refund_all' });
   await store.saveGame({ gameId: 'g'.repeat(64), status: 'broadcast' });
 
   assert.deepEqual(await store.loadPrepared('p1'), { preparedHash: 'p1', request: { stakeSompi: '1' }, createdAt: 'now' });
   assert.equal((await store.loadJoinPrepared('j1')).gameId, 'g'.repeat(64));
-  assert.equal((await store.loadActionPrepared('a1')).action, 'refund_player');
+  assert.equal((await store.loadActionPrepared('a1')).action, 'refund_all');
   assert.equal((await store.loadGame('g'.repeat(64))).status, 'broadcast');
   assert.equal(await store.loadPrepared('missing'), null);
 });

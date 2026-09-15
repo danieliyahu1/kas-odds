@@ -5,7 +5,6 @@ import {
   FALLBACK_CLAIM_DAA_OFFSET,
   NO_REVEAL_REFUND_DAA_OFFSET,
   resolveFallbackClaim,
-  resolveIndividualRefund,
 } from './terminal-actions.js';
 import { parityOutcome, resolveReveal, verifyRevealPreimage } from './reveal.js';
 import { loadWasmSdk, verifyWasmSignedSafeJson } from './wasm-transaction.js';
@@ -114,28 +113,6 @@ export function prepareRevealTransaction({ game, caller, currentDaaScore, secret
     payoutValue: winnerPayoutSompi(game.stakeSompi),
     recipientScriptPublicKey,
     extraOutputs: gameFee > 0n ? [{ value: gameFee, scriptPublicKey: feeScriptPublicKey }] : [],
-    feeInputs,
-    feeSompi,
-    change,
-  });
-}
-
-export function prepareIndividualRefundTransaction({ game, caller, currentDaaScore, gameInput, recipientScriptPublicKey, continuationScriptPublicKey, continuationCovenant, feeInputs = [], feeSompi = 0n, change, publicKey }) {
-  const decision = resolveIndividualRefund({ game, caller, currentDaaScore });
-  if (!decision.available) throw new ProtocolError('ACTION_UNAVAILABLE', decision.message);
-  const refund = playerLockSompi(game.stakeSompi);
-  const requiresContinuation = !Object.values(game.refunds ?? {}).some(Boolean);
-  if (requiresContinuation && (typeof continuationScriptPublicKey !== 'string' || continuationScriptPublicKey.length === 0 || !continuationCovenant)) {
-    throw new ProtocolError('INVALID_TRANSACTION', 'Refund continuation script public key is required');
-  }
-  return prepareTerminalTransaction({
-    action: TERMINAL_ENTRIES.refund,
-    gameInput,
-    inputSequence: NO_REVEAL_REFUND_DAA_OFFSET,
-    args: [publicKey],
-    payoutValue: refund,
-    recipientScriptPublicKey,
-    extraOutputs: requiresContinuation ? [{ value: refund, scriptPublicKey: continuationScriptPublicKey, covenant: continuationCovenant }] : [],
     feeInputs,
     feeSompi,
     change,

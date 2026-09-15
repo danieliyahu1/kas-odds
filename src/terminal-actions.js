@@ -1,4 +1,4 @@
-import { playerLockSompi, gameFeeSompi, winnerPayoutSompi, ProtocolError } from './protocol.js';
+import { gameFeeSompi, winnerPayoutSompi, ProtocolError } from './protocol.js';
 
 // testnet-10 targets 10 BPS. The PRD's five-minute waits therefore pin to
 // 300 seconds * 10 DAA-score increments per second.
@@ -22,10 +22,7 @@ export const TERMINAL_COPY = Object.freeze({
   fallbackConfirmed: 'Fallback claim confirmed. You receive the pot.',
   settledBySecondReveal: 'The game was settled by the second reveal.',
   gameStateChanged: 'The game state changed. Refresh before trying again.',
-  refundRevealExists: 'A reveal exists; refund is not available.',
-  refundNotPlayer: 'Only a player in this game can refund their stake.',
   refundConfirmed: 'Your refund is confirmed.',
-  refundAlreadyComplete: 'Your refund is already complete.',
   transactionPending: 'Transaction status is pending confirmation.',
   stateUnknown: 'Game state is not yet available.',
   stateConflicting: 'Game state is conflicting and cannot be shown as settled.',
@@ -66,28 +63,6 @@ export function resolveFallbackClaim({ game, caller, currentDaaScore }) {
   });
 }
 
-export function resolveIndividualRefund({ game, caller, currentDaaScore }) {
-  const state = normalizeGameState(game);
-  if (!state.players.includes(caller)) {
-    return decision('refused', false, TERMINAL_COPY.refundNotPlayer);
-  }
-  if (state.firstReveal || state.secondReveal || state.terminal === 'settled' || state.terminal === 'fallback_claimed') {
-    return decision('refused', false, TERMINAL_COPY.refundRevealExists);
-  }
-  if (state.refunds[caller]) {
-    return decision('already_complete', false, TERMINAL_COPY.refundAlreadyComplete);
-  }
-  if (normalizeDaa(currentDaaScore, 'current DAA score') < state.noRevealRefundDeadlineDaa) {
-    return decision('unavailable', false, 'Refund is not available yet.', {
-      availableDaaScore: state.noRevealRefundDeadlineDaa,
-    });
-  }
-  return decision('available', true, 'Refund is available.', {
-    action: 'individual_refund',
-    player: caller,
-  });
-}
-
 export function terminalActionView(action, decision) {
   if (!decision || typeof decision !== 'object') {
     return Object.freeze({ action, state: 'unknown', canSubmit: false, message: TERMINAL_COPY.stateUnknown });
@@ -110,19 +85,6 @@ export function validateFallbackClaimTemplate({ game, caller, currentDaaScore, t
   const player = state.participants[caller];
   assertSinglePayout(tx, winnerPayoutSompi(state.stakeSompi), player.scriptPublicKey, 'fallback claim payout');
   assertGameFeeOutput(tx, gameFeeSompi(state.stakeSompi));
-  assertFeeSeparated(tx);
-  return tx;
-}
-
-export function validateIndividualRefundTemplate({ game, caller, currentDaaScore, transaction }) {
-  const state = normalizeGameState(game);
-  const resolved = resolveIndividualRefund({ game: state, caller, currentDaaScore });
-  if (!resolved.available) throw new ProtocolError('ACTION_UNAVAILABLE', resolved.message);
-  const tx = parseTransaction(transaction);
-  const player = state.participants[caller];
-  const refund = playerLockSompi(state.stakeSompi);
-  assertSinglePayout(tx, refund, player.scriptPublicKey, 'individual refund payout');
-  if (!Object.values(state.refunds).some(Boolean)) assertRefundContinuation(tx, refund);
   assertFeeSeparated(tx);
   return tx;
 }
@@ -151,7 +113,6 @@ function normalizeGameState(game) {
     firstReveal,
     secondReveal: normalizeReveal(game.secondReveal, players),
     fallbackClaim: normalizeConfirmation(game.fallbackClaim),
-    refunds: normalizeRefunds(game.refunds, players),
     terminal: game.terminal ?? null,
   });
 }
@@ -192,12 +153,6 @@ function normalizeConfirmation(value) {
   };
 }
 
-function normalizeRefunds(refunds, players) {
-  const normalized = {};
-  for (const player of players) normalized[player] = Boolean(refunds?.[player]);
-  return normalized;
-}
-
 function winsBeforeOrAt(left, right) {
   return left && (!right || left.confirmedDaaScore <= right.confirmedDaaScore);
 }
@@ -218,13 +173,6 @@ function assertSinglePayout(transaction, value, scriptPublicKey, name) {
   const payouts = transaction.outputs.filter((output) => BigInt(output?.value ?? -1) === value && output?.scriptPublicKey === scriptPublicKey);
   if (payouts.length !== 1) {
     throw new ProtocolError('INVALID_TRANSACTION', `Transaction must contain exactly one ${name}`);
-  }
-}
-
-function assertRefundContinuation(transaction, value) {
-  const continuations = transaction.outputs.filter((output) => BigInt(output?.value ?? -1) === value && output?.covenant);
-  if (continuations.length !== 1) {
-    throw new ProtocolError('INVALID_TRANSACTION', 'First refund must preserve the other escrow in one covenant continuation output');
   }
 }
 

@@ -81,7 +81,7 @@ function pendingReveal({ transactionId, address, scriptPublicKey, submittedAt, r
 
 function pendingRefund({ transactionId, address, scriptPublicKey, continuationOutputIndex = 1, submittedAt }) {
   return {
-    action: 'refund_player',
+    action: 'refund_all',
     transactionId,
     preparedHash: '05'.repeat(32),
     playerAddress: CREATOR_ADDRESS,

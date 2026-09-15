@@ -116,7 +116,7 @@ test('join, reveal, and read require an existing game', async (t) => {
   );
   await assert.rejects(service.readGame(gameId), { code: 'GAME_NOT_FOUND' });
   await assert.rejects(
-    service.prepareSafetyAction(gameId, 'refund_player', { playerAddress: 'kaspatest:x', playerPublicKey: 'a'.repeat(64) }),
+    service.prepareSafetyAction(gameId, 'refund_all', { playerAddress: 'kaspatest:x', playerPublicKey: 'a'.repeat(64) }),
     { code: 'GAME_NOT_FOUND' },
   );
 });

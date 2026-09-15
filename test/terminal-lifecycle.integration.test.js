@@ -72,7 +72,7 @@ test('runs a normal second reveal through mocked wallet and chain settlement', a
 
 test('fails closed when the chain state is unknown or conflicting', async () => {
   const chain = { readGameState: async () => ({ ...game, confirmationStatus: 'pending' }) };
-  await assert.rejects(() => createAndConfirmTerminalAction({ action: 'individual_refund', request, chain, wallet: { sign: async () => '' }, store: new MemoryTerminalStore() }), { code: 'CHAIN_UNAVAILABLE' });
+  await assert.rejects(() => createAndConfirmTerminalAction({ action: 'refund_all', request, chain, wallet: { sign: async () => '' }, store: new MemoryTerminalStore() }), { code: 'CHAIN_UNAVAILABLE' });
 });
 
 function requestForBuilder() {
