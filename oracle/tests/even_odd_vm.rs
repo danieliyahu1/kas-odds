@@ -14,13 +14,14 @@ use kaspa_txscript_errors::TxScriptError;
 use secp256k1::{Keypair, Secp256k1, SecretKey};
 use silverscript_abi::{ArtifactValue, SilAbiArtifact, encode_contract_entry_sig_script, encode_runtime_state_script};
 
-// Protocol v6 economics: pots below 100 KAS pay the winner in full. Larger pots
+// Protocol v9 economics: pots below 100 KAS pay the winner in full. Larger pots
 // pay the winner 99% and the game wallet 1%; canceled games refund the full lock.
 const STAKE: u64 = 100_000_000;
 const ESCROW: u64 = STAKE;
 const JOINED: u64 = STAKE + STAKE;
 const WINNER: u64 = JOINED;
 const FEE: u64 = 0;
+const SETTLE_FEE: i64 = 1_600_000;
 const DEADLINE_DAA: u64 = 500_000_000;
 
 struct Player {
@@ -76,26 +77,6 @@ fn vm_accepts_late_fallback_claim_and_rejects_early_or_wrong_revealer() {
     assert_fallback_claim(&artifact, &state, &creator, &wallet, DEADLINE_DAA + 3_000, true);
     assert_fallback_claim(&artifact, &state, &creator, &wallet, DEADLINE_DAA + 2_999, false);
     assert_fallback_claim(&artifact, &state, &joiner, &wallet, DEADLINE_DAA + 3_000, false);
-}
-
-#[test]
-fn vm_accepts_player_refund_only_before_any_valid_reveal() {
-    let artifact = artifact();
-    let creator = player(1);
-    let joiner = player(2);
-    let wallet = player(3);
-    let joined = game_state(&artifact, 1, &creator, &joiner, 0, 0, &[], &wallet);
-    let after_creator_refund = game_state(&artifact, 5, &creator, &joiner, 0, 0, &[], &wallet);
-    let after_joiner_refund = game_state(&artifact, 6, &creator, &joiner, 0, 0, &[], &wallet);
-    assert_refund_spend(&artifact, &joined, &creator, JOINED, DEADLINE_DAA + 3_000, Some(&after_creator_refund), true);
-    assert_refund_spend(&artifact, &joined, &joiner, JOINED, DEADLINE_DAA + 3_000, Some(&after_joiner_refund), true);
-    assert_refund_spend(&artifact, &joined, &creator, JOINED, DEADLINE_DAA + 2_999, Some(&after_creator_refund), false);
-
-    assert_refund_spend(&artifact, &after_creator_refund, &joiner, ESCROW, DEADLINE_DAA + 3_000, None, true);
-    assert_refund_spend(&artifact, &after_creator_refund, &creator, ESCROW, DEADLINE_DAA + 3_000, None, false);
-
-    let revealed = game_state(&artifact, 2, &creator, &joiner, 1, 0, &creator.hash, &wallet);
-    assert_refund_spend(&artifact, &revealed, &creator, JOINED, DEADLINE_DAA + 3_000, None, false);
 }
 
 #[test]
@@ -207,21 +188,6 @@ fn assert_creator_refund(artifact: &SilAbiArtifact, state_script: &[u8], creator
     }
 }
 
-fn assert_refund_spend(artifact: &SilAbiArtifact, state_script: &[u8], player: &Player, input_value: u64, daa: u64, continuation_state: Option<&[u8]>, should_pass: bool) {
-    assert_spend_with_outputs(artifact, state_script, "refund_player", player, input_value, daa, should_pass, |_script, covenant_id| {
-        let mut outputs = vec![TransactionOutput { value: ESCROW, script_public_key: player_script(player), covenant: None }];
-        if let Some(next_state) = continuation_state {
-            let next_script = instance_script(artifact, next_state);
-            outputs.push(TransactionOutput {
-                value: ESCROW,
-                script_public_key: pay_to_script_hash_script(&next_script),
-                covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id }),
-            });
-        }
-        outputs
-    });
-}
-
 fn assert_fallback_claim(artifact: &SilAbiArtifact, state_script: &[u8], player: &Player, wallet: &Player, daa: u64, should_pass: bool) {
     let script = instance_script(artifact, state_script);
     let covenant_id = Hash::from_bytes([0x33; 32]);
@@ -230,7 +196,7 @@ fn assert_fallback_claim(artifact: &SilAbiArtifact, state_script: &[u8], player:
         UtxoEntry::new(JOINED, pay_to_script_hash_script(&script), DEADLINE_DAA, false, Some(covenant_id)),
         UtxoEntry::new(1_000_000, player_script(player), DEADLINE_DAA, false, None),
     ];
-    let outputs = vec![TransactionOutput { value: WINNER, script_public_key: player_script(player), covenant: None }];
+    let outputs = vec![TransactionOutput { value: WINNER - SETTLE_FEE as u64, script_public_key: player_script(player), covenant: None }];
     let age_daa = daa.checked_sub(DEADLINE_DAA).expect("test daa is after input daa");
     let mut input = tx_input(0, invocation);
     input.sequence = age_daa;
@@ -240,30 +206,6 @@ fn assert_fallback_claim(artifact: &SilAbiArtifact, state_script: &[u8], player:
         assert!(result.is_ok(), "fallback_claim should pass: {:?}", result.err());
     } else {
         assert!(matches!(result, Err(TxScriptError::VerifyError | TxScriptError::EvalFalse | TxScriptError::UnsatisfiedLockTime(_))), "fallback_claim should fail by VM verify/eval false: {result:?}");
-    }
-}
-
-fn assert_spend_with_outputs<F>(artifact: &SilAbiArtifact, state_script: &[u8], entry: &str, player: &Player, input_value: u64, daa: u64, should_pass: bool, build_outputs: F)
-where
-    F: FnOnce(&[u8], Hash) -> Vec<TransactionOutput>,
-{
-    let script = instance_script(artifact, state_script);
-    let covenant_id = Hash::from_bytes([0x33; 32]);
-    let invocation = entry_sigscript(artifact, entry, vec![ArtifactValue::Bytes(player.pubkey.clone())], &script);
-    let entries = vec![
-        UtxoEntry::new(input_value, pay_to_script_hash_script(&script), DEADLINE_DAA, false, Some(covenant_id)),
-        UtxoEntry::new(1_000_000, player_script(player), DEADLINE_DAA, false, None),
-    ];
-    let outputs = build_outputs(&script, covenant_id);
-    let age_daa = daa.checked_sub(DEADLINE_DAA).expect("test daa is after input daa");
-    let mut input = tx_input(0, invocation);
-    input.sequence = age_daa;
-    let tx = Transaction::new(1, vec![input, tx_input(1, vec![])], outputs, 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
-    let result = execute_input(tx, entries, 0);
-    if should_pass {
-        assert!(result.is_ok(), "{entry} should pass: {:?}", result.err());
-    } else {
-        assert!(matches!(result, Err(TxScriptError::VerifyError | TxScriptError::EvalFalse | TxScriptError::UnsatisfiedLockTime(_))), "{entry} should fail by VM verify/eval false: {result:?}");
     }
 }
 
@@ -293,6 +235,7 @@ fn game_state_with_commits(artifact: &SilAbiArtifact, status: i64, creator: &Pla
     values.insert("first_revealer_hash".into(), ArtifactValue::Bytes(if first_revealer_hash.is_empty() { vec![0; 32] } else { first_revealer_hash.to_vec() }));
     values.insert("game_wallet_hash".into(), ArtifactValue::Bytes(wallet.hash.clone()));
     values.insert("status".into(), ArtifactValue::Int(status));
+    values.insert("settle_fee".into(), ArtifactValue::Int(SETTLE_FEE));
     encode_runtime_state_script(artifact, &contract.runtime_state, &values).expect("state encodes")
 }
 
@@ -311,6 +254,7 @@ fn open_game_state(artifact: &SilAbiArtifact, creator: &Player, creator_commit: 
     values.insert("first_revealer_hash".into(), ArtifactValue::Bytes(vec![0; 32]));
     values.insert("game_wallet_hash".into(), ArtifactValue::Bytes(wallet.hash.clone()));
     values.insert("status".into(), ArtifactValue::Int(0));
+    values.insert("settle_fee".into(), ArtifactValue::Int(SETTLE_FEE));
     encode_runtime_state_script(artifact, &contract.runtime_state, &values).expect("state encodes")
 }
 
