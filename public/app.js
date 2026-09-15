@@ -10,6 +10,7 @@ import { bindSecretToGame, createRevealSecret, deleteSecretForGame, loadSecretFo
 import { verifyCreation, verifyPreparedTransaction } from '/verify.js';
 import { logDebug, logInfo, logWarn, logError } from '/log.js';
 import { signWithKasware as kaswareSignPskt } from '/kasware-signing.js';
+import { createLatestRequestGate, createPollController, isTerminalGameStatus } from '/app-controller.js';
 
 const NETWORK = 'testnet-10';
 const KASWARE_NETWORK = 'kaspa_testnet_10';
@@ -17,9 +18,10 @@ const app = document.querySelector('#app');
 const params = new URLSearchParams(location.search);
 const KASWARE_DOWNLOAD = 'https://chromewebstore.google.com/detail/kasware-wallet/hklhheigdmpoolooomdihmhlpjjdbklf';
 
-boot();
+const gamePoller = createPollController({ onPoll: (gameId) => refreshGame(gameId), intervalMs: 3500 });
+const gameRequestGate = createLatestRequestGate();
 
-async function boot() {
+export async function boot() {
   try {
     initWalletButton();
     initFeedback();
@@ -69,7 +71,7 @@ function renderMatchmaking() {
   let provider;
   let account;
   let match;
-  let pollTimer;
+  const matchPoller = createPollController({ onPoll: () => refreshMatch(), intervalMs: 2500 });
   let number = null;
   let started = false;
 
@@ -92,7 +94,7 @@ function renderMatchmaking() {
       rememberAddress(account.address);
       match = await api('/api/matchmaking/join', { method: 'POST', body: { address: account.address, publicKey: account.publicKey, limitKas: rawLimit() } });
       renderMatchState();
-      pollTimer = setInterval(() => { void refreshMatch(); }, 2500);
+      matchPoller.start();
       await refreshMatch();
     } catch (error) {
       button.disabled = false;
@@ -157,7 +159,7 @@ function renderMatchmaking() {
     }));
     document.querySelector('#match-play').addEventListener('click', () => {
       started = true;
-      clearInterval(pollTimer);
+      matchPoller.stop();
       if (isCreator) void startCreation();
       else void startJoin();
     });
@@ -174,7 +176,7 @@ function renderMatchmaking() {
         || previous.stakeKas !== match.stakeKas;
       if (changed) renderMatchState();
     } catch (error) {
-      if (error.code === 'MATCH_NOT_FOUND') clearInterval(pollTimer);
+      if (error.code === 'MATCH_NOT_FOUND') matchPoller.stop();
     }
   }
 
@@ -246,7 +248,7 @@ function renderMatchmaking() {
   }
 
   async function leave() {
-    clearInterval(pollTimer);
+    matchPoller.stop();
     await api(`/api/matchmaking/${match.matchId}/leave`, { method: 'POST', body: { address: account.address } }).catch(() => {});
     location.href = '/';
   }
@@ -372,8 +374,7 @@ async function renderGame(gameId) {
   if (!isGameId(gameId)) return renderBackendError('That game link doesn\u2019t look right.');
   scheduleGameRefresh(gameId);
   try {
-    const game = await api(`/api/games/${gameId}`);
-    paintGame(gameId, game);
+    await refreshGame(gameId, { reportErrors: true });
   } catch (error) {
     renderBackendError(error.message);
   }
@@ -423,7 +424,7 @@ async function paintGame(gameId, game) {
   bindSafety(gameId, game, myPendingSafety);
   bindRecoveryCountdown(recoveryFromGame(game), () => refreshGame(gameId));
   bindPlayAgain();
-  if (!active) stopGameRefresh();
+  if (!active || isTerminalGameStatus(game.status)) stopGameRefresh();
 }
 
 function recoveryFromGame(game) {
@@ -922,30 +923,29 @@ function shortAddress(address) {
 function capitalize(word) { return word ? word.charAt(0).toUpperCase() + word.slice(1) : ''; }
 
 function scheduleGameRefresh(gameId) {
-  if (!window.__gameRefreshStarted) {
-    window.__gameRefreshStarted = true;
-    window.__gameRefreshTimer = setInterval(() => { void refreshGame(gameId); }, 3500);
-  }
+  gamePoller.start(gameId);
   window.__gameStatus = undefined;
 }
 
 function stopGameRefresh() {
-  if (window.__gameRefreshTimer) clearInterval(window.__gameRefreshTimer);
-  window.__gameRefreshTimer = undefined;
-  window.__gameRefreshStarted = false;
+  gamePoller.stop();
+  gameRequestGate.next();
 }
 
-async function refreshGame(gameId) {
+async function refreshGame(gameId, options = {}) {
+  const requestRevision = gameRequestGate.next();
   try {
     if (!(location.pathname === '/game' || location.pathname === '/join')) return;
     if ((params.get('id') ?? params.get('game')) !== gameId) return;
     const game = await api(`/api/games/${gameId}`);
+    if (!gameRequestGate.isCurrent(requestRevision)) return;
     const signature = gameSignature(game);
     if (window.__gameStatus === signature) return;
     window.__gameStatus = signature;
     await paintGame(gameId, game);
-  } catch {
+  } catch (error) {
     // A transient refresh may race a broadcast; the next tick retries.
+    if (options.reportErrors) throw error;
   }
 }
 
