@@ -122,8 +122,20 @@ export class BackendGameService {
     if (Boolean(record.matchId) !== Boolean(matchId) || (matchId && record.matchId !== matchId)) {
       throw new ProtocolError('MATCH_NOT_READY', 'This creation does not belong to the matchmaking session');
     }
-    verifySignedCreationSafeJson({ preparedTxJson: prepared.txJson, signedTxJson, request, policy: prepared.policy });
-    const transactionId = await this.#submitSignedTransaction('creation', signedTxJson, prepared.feerate);
+    const operationId = operationKey('creation', preparedHash);
+    const existing = await this.store.loadOperation(operationId);
+    let transactionId;
+    if (existing?.status === 'broadcast') {
+      transactionId = existing.transactionId;
+    } else {
+      verifySignedCreationSafeJson({ preparedTxJson: prepared.txJson, signedTxJson, request, policy: prepared.policy });
+      transactionId = await this.#submitOperation({
+        operationId, action: 'creation', gameId: null, preparedHash,
+        metadata: { matchId: matchId ?? null },
+        transactionId: transactionIdFromSafeJson(signedTxJson),
+        submit: () => this.#submitSignedTransaction('creation', signedTxJson, prepared.feerate),
+      });
+    }
     this.#logPlayer('creation_submit', request.creatorAddress, { gameId: transactionId, matchId: matchId ?? null });
     await this.#saveGame({
       gameId: transactionId,
@@ -136,6 +148,7 @@ export class BackendGameService {
       createdAt: new Date().toISOString(),
       ...(matchId ? { matchId } : {}),
     });
+    await this.#updateOperation(operationId, { gameId: transactionId });
     if (matchId) await this.#attachMatchGame(matchId, request, transactionId);
     this.metrics.recordGameEvent('creation_submitted');
     return { gameId: transactionId, network: NETWORK, status: 'broadcast' };
@@ -225,8 +238,20 @@ export class BackendGameService {
     const request = deserializeRequest(gameRecord.request);
     const creation = deserializePrepared(gameRecord.prepared);
     await this.#openCreationUtxo(id, request, creation);
-    verifySignedJoinTransaction({ preparedTxJson: prepared.txJson, signedTxJson });
-    const transactionId = await this.#submitSignedTransaction('join', signedTxJson, prepared.priorityFeerate);
+    const operationId = operationKey('join', preparedHash);
+    const existing = await this.store.loadOperation(operationId);
+    let transactionId;
+    if (existing?.status === 'broadcast') {
+      transactionId = existing.transactionId;
+    } else {
+      verifySignedJoinTransaction({ preparedTxJson: prepared.txJson, signedTxJson });
+      transactionId = await this.#submitOperation({
+        operationId, action: 'join', gameId: id, preparedHash,
+        metadata: { joinerAddress: prepared.joinerAddress, joinerPublicKey: prepared.joinerPublicKey, joinerCommitment: prepared.joinerCommitment, joinedAddress: prepared.joinedAddress, joinedScriptPublicKey: prepared.joinedScriptPublicKey, joinedRedeemScript: prepared.joinedRedeemScript, covenantId: prepared.covenantId },
+        transactionId: transactionIdFromSafeJson(signedTxJson),
+        submit: () => this.#submitSignedTransaction('join', signedTxJson, prepared.priorityFeerate),
+      });
+    }
     this.#logPlayer('join_submit', prepared.joinerAddress, { gameId: id, transactionId });
     await this.#saveGame({
       ...gameRecord,
@@ -323,8 +348,19 @@ export class BackendGameService {
     if (!prepared || prepared.gameId !== id || prepared.action !== 'reveal') throw new ProtocolError('PREPARATION_NOT_FOUND', 'Reveal preparation was not found or has expired');
     const gameRecord = await this.store.loadGame(id);
     if (!gameRecord?.join) throw new ProtocolError('GAME_NOT_JOINED', 'Player B has not joined this game');
-    verifySignedTerminalTransaction({ prepared: { transaction: prepared.transaction }, signedTxJson });
-    const transactionId = await this.#submitSignedTransaction('reveal', signedTxJson, prepared.priorityFeerate);
+    const operationId = operationKey('reveal', preparedHash);
+    const existing = await this.store.loadOperation(operationId);
+    let transactionId;
+    if (existing?.status === 'broadcast') {
+      transactionId = existing.transactionId;
+    } else {
+      verifySignedTerminalTransaction({ prepared: { transaction: prepared.transaction }, signedTxJson });
+      transactionId = await this.#submitOperation({
+        operationId, action: 'reveal', gameId: id, preparedHash,
+        transactionId: transactionIdFromSafeJson(signedTxJson),
+        submit: () => this.#submitSignedTransaction('reveal', signedTxJson, prepared.priorityFeerate),
+      });
+    }
     const reveal = {
       transactionId,
       preparedHash,
@@ -377,7 +413,12 @@ export class BackendGameService {
            });
            const txJson = serializeTerminalTransaction(prepared);
            const feeDiagnostics = await this.#validateAutomaticFee('refund_open', txJson, request.settleFeeSompi);
-           const transactionId = validateGameId(await this.chain.submitSafeJson(txJson));
+           const operationId = operationKey('automatic_settlement', Buffer.from(blake2b256(new TextEncoder().encode(txJson))).toString('hex'));
+           const transactionId = await this.#submitOperation({
+             operationId, action: 'automatic_settlement', gameId: record.gameId, preparedHash: operationId,
+             metadata: { status: 'refund_open_broadcast', settlement: { action: 'refund_open', txJson, payouts: [{ outputIndex: 0, value: String(playerLockSompi(request.stakeSompi) - request.settleFeeSompi), scriptPublicKey: playerScriptPublicKey(request.creatorPublicKey), address: request.creatorAddress }] } },
+             submit: () => this.chain.submitSafeJson(txJson).then(validateGameId),
+           });
           await this.#saveGame({ ...current, status: 'refund_open_broadcast', automaticSettlement: {
             action: 'refund_open', transactionId, txJson, status: 'broadcast', submittedAt: new Date().toISOString(),
             payouts: [{ outputIndex: 0, value: String(playerLockSompi(request.stakeSompi) - request.settleFeeSompi), scriptPublicKey: playerScriptPublicKey(request.creatorPublicKey), address: request.creatorAddress }],
@@ -419,7 +460,12 @@ export class BackendGameService {
          });
          const txJson = serializeTerminalTransaction(prepared);
           const feeDiagnostics = await this.#validateAutomaticFee(action, txJson, prepared.feeSompi);
-          const transactionId = validateGameId(await this.chain.submitSafeJson(txJson));
+          const operationId = operationKey('automatic_settlement', Buffer.from(blake2b256(new TextEncoder().encode(txJson))).toString('hex'));
+          const transactionId = await this.#submitOperation({
+            operationId, action: 'automatic_settlement', gameId: record.gameId, preparedHash: operationId,
+            metadata: { status: `${action}_broadcast`, settlement: { action, txJson, payouts: outputs.slice(0, action === 'refund_all' ? 2 : 1).map((output, outputIndex) => ({ outputIndex, value: String(output.value), scriptPublicKey: output.scriptPublicKey, address: action === 'refund_all' ? [request.creatorAddress, current.join.joinerAddress][outputIndex] : [reveals[0].role === 'creator' ? request.creatorAddress : current.join.joinerAddress][outputIndex] })) } },
+            submit: () => this.chain.submitSafeJson(txJson).then(validateGameId),
+          });
         const payoutAddresses = action === 'refund_all'
           ? [request.creatorAddress, current.join.joinerAddress]
           : [reveals[0].role === 'creator' ? request.creatorAddress : current.join.joinerAddress];
@@ -584,8 +630,20 @@ export class BackendGameService {
     const prepared = await this.store.loadActionPrepared(preparedHash);
     if (!prepared || prepared.gameId !== id || prepared.action !== action) throw new ProtocolError('PREPARATION_NOT_FOUND', 'Action preparation was not found');
     const gameRecord = await this.store.loadGame(id);
-    verifySignedTerminalTransaction({ prepared: { transaction: prepared.transaction }, signedTxJson });
-    const transactionId = await this.#submitSignedTransaction(action, signedTxJson, prepared.priorityFeerate);
+    const operationId = operationKey(action, preparedHash);
+    const existing = await this.store.loadOperation(operationId);
+    let transactionId;
+    if (existing?.status === 'broadcast') {
+      transactionId = existing.transactionId;
+    } else {
+      verifySignedTerminalTransaction({ prepared: { transaction: prepared.transaction }, signedTxJson });
+      transactionId = await this.#submitOperation({
+        operationId, action, gameId: id, preparedHash,
+        metadata: { playerAddress: prepared.playerAddress, role: prepared.role, continuationAddress: prepared.continuationAddress, continuationScriptPublicKey: prepared.continuationScriptPublicKey, continuationRedeemScript: prepared.continuationRedeemScript, continuationOutputIndex: prepared.continuationOutputIndex },
+        transactionId: transactionIdFromSafeJson(signedTxJson),
+        submit: () => this.#submitSignedTransaction(action, signedTxJson, prepared.priorityFeerate),
+      });
+    }
     this.#logPlayer(`${action}_submit`, prepared.playerAddress, { gameId: id, transactionId, role: prepared.role });
     const terminal = {
       action, transactionId, preparedHash, playerAddress: prepared.playerAddress, role: prepared.role,
@@ -1029,6 +1087,64 @@ export class BackendGameService {
     await this.#recordMatchmakingBacklog();
   }
 
+  async reconcilePendingSubmissions() {
+    if (typeof this.store.listOperations !== 'function') return 0;
+    let reconciled = 0;
+    for (const operation of await this.store.listOperations()) {
+      if (operation.status !== 'broadcast' || !operation.transactionId) continue;
+      if (operation.action === 'creation') {
+        if (await this.store.loadGame(operation.transactionId)) continue;
+        const prepared = await this.store.loadPrepared(operation.preparedHash);
+        if (!prepared) continue;
+        await this.store.saveGame({
+          gameId: operation.transactionId, network: NETWORK, protocolVersion: PROTOCOL_VERSION,
+          status: 'broadcast', request: prepared.request, prepared: prepared.prepared,
+          creationPreparedHash: operation.preparedHash, createdAt: operation.createdAt,
+          ...(operation.metadata?.matchId ? { matchId: operation.metadata.matchId } : {}),
+        });
+        reconciled += 1;
+      } else if (operation.action === 'join') {
+        const game = await this.store.loadGame(operation.gameId);
+        if (!game || game.join) continue;
+        await this.store.saveGame({ ...game, status: 'join_broadcast', join: { ...operation.metadata, transactionId: operation.transactionId, preparedHash: operation.preparedHash, submittedAt: operation.updatedAt } });
+        reconciled += 1;
+      } else if (operation.action === 'creator_refund') {
+        const game = await this.store.loadGame(operation.gameId);
+        if (!game || (game.safetyActions ?? []).some((item) => item.transactionId === operation.transactionId)) continue;
+        await this.store.saveGame({ ...game, status: 'creator_refund_broadcast', safetyActions: [...(game.safetyActions ?? []), { ...operation.metadata, action: operation.action, transactionId: operation.transactionId, preparedHash: operation.preparedHash, status: 'broadcast', submittedAt: operation.updatedAt }] });
+        reconciled += 1;
+      } else if (operation.action === 'automatic_settlement') {
+        const game = await this.store.loadGame(operation.gameId);
+        if (!game || game.automaticSettlement?.transactionId === operation.transactionId) continue;
+        await this.store.saveGame({ ...game, status: operation.metadata.status, automaticSettlement: { ...operation.metadata.settlement, transactionId: operation.transactionId, status: 'broadcast', submittedAt: operation.updatedAt } });
+        reconciled += 1;
+      }
+    }
+    return reconciled;
+  }
+
+  async #updateOperation(operationId, change) {
+    const operation = await this.store.loadOperation(operationId);
+    if (operation) await this.store.saveOperation({ ...operation, ...change, updatedAt: new Date().toISOString() });
+  }
+
+  async #submitOperation({ operationId, action, gameId, preparedHash, transactionId, metadata = {}, submit }) {
+    const existing = await this.store.loadOperation(operationId);
+    if (existing?.status === 'broadcast') return existing.transactionId;
+    if (existing?.status === 'submitting' || existing?.status === 'failed') throw new ProtocolError('ACTION_PENDING', 'A previous submission is still being reconciled');
+    const startedAt = new Date().toISOString();
+    const base = { operationId, action, gameId, preparedHash, transactionId, metadata, createdAt: existing?.createdAt ?? startedAt };
+    await this.store.saveOperation({ ...base, status: 'submitting', updatedAt: startedAt });
+    try {
+      const submittedTransactionId = await submit();
+      await this.store.saveOperation({ ...base, gameId: gameId ?? submittedTransactionId, transactionId: submittedTransactionId, status: 'broadcast', updatedAt: new Date().toISOString() });
+      return submittedTransactionId;
+    } catch (error) {
+      await this.store.saveOperation({ ...base, status: 'failed', lastError: publicError(error), updatedAt: new Date().toISOString() });
+      throw error;
+    }
+  }
+
   #matchPlayer(match, address) {
     if (!match || !Array.isArray(match.players)) throw new ProtocolError('MATCH_NOT_FOUND', 'Matchmaking session was not found');
     const index = match.players.findIndex((player) => player.address === address);
@@ -1095,6 +1211,23 @@ export class BackendGameService {
       throw error;
     }
   }
+}
+
+function operationKey(action, preparedHash) {
+  return `EO/v9\u0000submission\u0000${action}\u0000${preparedHash}`;
+}
+
+function transactionIdFromSafeJson(txJson) {
+  try {
+    const id = JSON.parse(txJson)?.id;
+    return /^[0-9a-f]{64}$/i.test(id ?? '') ? id.toLowerCase() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function publicError(error) {
+  return { code: String(error?.code ?? 'UNKNOWN'), message: String(error?.message ?? 'Operation failed') };
 }
 
 function normalizeHex(value, bytes, name) {

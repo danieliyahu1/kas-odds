@@ -155,3 +155,13 @@ test('serializes concurrent store mutations and isolates returned clones', async
   games[0].status = 'mutated';
   assert.equal((await store.listGames())[0].status, 'waiting');
 });
+
+test('persists and reloads non-secret submission operations', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-operations-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  const operation = { operationId: 'operation-1', action: 'join', gameId: 'g'.repeat(64), preparedHash: 'p'.repeat(64), status: 'broadcast', transactionId: 't'.repeat(64), metadata: { joinerAddress: 'kaspatest:joiner' } };
+  await store.saveOperation(operation);
+  assert.deepEqual(await store.loadOperation(operation.operationId), operation);
+  assert.deepEqual(await store.listOperations(), [operation]);
+});

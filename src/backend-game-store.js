@@ -89,6 +89,9 @@ export class BackendGameStore {
       for (const [preparedHash, prepared] of Object.entries(data.actionPrepared)) {
         if (prepared.gameId === record.gameId) delete data.actionPrepared[preparedHash];
       }
+      for (const [operationId, operation] of Object.entries(data.operations)) {
+        if (operation.gameId === record.gameId) delete data.operations[operationId];
+      }
       return true;
     });
   }
@@ -107,6 +110,18 @@ export class BackendGameStore {
 
   async saveActionPrepared(record) {
     await this.#update((data) => { data.actionPrepared[record.preparedHash] = record; });
+  }
+
+  async loadOperation(operationId) {
+    return clone((await this.#read()).operations[operationId] ?? null);
+  }
+
+  async listOperations() {
+    return clone(Object.values((await this.#read()).operations));
+  }
+
+  async saveOperation(record) {
+    await this.#update((data) => { data.operations[record.operationId] = record; });
   }
 
   async joinMatchmaking(player) {
@@ -260,7 +275,7 @@ async function renameWithRetry(from, to) {
 
 function normalizeData(value) {
   if (!isRecord(value)) throw new ProtocolError('STORAGE_CORRUPT', 'Backend game store root must be an object');
-  for (const name of ['prepared', 'games', 'joinPrepared', 'actionPrepared', 'matches']) {
+  for (const name of ['prepared', 'games', 'joinPrepared', 'actionPrepared', 'operations', 'matches']) {
     if (value[name] !== undefined && !isRecord(value[name])) {
       throw new ProtocolError('STORAGE_CORRUPT', `Backend game store field ${name} must be an object`);
     }
@@ -273,6 +288,7 @@ function normalizeData(value) {
     games: value.games ?? {},
     joinPrepared: value.joinPrepared ?? {},
     actionPrepared: value.actionPrepared ?? {},
+    operations: value.operations ?? {},
     queue: value.queue ?? [],
     matches: value.matches ?? {},
   };

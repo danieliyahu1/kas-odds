@@ -97,6 +97,7 @@ if (feedbackDeliverer.enabled) {
 const feedbackLimiter = new RateLimiter({ limit: 5, windowMs: 10 * 60_000 });
 
 await store.init();
+await gameService.reconcilePendingSubmissions();
 
 // The keeper is deliberately best-effort and idempotent. It sleeps until the
 // next estimated timeout, then polls every 30 seconds only while settlement is

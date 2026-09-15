@@ -181,6 +181,21 @@ test('automatic scheduler targets the open covenant deadline', async (t) => {
   assert.equal(await service.automaticSettlementDelayMs(), 21_000);
 });
 
+test('reconciles a broadcast operation after game persistence failed', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-reconcile-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  const transactionId = 'a'.repeat(64);
+  const preparedHash = 'b'.repeat(64);
+  await store.savePrepared({ preparedHash, request: { creatorAddress: 'kaspatest:creator' }, prepared: { txJson: '{}' }, createdAt: '2026-01-01T00:00:00.000Z' });
+  await store.saveOperation({ operationId: `EO/v9\u0000submission\u0000creation\u0000${preparedHash}`, action: 'creation', gameId: transactionId, preparedHash, transactionId, status: 'broadcast', createdAt: '2026-01-01T00:00:00.000Z', metadata: {} });
+  const service = new BackendGameService({ rpc: {}, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+  assert.equal(await service.reconcilePendingSubmissions(), 1);
+  const game = await store.loadGame(transactionId);
+  assert.equal(game.status, 'broadcast');
+  assert.equal(game.creationPreparedHash, preparedHash);
+});
+
 test('refreshTelemetry publishes the matchmaking backlog gauge and no game-state gauge', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
