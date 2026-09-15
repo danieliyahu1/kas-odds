@@ -1,10 +1,57 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 const mode = process.argv[2];
-const trackedFiles = execFileSync('git', ['ls-files', '-z', '--', '*.js', '*.mjs'], { encoding: 'utf8' })
-  .split('\0')
-  .filter((file) => file && !file.startsWith('vendor/') && !file.startsWith('scripts/'));
+const ignored = (file) => file.replaceAll('\\', '/').startsWith('vendor/') || file.replaceAll('\\', '/').startsWith('scripts/');
+const trackedFiles = listTrackedFiles();
+
+function listTrackedFiles() {
+  try {
+    return execFileSync('git', ['ls-files', '-z', '--', '*.js', '*.mjs'], { encoding: 'utf8' })
+      .split('\0')
+      .filter((file) => file && !ignored(file));
+  } catch {
+    return [...rootFiles(), ...['src', 'public', 'test'].flatMap((root) => walkFiles(root, 0))];
+  }
+}
+
+function rootFiles() {
+  const files = [];
+  let entries;
+  try {
+    entries = readdirSync('.', { withFileTypes: true });
+  } catch {
+    return files;
+  }
+  for (const entry of entries) {
+    if ((entry.name.endsWith('.js') || entry.name.endsWith('.mjs')) && !ignored(entry.name)) {
+      files.push(entry.name);
+    }
+  }
+  return files;
+}
+
+function walkFiles(dir, depth) {
+  if (depth > 4) return [];
+  const files = [];
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+      files.push(...walkFiles(path, depth + 1));
+    } else if ((entry.name.endsWith('.js') || entry.name.endsWith('.mjs')) && !ignored(path)) {
+      files.push(path.replace(/^[./]+/, '').replaceAll('\\', '/'));
+    }
+  }
+  return files;
+}
 
 if (!['--syntax', '--lint', '--format'].includes(mode)) {
   console.error('usage: node scripts/quality-gates.mjs --syntax|--lint|--format');
