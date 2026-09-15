@@ -23,14 +23,47 @@ function h2b(hex) {
 // Pinned Even/Odd covenant template, parsed from the canonical compiled
 // artifact. See covenant/even_odd.sil and covenant/even_odd.template.artifact.json.
 export function parseTemplateArtifact(json) {
-  if (json.schema_version !== 1) {
-    throw new ProtocolError('INVALID_ARTIFACT', `unsupported artifact schema_version ${json.schema_version}`);
+  if (!json || typeof json !== 'object' || json.schema_version !== 1) {
+    throw new ProtocolError('INVALID_ARTIFACT', `unsupported artifact schema_version ${json?.schema_version}`);
   }
   if (json.compiler_version !== '0.1.0') {
     throw new ProtocolError('ARTIFACT_MISMATCH', `silverc compiler pinned to 0.1.0, artifact built with ${json.compiler_version}`);
   }
   const contract = json.contracts.EvenOdd;
   if (!contract) throw new ProtocolError('INVALID_ARTIFACT', 'artifact has no EvenOdd contract');
+  const expectedState = [
+    ['creator_hash', 'fixed_bytes', 32], ['joiner_hash', 'fixed_bytes', 32],
+    ['creator_commit', 'fixed_bytes', 32], ['joiner_commit', 'fixed_bytes', 32],
+    ['stake', 'int'], ['deadline_daa', 'int'], ['creator_even', 'int'],
+    ['creator_choice', 'int'], ['joiner_choice', 'int'],
+    ['first_revealer_hash', 'fixed_bytes', 32], ['game_wallet_hash', 'fixed_bytes', 32],
+    ['status', 'int'], ['settle_fee', 'int'],
+  ];
+  const actualState = contract.runtime_state?.fields ?? [];
+  if (actualState.length !== expectedState.length || actualState.some((field, index) => {
+    const [name, kind, len] = expectedState[index];
+    return field.name !== name || field.type?.kind !== kind || (len !== undefined && field.type.len !== len);
+  })) {
+    throw new ProtocolError('ARTIFACT_MISMATCH', 'EvenOdd runtime state ABI does not match the pinned contract');
+  }
+  const expectedEntries = {
+    refund: [['creator_pk', 'pubkey']],
+    refund_open: [['creator_pk', 'pubkey']],
+    refund_all: [['creator_pk', 'pubkey'], ['joiner_pk', 'pubkey']],
+    fallback_claim: [['player_pk', 'pubkey'], ['wallet_pk', 'pubkey']],
+    join: [['joiner_pk', 'pubkey'], ['new_joiner_commit', 'fixed_bytes', 32]],
+    reveal: [['player_pk', 'pubkey'], ['choice', 'int'], ['nonce', 'fixed_bytes', 32], ['payout_pk', 'pubkey'], ['wallet_pk', 'pubkey']],
+  };
+  for (const [name, expectedParams] of Object.entries(expectedEntries)) {
+    const entry = contract.entries?.[name];
+    const actualParams = entry?.params ?? [];
+    if (!entry || actualParams.length !== expectedParams.length || actualParams.some((param, index) => {
+      const [paramName, kind, len] = expectedParams[index];
+      return param.name !== paramName || param.type?.kind !== kind || (len !== undefined && param.type.len !== len);
+    })) {
+      throw new ProtocolError('ARTIFACT_MISMATCH', `EvenOdd entry ABI does not match the pinned ${name} contract`);
+    }
+  }
   const compiled = contract.compiled;
   const templateHash = bytesToHex(Uint8Array.from(compiled.template_hash)).toLowerCase();
   const stateSpan = { offset: compiled.state_span.offset, len: compiled.state_span.len };
@@ -129,6 +162,17 @@ function buildStateScript(game) {
   const status = BigInt(game.status ?? 0);
   const creatorChoice = BigInt(game.creatorChoice ?? 0);
   const joinerChoice = BigInt(game.joinerChoice ?? 0);
+  if (game.creatorEven !== undefined && game.creatorEven !== true && game.creatorEven !== false && game.creatorEven !== 0 && game.creatorEven !== 1 && game.creatorEven !== 0n && game.creatorEven !== 1n) {
+    throw new ProtocolError('INVALID_STATE', 'creatorEven must be 0 or 1');
+  }
+  const creatorEven = game.creatorEven ? 1n : 0n;
+  const settleFee = game.settleFee ?? AUTOMATION_FEE_SOMPI;
+  if (![0n, 1n, 2n].includes(status) || ![0n, 1n].includes(creatorChoice) || ![0n, 1n].includes(joinerChoice)) {
+    throw new ProtocolError('INVALID_STATE', 'status and choices must use the current covenant vocabulary');
+  }
+  if (typeof settleFee !== 'bigint' || settleFee <= 0n || settleFee % 2n !== 0n) {
+    throw new ProtocolError('INVALID_STATE', 'settleFee must be a positive even bigint');
+  }
   const firstRevealerHash = game.firstRevealerHash === undefined ? ZERO32 : normalizeBytes(game.firstRevealerHash, 32, 'firstRevealerHash');
   const gameWalletHash = game.gameWalletHash === undefined ? ZERO32 : normalizeBytes(game.gameWalletHash, 32, 'gameWalletHash');
   const parts = [
@@ -136,15 +180,15 @@ function buildStateScript(game) {
     pushData(joinerPubkey ? blake2b256(joinerPubkey) : ZERO32),
     pushData(creatorCommit),    // creator_commit
     pushData(joinerCommit),
-    pushData(encodeI64Fixed(game.stakeSompi)),        // stake
-    pushData(encodeI64Fixed(game.deadlineDaa)),       // deadline_daa
-    pushData(encodeI64Fixed(game.creatorEven ? 1n : 0n)), // creator_even
+pushData(encodeI64Fixed(game.stakeSompi)),           // stake
+    pushData(encodeI64Fixed(game.deadlineDaa)),          // deadline_daa
+    pushData(encodeI64Fixed(creatorEven)),               // creator_even
     pushData(encodeI64Fixed(creatorChoice)),
     pushData(encodeI64Fixed(joinerChoice)),
     pushData(firstRevealerHash),
-     pushData(gameWalletHash),   // game_wallet_hash
-     pushData(encodeI64Fixed(status)),
-     pushData(encodeI64Fixed(game.settleFee ?? AUTOMATION_FEE_SOMPI)), // settle_fee
+    pushData(gameWalletHash),                             // game_wallet_hash
+    pushData(encodeI64Fixed(status)),
+    pushData(encodeI64Fixed(settleFee)),                  // settle_fee
   ];
   const total = parts.reduce((n, p) => n + p.length, 0);
   const script = new Uint8Array(total);

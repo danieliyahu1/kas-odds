@@ -11,6 +11,7 @@ import {
   verifyTemplateHash,
   parseCovenantAddress,
 } from '../src/covenant/even-odd.mjs';
+import { parseTemplateArtifact } from '../src/covenant/even-odd-core.mjs';
 
 const FEE_PUBLIC_KEY = '11'.repeat(32);
 const gameWalletHash = bytesToHex(blake2b256(hexToBytes(FEE_PUBLIC_KEY))).toLowerCase();
@@ -119,6 +120,33 @@ test('rejects invalid game state', () => {
   assert.throws(() => deriveGameInstance({ creatorPubkey: [1, 2, 3], creatorCommit: new Array(32).fill(9), stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash }));
   assert.throws(() => deriveGameInstance({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: -1n, deadlineDaa: 500000000000n, gameWalletHash }));
   assert.throws(() => deriveGameInstance({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 99999999n, deadlineDaa: 500000000000n, gameWalletHash }), { code: 'INVALID_STATE' });
+});
+
+test('rejects artifact ABI drift early and explicitly', () => {
+  const artifact = JSON.parse(readFileSync(new URL('../covenant/even_odd.template.artifact.json', import.meta.url), 'utf8'));
+  const clone = () => structuredClone(artifact);
+  const driftState = clone();
+  driftState.contracts.EvenOdd.runtime_state.fields[0].name = 'renamed_hash';
+  assert.throws(() => parseTemplateArtifact(driftState), { code: 'ARTIFACT_MISMATCH' });
+  const driftEntry = clone();
+  driftEntry.contracts.EvenOdd.entries.join.params[0].name = 'renamed_pk';
+  assert.throws(() => parseTemplateArtifact(driftEntry), { code: 'ARTIFACT_MISMATCH' });
+  const driftCompiler = clone();
+  driftCompiler.compiler_version = '0.2.0';
+  assert.throws(() => parseTemplateArtifact(driftCompiler), { code: 'ARTIFACT_MISMATCH' });
+  const driftSchema = clone();
+  driftSchema.schema_version = 2;
+  assert.throws(() => parseTemplateArtifact(driftSchema), { code: 'INVALID_ARTIFACT' });
+});
+
+test('rejects stale status and creator-side vocabulary', () => {
+  const base = { creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash };
+  assert.throws(() => deriveGameInstance({ ...base, status: 3 }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveGameInstance({ ...base, creatorEven: 2 }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveGameInstance({ ...base, creatorChoice: 2 }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveGameInstance({ ...base, settleFee: 1n }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveGameInstance({ ...base, settleFee: -2n }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveGameInstance({ ...base, settleFee: 3_200_000 }), { code: 'INVALID_STATE' });
 });
 
 function sha256(relativePath) {
