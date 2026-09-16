@@ -2,6 +2,7 @@ import { access, mkdir, readFile, rename, unlink, writeFile, constants } from 'n
 import { randomInt } from 'node:crypto';
 import { dirname } from 'node:path';
 import { ProtocolError } from './protocol.js';
+import { GAME_RESULT_RETENTION_MS } from './terminal-actions.js';
 import { noopMetrics } from './metrics.js';
 
 const MATCH_WAIT_TIMEOUT_MS = 30_000;
@@ -29,6 +30,7 @@ export class BackendGameStore {
   async init() {
     await mkdir(dirname(this.filePath), { recursive: true });
     await this.pruneExpiredPreparations();
+    await this.pruneCompletedGames();
   }
 
   async pruneExpiredPreparations(now = Date.now()) {
@@ -38,6 +40,19 @@ export class BackendGameStore {
           const createdAt = Date.parse(record.createdAt ?? '');
           if (Number.isFinite(createdAt) && now - createdAt >= PREPARATION_RETENTION_MS) delete collection[preparedHash];
         }
+      }
+    });
+  }
+
+  // A finished game stays in the store for a short retrieval window (the game's
+  // deadline plus 20%, measured from its start), then it is removed. Only
+  // terminal games are pruned, so a game still settling keeps its funds claimable.
+  async pruneCompletedGames(now = Date.now()) {
+    const data = await this.#read();
+    if (!Object.values(data.games).some((record) => isExpiredCompletedGame(record, now))) return;
+    await this.#update((current) => {
+      for (const [gameId, record] of Object.entries(current.games)) {
+        if (isExpiredCompletedGame(record, now)) delete current.games[gameId];
       }
     });
   }
@@ -70,10 +85,19 @@ export class BackendGameStore {
     await this.#update((data) => { data.games[record.gameId] = record; });
   }
 
+  // Completing a game drops everything that only mattered while it was live, but
+  // keeps the terminal record itself (with `completedAt`) so both players can
+  // still read the result. `pruneCompletedGames` removes it after the window.
   async completeGame(record) {
     return this.#updateWithResult((data) => {
-      if (!data.games[record.gameId]) return false;
-      delete data.games[record.gameId];
+      const stored = data.games[record.gameId];
+      if (!stored) return false;
+      data.games[record.gameId] = {
+        ...stored,
+        ...record,
+        status: record.status ?? stored.status,
+        completedAt: record.completedAt ?? stored.completedAt ?? new Date().toISOString(),
+      };
       if (record.matchId) {
         delete data.matches[record.matchId];
         data.queue = data.queue.filter((matchId) => matchId !== record.matchId);
@@ -296,6 +320,14 @@ function normalizeData(value) {
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// Only a terminal record past its retrieval window is eligible for pruning; an
+// unfinished game is never removed, so its funds stay claimable.
+function isExpiredCompletedGame(record, now) {
+  if (!record?.completedAt) return false;
+  const startedAt = Date.parse(record.createdAt ?? record.completedAt ?? '');
+  return Number.isFinite(startedAt) && now - startedAt >= GAME_RESULT_RETENTION_MS;
 }
 
 function clone(value) {

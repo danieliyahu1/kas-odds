@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLatestRequestGate, createPollController, isTerminalGameStatus } from '../public/app-controller.js';
+import { createLatestRequestGate, createPollController, isTerminalGameStatus, MATCH_GAME_WAIT, MATCH_VIEW, matchGameWaitState, resolveMatchView, shouldRerenderMatch } from '../public/app-controller.js';
 
 test('latest request gate rejects responses from older requests', () => {
   const gate = createLatestRequestGate();
@@ -35,4 +35,37 @@ test('poll controller cancels the previous generation and prevents overlap', asy
 test('terminal statuses are explicit', () => {
   assert.equal(isTerminalGameStatus('settled'), true);
   assert.equal(isTerminalGameStatus('joined'), false);
+});
+
+const matched = (overrides = {}) => ({ status: 'matched', opponentConnected: true, role: 'joiner', gameId: null, side: 'even', stakeKas: 6, ...overrides });
+
+test('match view finds a rival, plays for both roles, and reopens a published game', () => {
+  assert.equal(resolveMatchView({ status: 'waiting' }), MATCH_VIEW.FINDING);
+  assert.equal(resolveMatchView(matched({ role: 'joiner', gameId: null })), MATCH_VIEW.PLAY);
+  assert.equal(resolveMatchView(matched({ role: 'creator', gameId: null })), MATCH_VIEW.PLAY);
+  assert.equal(resolveMatchView(matched({ role: 'joiner', gameId: 'a'.repeat(64) })), MATCH_VIEW.PLAY);
+  assert.equal(resolveMatchView(matched({ role: 'creator', gameId: 'a'.repeat(64) })), MATCH_VIEW.REOPEN);
+  assert.equal(resolveMatchView({ status: 'cancelled' }), MATCH_VIEW.ABANDONED);
+  assert.equal(resolveMatchView(matched({ opponentConnected: false })), MATCH_VIEW.ABANDONED);
+  assert.throws(() => resolveMatchView(null), /state is required/);
+});
+
+test('rerender keeps the joiner selection while picking but honors abandonment', () => {
+  const previous = matched();
+  const withGame = matched({ gameId: 'b'.repeat(64) });
+  assert.equal(shouldRerenderMatch(undefined, previous), true);
+  assert.equal(shouldRerenderMatch(previous, withGame, { picking: true }), false);
+  assert.equal(shouldRerenderMatch(previous, withGame, { picking: false }), true);
+  assert.equal(shouldRerenderMatch(previous, matched({ status: 'cancelled' }), { picking: true }), true);
+  assert.equal(shouldRerenderMatch(previous, matched({ opponentConnected: false }), { picking: true }), true);
+  assert.equal(shouldRerenderMatch(previous, { ...previous }, { picking: false }), false);
+});
+
+test('game wait resolves to ready, cancelled, timeout, or pending', () => {
+  assert.equal(matchGameWaitState(matched({ gameId: 'c'.repeat(64) })), MATCH_GAME_WAIT.READY);
+  assert.equal(matchGameWaitState(matched({ status: 'cancelled' })), MATCH_GAME_WAIT.CANCELLED);
+  assert.equal(matchGameWaitState(matched({ opponentConnected: false })), MATCH_GAME_WAIT.CANCELLED);
+  assert.equal(matchGameWaitState(null), MATCH_GAME_WAIT.CANCELLED);
+  assert.equal(matchGameWaitState(matched(), { elapsedMs: 60_000, timeoutMs: 60_000 }), MATCH_GAME_WAIT.TIMEOUT);
+  assert.equal(matchGameWaitState(matched(), { elapsedMs: 1_000, timeoutMs: 60_000 }), MATCH_GAME_WAIT.PENDING);
 });

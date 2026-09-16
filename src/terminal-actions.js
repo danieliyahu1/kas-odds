@@ -1,11 +1,18 @@
 import { gameFeeSompi, winnerPayoutSompi, ProtocolError } from './protocol.js';
 
-// testnet-10 targets 10 BPS. The PRD's five-minute waits therefore pin to
-// 300 seconds * 10 DAA-score increments per second.
-export const TESTNET10_DAA_PER_SECOND = 10n;
-export const FIVE_MINUTE_DAA_OFFSET = 300n * TESTNET10_DAA_PER_SECOND;
+// Kaspa mainnet and testnet-10 both target 10 BPS. The PRD's five-minute waits
+// therefore pin to 300 seconds * 10 DAA-score increments per second.
+export const DAA_PER_SECOND = 10n;
+export const FIVE_MINUTE_DAA_OFFSET = 300n * DAA_PER_SECOND;
 export const FALLBACK_CLAIM_DAA_OFFSET = FIVE_MINUTE_DAA_OFFSET;
 export const NO_REVEAL_REFUND_DAA_OFFSET = FIVE_MINUTE_DAA_OFFSET;
+
+// A finished game is not deleted right away: it stays readable for a short
+// window so both players can still open the result. The window is the game's own
+// five-minute deadline plus 20%, measured from when the game started, so it does
+// not depend on how the game actually ended.
+export const GAME_DURATION_MS = Number(FIVE_MINUTE_DAA_OFFSET / DAA_PER_SECOND) * 1_000;
+export const GAME_RESULT_RETENTION_MS = GAME_DURATION_MS + GAME_DURATION_MS / 5;
 
 // Pure readiness check shared by the backend and the browser: a refund/claim is
 // available once the current DAA score reaches the anchor DAA score.
@@ -13,7 +20,7 @@ export function safetyReadiness(currentDaaScore, readyAtDaa) {
   const current = BigInt(currentDaaScore);
   const readyAt = BigInt(readyAtDaa);
   const ready = current >= readyAt;
-  const remainingSeconds = ready ? 0 : Math.ceil(Number(readyAt - current) / Number(TESTNET10_DAA_PER_SECOND));
+  const remainingSeconds = ready ? 0 : Math.ceil(Number(readyAt - current) / Number(DAA_PER_SECOND));
   return { ready, remainingSeconds };
 }
 

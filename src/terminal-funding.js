@@ -1,4 +1,5 @@
-import { ProtocolError, NETWORK } from './protocol.js';
+import { ProtocolError } from './protocol.js';
+import { DEFAULT_NETWORK_PROFILE } from './network.js';
 import { selectOrdinaryUtxos } from './fee-policy.js';
 import { loadWasmSdk } from './wasm-transaction.js';
 import { prepareWithDynamicFee } from './transaction-fee.js';
@@ -6,11 +7,12 @@ import { prepareWithDynamicFee } from './transaction-fee.js';
 const MAX_TERMINAL_STORAGE_MASS = 500_000;
 
 export class TerminalFundingSelector {
-  constructor({ chain }) {
+  constructor({ chain, network = DEFAULT_NETWORK_PROFILE.id }) {
     if (!chain || typeof chain.getUtxos !== 'function' || typeof chain.getPriorityFeerate !== 'function') {
       throw new ProtocolError('CHAIN_UNAVAILABLE', 'A chain gateway with funding capabilities is required');
     }
     this.chain = chain;
+    this.network = network;
   }
 
   async select(address, measure) {
@@ -30,13 +32,13 @@ export class TerminalFundingSelector {
       try {
         const changeScriptPublicKey = inputs[0].scriptPublicKey ?? inputs[0].utxo?.scriptPublicKey;
         const repriced = prepareWithDynamicFee({
-          network: NETWORK,
+          network: this.network,
           priorityFeerate,
           fundingSompi: total,
           changeScriptPublicKey,
           build: ({ feeSompi, change }) => measure({ inputs, feeSompi, change }),
         });
-        const mass = terminalStorageMass(repriced.transaction);
+        const mass = terminalStorageMass(repriced.transaction, this.network);
         if (mass <= MAX_TERMINAL_STORAGE_MASS && mass < bestMass) {
           best = {
             inputs,
@@ -61,10 +63,10 @@ export class TerminalFundingSelector {
   }
 }
 
-function terminalStorageMass(transaction) {
+function terminalStorageMass(transaction, network) {
   const wasm = loadWasmSdk();
   return Number(wasm.calculateStorageMass(
-    NETWORK,
+    network,
     transaction.inputs.map((input) => Number(input.utxo.amount)),
     transaction.outputs.map((output) => Number(output.value)),
   ));

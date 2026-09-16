@@ -51,7 +51,7 @@ test('real Rust covenant-oracle (pinned v2.0.1) matches the JS covenant derivati
     stakeSompi: BigInt(stakeSompi),
     deadlineDaa: BigInt(deadlineDaa),
     gameWalletHash: walletHashHex,
-  });
+  }, { addressPrefix: 'kaspatest' });
 
   assert.equal(oracle.instance_len, String(inst.redeemScript.length));
   assert.equal(oracle.p2sh_script_hex, inst.p2shScript.toString('hex'));
@@ -69,7 +69,7 @@ test('real Rust covenant-oracle (pinned v2.0.1) yields the WASM-authoritative ge
     stakeSompi: BigInt(stakeSompi),
     deadlineDaa: BigInt(deadlineDaa),
     gameWalletHash: walletHashHex,
-  });
+  }, { addressPrefix: 'kaspatest' });
 
   const jsCovenantId = computeGenesisCovenantId(
     { transactionId: '11'.repeat(32), index: 2 },

@@ -1,16 +1,17 @@
-import { NETWORK, ProtocolError, validateNetwork } from './protocol.js';
+import { ProtocolError, validateNetworkMatches } from './protocol.js';
+import { NETWORK_PROFILES, DEFAULT_NETWORK_PROFILE, isSupportedNetwork } from './network.js';
 
 // KasWare names networks differently from the Kaspa SDK. The application uses
-// the SDK form (`testnet-10`); the extension speaks `kaspa_testnet_10`.
-const KASWARE_NETWORKS = Object.freeze({ [NETWORK]: 'kaspa_testnet_10' });
-const EXTERNAL_NETWORK = KASWARE_NETWORKS[NETWORK];
+// the SDK form (`testnet-10`, `mainnet`); the extension speaks `kaspa_testnet_10`
+// and `kaspa_mainnet`.
 const INTERNAL_NETWORKS = Object.freeze(Object.fromEntries(
-  Object.entries(KASWARE_NETWORKS).map(([internal, external]) => [external, internal]),
+  Object.entries(NETWORK_PROFILES).map(([internal, profile]) => [profile.kaswareNetwork, internal]),
 ));
 
 export class KaswareWalletAdapter {
-  constructor(provider, { onChange } = {}) {
+  constructor(provider, { onChange, network = DEFAULT_NETWORK_PROFILE } = {}) {
     this.provider = provider;
+    this.networkProfile = network;
     this.account = null;
     this.network = null;
     this.invalidated = false;
@@ -22,6 +23,36 @@ export class KaswareWalletAdapter {
     if (!this.provider || typeof this.provider.requestAccounts !== 'function') {
       throw new ProtocolError('WALLET_UNAVAILABLE', 'KasWare wallet extension is not installed');
     }
+    const approvedAddress = await this.#requestApproval();
+    if (typeof this.provider.signPskt !== 'function') {
+      throw new ProtocolError('WALLET_UNSUPPORTED', 'KasWare signPskt capability is required');
+    }
+    // Kaspa derives a distinct address per network, so the network is settled
+    // before the account is read; the approved address is only a fallback for
+    // extensions without a non-prompting getAccounts.
+    const network = await this.#resolveNetwork();
+    const address = await this.#activeAddress(approvedAddress);
+    const publicKey = normalizePublicKey(await this.provider.getPublicKey());
+    if (!address.startsWith(`${this.networkProfile.addressPrefix}:`)) {
+      throw new ProtocolError('WALLET_ACCOUNT_MISMATCH', 'KasWare account must use a wallet on the configured network');
+    }
+    if (!publicKey) {
+      throw new ProtocolError('WALLET_ACCOUNT_MISSING', 'KasWare did not return an active account');
+    }
+    this.account = Object.freeze({ address, publicKey });
+    this.network = network;
+    this.invalidated = false;
+    this.#listen('accountsChanged', (next) => {
+      const nextAddress = Array.isArray(next) ? next[0] : next;
+      if (nextAddress !== this.account?.address) this.#invalidate('account');
+    });
+    this.#listen('networkChanged', (nextNetwork) => {
+      if (toInternalNetwork(nextNetwork) !== this.networkProfile.id) this.#invalidate('network');
+    });
+    return Object.freeze({ address, publicKey, network });
+  }
+
+  async #requestApproval() {
     let accounts;
     try {
       accounts = await this.provider.requestAccounts();
@@ -31,39 +62,19 @@ export class KaswareWalletAdapter {
     if (!Array.isArray(accounts) || accounts.length === 0 || !accounts[0]) {
       throw new ProtocolError('WALLET_REJECTED', 'KasWare connection was not approved');
     }
-    const address = accounts[0];
-    if (typeof this.provider.signPskt !== 'function') {
-      throw new ProtocolError('WALLET_UNSUPPORTED', 'KasWare signPskt capability is required');
-    }
-    const [rawPublicKey, network] = await Promise.all([
-      this.provider.getPublicKey(),
-      this.#resolveNetwork(),
-    ]);
-    if (!address.startsWith('kaspatest:')) {
-      throw new ProtocolError('WALLET_ACCOUNT_MISMATCH', 'KasWare account must use a Kaspa testnet address');
-    }
-    const publicKey = normalizePublicKey(rawPublicKey);
-    if (!publicKey) {
-      throw new ProtocolError('WALLET_ACCOUNT_MISSING', 'KasWare did not return an active account');
-    }
-    this.account = Object.freeze({ address, publicKey });
-    this.network = network;
-    this.invalidated = false;
-    this.#listen('accountsChanged', (next) => {
-      const address = Array.isArray(next) ? next[0] : next;
-      if (address !== this.account?.address) this.#invalidate('account');
-    });
-    this.#listen('networkChanged', (nextNetwork) => {
-      if (toInternalNetwork(nextNetwork) !== NETWORK) this.#invalidate('network');
-    });
-    return Object.freeze({ address, publicKey, network });
+    return accounts[0];
+  }
+
+  async #activeAddress(approvedAddress) {
+    const accounts = await this.#readAccounts();
+    return (Array.isArray(accounts) && accounts[0]) || approvedAddress;
   }
 
   async sign(prepared) {
     if (!this.account || this.invalidated) {
       throw new ProtocolError('WALLET_CHANGED', 'Reconnect KasWare after an account or network change');
     }
-    validateNetwork(prepared.network);
+    validateNetworkMatches(prepared.network, this.networkProfile.id);
     const expected = prepared.address ?? prepared.creatorAddress ?? prepared.joinerAddress ?? prepared.caller;
     if (expected && expected !== this.account.address) {
       throw new ProtocolError('WALLET_ACCOUNT_MISMATCH', 'Prepared account does not match the active KasWare account');
@@ -71,12 +82,12 @@ export class KaswareWalletAdapter {
     if (typeof prepared.txJson !== 'string' || !prepared.preparedHash) {
       throw new ProtocolError('INVALID_TRANSACTION', 'Prepared SafeJSON and template hash are required');
     }
-    validateNetwork(toInternalNetwork(await this.provider.getNetwork()));
+    validateNetworkMatches(toInternalNetwork(await this.provider.getNetwork()), this.networkProfile.id);
     const signedTxJson = await this.provider.signPskt({ txJsonString: prepared.txJson });
     const [accounts, network] = await Promise.all([this.#readAccounts(), this.provider.getNetwork()]);
     if (this.invalidated
       || (accounts && accounts[0] !== this.account.address)
-      || toInternalNetwork(network) !== NETWORK) {
+      || toInternalNetwork(network) !== this.networkProfile.id) {
       this.invalidated = true;
       throw new ProtocolError('WALLET_CHANGED', 'Wallet changed during transaction approval');
     }
@@ -100,12 +111,12 @@ export class KaswareWalletAdapter {
 
   async #resolveNetwork() {
     const current = toInternalNetwork(await this.provider.getNetwork());
-    if (current === NETWORK) return NETWORK;
-    if (typeof this.provider.switchNetwork !== 'function') validateNetwork(current);
-    await this.provider.switchNetwork(EXTERNAL_NETWORK);
+    if (current === this.networkProfile.id) return this.networkProfile.id;
+    if (typeof this.provider.switchNetwork !== 'function') validateNetworkMatches(current, this.networkProfile.id);
+    await this.provider.switchNetwork(this.networkProfile.kaswareNetwork);
     const switched = toInternalNetwork(await this.provider.getNetwork());
-    validateNetwork(switched);
-    return NETWORK;
+    validateNetworkMatches(switched, this.networkProfile.id);
+    return this.networkProfile.id;
   }
 
   async #readAccounts() {
@@ -140,7 +151,7 @@ export async function waitForKaswareProvider({ getProvider, attempts = 20, inter
 }
 
 export function toInternalNetwork(network) {
-  if (network === NETWORK) return NETWORK;
+  if (isSupportedNetwork(network)) return network;
   return INTERNAL_NETWORKS[network] ?? network;
 }
 

@@ -1,10 +1,10 @@
-import { NETWORK, PROTOCOL_VERSION, ProtocolError, stakeToSompi, validateGameId, validateNetwork } from './protocol.js';
+import { PROTOCOL_VERSION, ProtocolError, stakeToSompi, validateGameId, validateNetwork } from './protocol.js';
 import { parseInvite } from './invite.js';
 
 export const JOIN_COPY = Object.freeze({ matched: 'Game matched. Reveal phase is now open.', unavailable: 'This game is no longer accepting a player.', wrongStake: 'Player B must match the exact stake.' });
 
-export function prepareJoinGame({ invite, expectedOrigin, network = NETWORK, joinerAddress, joinerPublicKey, joinerCommitment, stakeSompi, stakeKas, currentDaaScore }) {
-  const parsed = typeof invite === 'string' ? parseInvite(invite, expectedOrigin) : invite;
+export function prepareJoinGame({ invite, expectedOrigin, network, joinerAddress, joinerPublicKey, joinerCommitment, stakeSompi, stakeKas, currentDaaScore }) {
+  const parsed = typeof invite === 'string' ? parseInvite(invite, expectedOrigin, network) : invite;
   validateNetwork(network);
   if (!parsed || parsed.protocolVersion !== PROTOCOL_VERSION || parsed.network !== network) throw new ProtocolError('INVALID_INVITE', 'Invite does not match the selected network');
   return Object.freeze({ protocolVersion: PROTOCOL_VERSION, network, gameId: validateGameId(parsed.gameId), joinerAddress, joinerPublicKey, joinerCommitment, stakeSompi: stakeSompi === undefined ? stakeToSompi(stakeKas) : normalizeAmount(stakeSompi, 'Requested stake'), currentDaaScore: normalizeAmount(currentDaaScore, 'Current DAA score') });

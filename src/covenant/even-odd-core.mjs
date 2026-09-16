@@ -215,7 +215,10 @@ function normalizeBytes(value, length, name) {
 const SCRIPT_P2SH_OP = 0xaa; // OP_BLAKE2B (256) — Kaspa P2SH-256 marker; 0x20 = push 32.
 const SCRIPT_OP_EQUAL = 0x87; // OP_EQUAL — closes the standard Kaspa P2SH script (aa 20 <hash> 87).
 
-export function deriveGameInstance(game, { template, skipTemplateCheck = false } = {}) {
+export function deriveGameInstance(game, { template, skipTemplateCheck = false, addressPrefix } = {}) {
+  if (typeof addressPrefix !== 'string' || addressPrefix.length === 0) {
+    throw new ProtocolError('INVALID_STATE', 'addressPrefix is required to derive a covenant address');
+  }
   if (!template) throw new ProtocolError('INVALID_ARTIFACT', 'A covenant template is required to derive a game instance');
   const bytecode = h2b(template.bytecodeHex);
   const stateSpan = template.stateSpan;
@@ -239,7 +242,7 @@ export function deriveGameInstance(game, { template, skipTemplateCheck = false }
   // (aa 20 <hash> 87). A bare aa20<hash> without the trailing OP_EQUAL is not a
   // standard script form and the node rejects it (forge reference / Kticket convention).
   const scriptPubKey = new Uint8Array([SCRIPT_P2SH_OP, 0x20, ...blake2b256(redeemScript), SCRIPT_OP_EQUAL]);
-  const address = bech32Encode('kaspatest', 8, blake2b256(redeemScript));
+  const address = bech32Encode(addressPrefix, 8, blake2b256(redeemScript));
   return Object.freeze({
     templateHash: template.templateHash,
     redeemScript,

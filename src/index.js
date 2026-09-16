@@ -1,4 +1,5 @@
 export * from './protocol.js';
+export * from './network.js';
 export * from './invite.js';
 export * from './covenant-artifact.js';
 export * from './genesis-transaction.js';

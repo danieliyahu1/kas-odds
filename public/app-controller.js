@@ -23,3 +23,44 @@ export function createLatestRequestGate() {
 }
 
 export function isTerminalGameStatus(status) { return TERMINAL_GAME_STATUSES.has(status); }
+
+export const MATCH_VIEW = Object.freeze({
+  FINDING: 'finding',
+  ABANDONED: 'abandoned',
+  REOPEN: 'reopen',
+  PLAY: 'play',
+});
+
+// A matched match is the same screen for both players: the creator and the
+// joiner only differ in which transaction they sign, never in what they see.
+export function resolveMatchView(match) {
+  if (!match) throw new Error('Matchmaking state is required');
+  if (match.status === 'waiting') return MATCH_VIEW.FINDING;
+  if (match.status === 'cancelled' || !match.opponentConnected) return MATCH_VIEW.ABANDONED;
+  if (match.role === 'creator' && match.gameId) return MATCH_VIEW.REOPEN;
+  return MATCH_VIEW.PLAY;
+}
+
+// While a player is choosing a number, arriving game metadata must not repaint
+// the screen and wipe the selection; an abandoned match still must.
+export function shouldRerenderMatch(previous, next, { picking = false } = {}) {
+  if (!previous) return true;
+  if (next.status === 'cancelled' || !next.opponentConnected) return true;
+  if (picking) return false;
+  return previous.status !== next.status
+    || previous.opponentConnected !== next.opponentConnected
+    || previous.gameId !== next.gameId
+    || previous.stakeKas !== next.stakeKas;
+}
+
+export const MATCH_GAME_WAIT = Object.freeze({ READY: 'ready', CANCELLED: 'cancelled', TIMEOUT: 'timeout', PENDING: 'pending' });
+
+// The joiner can pick his number before the creator publishes the game; he only
+// needs the game id once he is ready to sign, so waiting is a poll, an abort on
+// cancellation, or a timeout.
+export function matchGameWaitState(match, { elapsedMs = 0, timeoutMs = 0 } = {}) {
+  if (match?.gameId) return MATCH_GAME_WAIT.READY;
+  if (!match || match.status === 'cancelled' || !match.opponentConnected) return MATCH_GAME_WAIT.CANCELLED;
+  if (elapsedMs >= timeoutMs) return MATCH_GAME_WAIT.TIMEOUT;
+  return MATCH_GAME_WAIT.PENDING;
+}

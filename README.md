@@ -2,8 +2,9 @@
 
 Live: <https://kaspa-even-odd.danieliyahu.com/>
 
-Initial protocol implementation for the non-custodial Even/Odd MVP on
-Kaspa `testnet-10`.
+Initial protocol implementation for the non-custodial Even/Odd MVP on Kaspa.
+The same image serves either Kaspa `mainnet` or `testnet-10`; the network is
+selected at runtime with the `KASPA_NETWORK` environment variable.
 
 The join flow is invite-only. A creator shares a URL containing only the
 protocol version and confirmed game identifier. The URL never contains a
@@ -11,6 +12,12 @@ secret, commitment preimage, wallet key, or transaction template.
 
 ## Current boundary
 
+- `src/network.js` is the single runtime registry of supported Kaspa networks.
+  Each profile maps the SDK network id (`mainnet`, `testnet-10`) to its bech32
+  address prefix (`kaspa`, `kaspatest`) and KasWare network name
+  (`kaspa_mainnet`, `kaspa_testnet_10`). `server-config.js` resolves the profile
+  once from `KASPA_NETWORK` and injects it downward; domain code never reads the
+  environment.
 - `src/protocol.js` validates sides, stake, sompi arithmetic, network, and
   fee separation.
 - `src/invite.js` parses and serializes the URL invite.
@@ -27,9 +34,10 @@ secret, commitment preimage, wallet key, or transaction template.
   concern; the browser consumes the resulting artifact.
 - `src/covenant/even-odd.mjs` derives the per-game covenant instance: it loads
   the pinned artifact, substitutes the game state into the template state span,
-  verifies the template hash, and produces the P2SH-256 script and `kaspatest:`
-   address. Output is byte-for-byte cross-validated against the authoritative
-   Rust `covenant-oracle` (see `oracle/`).
+  verifies the template hash, and produces the P2SH-256 script and the
+  network-prefixed address (`kaspa:` on mainnet, `kaspatest:` on testnet-10).
+  Output is byte-for-byte cross-validated against the authoritative
+  Rust `covenant-oracle` (see `oracle/`).
 - `src/chain-adapter.js` provides the production `KaspaChainAdapter` gateway
   between the game use cases and the chain: `prepareCreation` (UTXOs + live
   priority feerate + local mass/relay floor policy via `src/fee-policy.js`),
@@ -59,17 +67,19 @@ secret, commitment preimage, wallet key, or transaction template.
   SafeJSON mutation outside input signature scripts.
 - The Rust `covenant-oracle` (`oracle/`, built from the pinned rusty-kaspa
   v2.0.1 rev `a41a333b…`) is a real-runtime regression oracle for the P2SH-256
-  script, `kaspatest:` address, state span, template hash, and genesis covenant
+  script, covenant address, state span, template hash, and genesis covenant
   id (see `test/covenant-oracle-runtime.test.js`). It depends on the vendored
   `silverscript` submodule (`silverscript-abi` by path) without modifying
   upstream code.
 
-## Pinned Even/Odd covenant (testnet-10)
+## Pinned Even/Odd covenant (network-agnostic)
 
-The canonical testnet covenant artifact is compiled by the `silverc` binary
+The canonical covenant artifact is compiled by the `silverc` binary
 from SilverScript `v1.0.0` (whose emitted artifact/compiler identifier remains
 `0.1.0`) from `covenant/even_odd.sil` into
-`covenant/even_odd.template.artifact.json`:
+`covenant/even_odd.template.artifact.json`. The artifact is identical on both
+networks: only the bech32 address prefix differs (Toccata covenants are live on
+mainnet and testnet-10, and the pinned WASM SDK is the mainnet Toccata release).
 
 - **contract**: `EvenOdd`, template hash `ade3453c…7e27a`
 - **state span**: `offset 1, len 261` (13 fields: `creator_hash`,
@@ -79,8 +89,8 @@ from SilverScript `v1.0.0` (whose emitted artifact/compiler identifier remains
 - **dispatch tags**: `join = b1d2ce8f`, `refund = 762ffa55`, `refund_open = 3a658a5b`
 - **terminal dispatch tags**: `reveal = 6b547798`, `fallback_claim = e8bae487`,
   `refund_all = 0e2b436c`
-- **P2SH-256**: `0xaa 0x20 <blake2b-256(redeemScript)>`; address prefix
-  `kaspatest`, version byte 8.
+- **P2SH-256**: `0xaa 0x20 <blake2b-256(redeemScript)>`; address prefix is the
+  configured network's (`kaspa` or `kaspatest`), version byte 8.
 - **reproducibility manifest**: `covenant/pins.json` pins the SilverScript
   release, source commit, emitted compiler version, plus source, artifact, and
   local Windows compiler SHA-256 values.
@@ -160,13 +170,16 @@ Runtime details:
   from the `kaspa-even-odd-fee-address` Secret (`address` key) via
   `valueFrom.secretKeyRef`; locally it is set with `--env-file=.env` (the
   `.env` file is gitignored). Wallet private keys never leave the browser.
-- Required network: `KASPA_NETWORK=testnet-10` (the process fails closed for
-  any other value); `KASPA_WRPC_URL` pins the server's testnet-10 wRPC node
-  (the SDK resolver is the fallback). The browser never talks to a node
-  directly; all chain reads, fee estimation, transaction preparation, and
-  broadcast happen server-side.
-- The conditional on-chain game fee: `GAME_FEE_ADDRESS` is the `kaspatest:`
-  wallet address of the game wallet that receives 1% of the total locked pot
+- Required network: `KASPA_NETWORK` selects the profile and must be `mainnet`
+  or `testnet-10` — the process fails closed when it is unset or unknown. Each
+  profile fixes the address prefix (`kaspa` / `kaspatest`) and the KasWare
+  network name (`kaspa_mainnet` / `kaspa_testnet_10`). `KASPA_WRPC_URL` pins the
+  matching wRPC node (the SDK resolver is the fallback). The browser never talks
+  to a node directly; all chain reads, fee estimation, transaction preparation,
+  and broadcast happen server-side.
+- The conditional on-chain game fee: `GAME_FEE_ADDRESS` is the wallet address
+  (with the selected network's prefix) of the game wallet that receives 1% of
+  the total locked pot
   when the pot is at least 100 KAS and the game settles with a winner (second
   reveal or fallback claim). Smaller pots have no platform fee. Kaspa
   version-0 (PubKey) addresses embed the recipient's x-only public key
@@ -180,9 +193,10 @@ directly, so the server decodes the address at startup and bakes that key
   `INVALID_GAME_FEE` until it is configured — so a misconfigured pod never
   serves a game without a fee recipient. Create the cluster Secret out-of-band
   (its value never lives in Git):
-  `kubectl create secret generic kaspa-even-odd-fee-address --from-literal=address=kaspatest:...`
+  `kubectl create secret generic kaspa-even-odd-fee-address --from-literal=address=kaspa:...`
   The Deployment references it with `valueFrom.secretKeyRef`, so the pod also
-  fails to be created when the Secret is missing.
+  fails to be created when the Secret is missing. The address prefix must match
+  `KASPA_NETWORK`; a mismatched prefix is rejected at startup.
 - Required persistent storage: the `kaspa-even-odd-state` PVC mounted at
   `/var/lib/kaspa-even-odd` stores non-secret backend game metadata. It is
   `ReadWriteOnce` and only ever mounted by a single replica; the Deployment uses

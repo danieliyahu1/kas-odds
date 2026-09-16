@@ -1,15 +1,16 @@
 // Kaspa wRPC client for the pinned v2.0.1 SDK, used by the backend to read the
 // chain and broadcast transactions. The browser never talks to the node
 // directly; all chain communication is server-side.
-import { NETWORK, ProtocolError } from './protocol.js';
+import { ProtocolError } from './protocol.js';
+import { isSupportedNetwork } from './network.js';
 import { loadWasmSdk, initWasmSdk } from './wasm-loader.mjs';
 
 const DEFAULT_NODE_URL = typeof process !== 'undefined' ? process?.env?.KASPA_WRPC_URL : undefined;
 const MAX_RECONNECT_RETRIES = 3;
 
 export class WrpcClient {
-  constructor({ network = NETWORK, url = DEFAULT_NODE_URL } = {}) {
-    if (network !== NETWORK) throw new ProtocolError('WRONG_NETWORK', `Expected ${NETWORK}`);
+  constructor({ network, url = DEFAULT_NODE_URL } = {}) {
+    if (!isSupportedNetwork(network)) throw new ProtocolError('WRONG_NETWORK', 'Unsupported Kaspa network');
     this.network = network;
     this.url = url;
     this.rpc = null;

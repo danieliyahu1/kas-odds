@@ -93,7 +93,7 @@ test('recovery projection fails closed and logs only safe fields', () => {
 test('recovery checkpoints authoritative state and reloads after a wallet change', async () => {
   const store = new MemoryRecoveryStore();
   const chain = { readGameState: async () => ({ confirmationStatus: 'confirmed', status: 'open', checkpoint: { daaScore: '7' } }) };
-  const view = await recoverAndCheckpoint({ chain, store, gameId: 'aa'.repeat(32) });
+  const view = await recoverAndCheckpoint({ chain, store, gameId: 'aa'.repeat(32), network: 'testnet-10' });
   assert.equal(view.status, 'confirmed');
    assert.equal((await store.load('EO/v10\u0000recovery\u0000testnet-10\u0000' + 'aa'.repeat(32))).checkpoint.daaScore, '7');
   const events = [];

@@ -1,6 +1,6 @@
 import { ProtocolError } from './protocol.js';
 
-export function validateCovenantArtifact(artifact, expected) {
+export function validateCovenantArtifact(artifact, expected, addressPrefix) {
   if (!artifact || typeof artifact !== 'object') {
     throw new ProtocolError('MISSING_ARTIFACT', 'A compiled SilverScript artifact is required');
   }
@@ -19,8 +19,8 @@ export function validateCovenantArtifact(artifact, expected) {
   if (!/^[0-9a-f]{64}$/i.test(artifact.templateHash)) {
     throw new ProtocolError('INVALID_ARTIFACT', 'Artifact template hash must be 32 bytes');
   }
-  if (!artifact.address.startsWith('kaspatest:')) {
-    throw new ProtocolError('INVALID_ARTIFACT', 'Covenant address must target Kaspa testnet');
+  if (!artifact.address.startsWith(`${addressPrefix}:`)) {
+    throw new ProtocolError('INVALID_ARTIFACT', `Covenant address must target the ${addressPrefix} network`);
   }
   return Object.freeze({ ...artifact, templateHash: artifact.templateHash.toLowerCase() });
 }

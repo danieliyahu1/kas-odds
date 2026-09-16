@@ -1,16 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { MIN_STAKE_KAS, ProtocolError, stakeToSompi } from './protocol.js';
+import { DEFAULT_NETWORK_PROFILE } from './network.js';
 import { normalizePublicKey } from './create-game.js';
 
 export class MatchmakingService {
-  constructor({ store, metrics, logPlayer }) {
+  constructor({ store, metrics, logPlayer, addressPrefix = DEFAULT_NETWORK_PROFILE.addressPrefix }) {
     this.store = store;
     this.metrics = metrics;
     this.logPlayer = logPlayer;
+    this.addressPrefix = addressPrefix;
   }
 
   async join(input) {
-    const address = matchmakingAddress(input.address);
+    const address = matchmakingAddress(input.address, this.addressPrefix);
     const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
     const limitKas = input.limitKas === undefined ? MIN_STAKE_KAS : Number(input.limitKas);
     stakeToSompi(limitKas);
@@ -25,7 +27,7 @@ export class MatchmakingService {
   }
 
   async status(matchId, address) {
-    const playerAddress = matchmakingAddress(address);
+    const playerAddress = matchmakingAddress(address, this.addressPrefix);
     const match = await this.store.loadMatch(matchId);
     findMatchPlayer(match, playerAddress);
     await this.store.touchMatch(matchId, playerAddress);
@@ -33,7 +35,7 @@ export class MatchmakingService {
   }
 
   async leave(matchId, address) {
-    const playerAddress = matchmakingAddress(address);
+    const playerAddress = matchmakingAddress(address, this.addressPrefix);
     const match = await this.store.loadMatch(matchId);
     findMatchPlayer(match, playerAddress);
     await this.store.leaveMatch(matchId, playerAddress);
@@ -80,7 +82,7 @@ export function matchResponse(match, address) {
   };
 }
 
-function matchmakingAddress(value) {
-  if (typeof value !== 'string' || !value.startsWith('kaspatest:')) throw new ProtocolError('INVALID_ADDRESS', 'Matchmaking requires a testnet wallet');
+function matchmakingAddress(value, addressPrefix) {
+  if (typeof value !== 'string' || !value.startsWith(`${addressPrefix}:`)) throw new ProtocolError('INVALID_ADDRESS', 'Matchmaking requires a wallet on the configured network');
   return value;
 }

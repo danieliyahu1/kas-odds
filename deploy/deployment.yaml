@@ -47,9 +47,11 @@ spec:
             - name: METRICS_PORT
               value: "9464"
             - name: KASPA_NETWORK
-              value: "testnet-10"
+              value: "mainnet"
+            - name: KASPA_WRPC_URL
+              value: "wss://wrpc.kasia.fyi"
             - name: GAME_STORE_PATH
-              value: /var/lib/kaspa-even-odd/games-v10.json
+              value: /var/lib/kaspa-even-odd/games-mainnet-v10.json
             - name: GAME_FEE_ADDRESS
               valueFrom:
                 secretKeyRef:
