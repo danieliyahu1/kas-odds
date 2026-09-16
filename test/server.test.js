@@ -6,13 +6,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bech32Encode } from '../src/hashes/bech32.mjs';
 import { MATCH_VIEW, resolveMatchView } from '../public/app-controller.js';
+import { freePorts } from './free-port.js';
 
 const feePublicKey = '11'.repeat(32);
 const feeAddress = bech32Encode('kaspatest', 0, Buffer.from(feePublicKey, 'hex'));
 
 test('server serves the browser application and health probe', async (t) => {
-  const port = 3100 + Math.floor(Math.random() * 500);
-  const metricsPort = port + 600;
+  const [port, metricsPort] = await freePorts(2);
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-server-'));
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
@@ -285,8 +285,7 @@ test('server serves the browser application and health probe', async (t) => {
 
 test('matchmaking joins and pairs when the lower limit sets the stake', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-http-match-'));
-  const port = 3700 + Math.floor(Math.random() * 300);
-  const metricsPort = port + 600;
+  const [port, metricsPort] = await freePorts(2);
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
       ...process.env,
@@ -336,8 +335,7 @@ test('matchmaking joins and pairs when the lower limit sets the stake', async (t
 
 test('a friend room pairs the invited wallet at the host stake', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-http-room-'));
-  const port = 3700 + Math.floor(Math.random() * 300);
-  const metricsPort = port + 600;
+  const [port, metricsPort] = await freePorts(2);
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
       ...process.env,
@@ -382,8 +380,7 @@ test('a friend room pairs the invited wallet at the host stake', async (t) => {
 
 test('starts without a fee recipient configured and reports the game fee as not configured', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-server-'));
-  const port = 3700 + Math.floor(Math.random() * 300);
-  const metricsPort = port + 600;
+  const [port, metricsPort] = await freePorts(2);
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
       ...process.env,
@@ -407,7 +404,7 @@ test('starts without a fee recipient configured and reports the game fee as not 
 });
 
 async function waitForServer(url) {
-  for (let attempt = 0; attempt < 250; attempt += 1) {
+  for (let attempt = 0; attempt < 750; attempt += 1) {
     try {
       const response = await fetch(url);
       if (response.ok) return;

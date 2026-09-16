@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
+import { freePorts } from './free-port.js';
 import {
   validateFeedback,
   formatFeedbackMessage,
@@ -235,8 +236,7 @@ test('FeedbackService.drainPending retries spilled entries', async (t) => {
 });
 
 test('feedback endpoint stores feedback with a warning when Telegram is not configured', async (t) => {
-  const port = 6100 + Math.floor(Math.random() * 300);
-  const metricsPort = port + 600;
+  const [port, metricsPort] = await freePorts(2);
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-feedback-'));
   const spillPath = join(directory, 'spill.json');
   const child = spawn(process.execPath, ['src/server.js'], {
@@ -293,8 +293,7 @@ test('feedback endpoint stores undeliverable feedback and retries it against the
   const spillPath = join(dir, 'spill.json');
   const telegram = await startMockTelegram({ fail: true });
   t.after(() => telegram.close());
-  const port = 6400 + Math.floor(Math.random() * 300);
-  const metricsPort = port + 600;
+  const [port, metricsPort] = await freePorts(2);
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
       ...process.env,
@@ -356,8 +355,7 @@ test('feedback endpoint delivers immediately and leaves the queue empty when Tel
   const spillPath = join(dir, 'spill.json');
   const telegram = await startMockTelegram({ fail: false });
   t.after(() => telegram.close());
-  const port = 6450 + Math.floor(Math.random() * 300);
-  const metricsPort = port + 600;
+  const [port, metricsPort] = await freePorts(2);
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
       ...process.env,
@@ -399,8 +397,7 @@ test('feedback endpoint rejects empty messages', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'even-odd-feedback-empty-'));
   const telegram = await startMockTelegram({ fail: false });
   t.after(() => telegram.close());
-  const port = 6700 + Math.floor(Math.random() * 300);
-  const metricsPort = port + 600;
+  const [port, metricsPort] = await freePorts(2);
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
       ...process.env,
@@ -436,8 +433,7 @@ test('feedback endpoint enforces the per-client rate limit', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'even-odd-feedback-rate-'));
   const telegram = await startMockTelegram({ fail: true });
   t.after(() => telegram.close());
-  const port = 7000 + Math.floor(Math.random() * 300);
-  const metricsPort = port + 600;
+  const [port, metricsPort] = await freePorts(2);
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
       ...process.env,
@@ -472,7 +468,7 @@ test('feedback endpoint enforces the per-client rate limit', async (t) => {
 });
 
 async function waitForServer(url) {
-  for (let attempt = 0; attempt < 250; attempt += 1) {
+  for (let attempt = 0; attempt < 750; attempt += 1) {
     try {
       const response = await fetch(url);
       if (response.ok) return;
