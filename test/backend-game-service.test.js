@@ -7,6 +7,7 @@ import { BackendGameService } from '../src/backend-game-service.js';
 import { BackendGameStore } from '../src/backend-game-store.js';
 import { Metrics } from '../src/metrics.js';
 import { prepareCreateGame } from '../src/create-game.js';
+import { PROTOCOL_VERSION, UNCONFIRMED_INPUT_DAA_SCORE } from '../src/protocol.js';
 
 const NO_UTXO_RPC = {
   getBlockDagInfo: async () => ({ virtualDaaScore: '100' }),
@@ -77,6 +78,37 @@ test('stake acceptance requires an active pair and the agreed lower limit', asyn
   // Limits are validated as whole KAS amounts from 1 to 1,000,000.
   await assert.rejects(service.joinMatchmaking({ address: 'kaspatest:zero', publicKey: 'c'.repeat(64), limitKas: 0 }), { code: 'INVALID_STAKE' });
   await assert.rejects(service.joinMatchmaking({ address: 'kaspatest:huge', publicKey: 'd'.repeat(64), limitKas: 1_000_001 }), { code: 'INVALID_STAKE' });
+});
+
+test('a friend room pairs the invited wallets at the host stake and assigned sides', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-service-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const service = new BackendGameService({ rpc: NO_UTXO_RPC, store: new BackendGameStore(join(directory, 'games.json')), gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  const host = await service.createRoom({ address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 6 });
+  assert.equal(host.status, 'waiting');
+  assert.equal(host.role, null);
+  assert.equal(host.stakeKas, 6);
+
+  const friend = await service.joinRoom(host.matchId, { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) });
+  assert.equal(friend.status, 'matched');
+  assert.equal(friend.opponentConnected, true);
+  assert.equal(friend.stakeKas, 6);
+  assert.equal(friend.role, 'joiner');
+
+  // Reconnecting is idempotent, and the seat is single-use.
+  assert.equal((await service.joinRoom(host.matchId, { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) })).matchId, host.matchId);
+  await assert.rejects(service.joinRoom(host.matchId, { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_FULL' });
+  await assert.rejects(service.createRoom({ address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 0 }), { code: 'INVALID_STAKE' });
+
+  // Only the host creates, using the room's fixed stake and assigned side.
+  const hostView = await service.matchmakingStatus(host.matchId, 'kaspatest:host');
+  assert.equal(hostView.role, 'creator');
+  assert.notEqual(hostView.side, friend.side);
+  const base = { matchId: host.matchId, creatorAddress: 'kaspatest:host', creatorPublicKey: 'a'.repeat(64), creatorCommitment: 'e'.repeat(64), side: hostView.side, stakeKas: 6 };
+  await assert.rejects(service.prepareCreation({ ...base, stakeKas: 7 }), { code: 'MATCH_NOT_READY' });
+  await assert.rejects(service.prepareCreation({ ...base, creatorAddress: 'kaspatest:friend' }), { code: 'MATCH_NOT_READY' });
+  await assert.rejects(service.prepareCreation(base), { code: 'NO_UTXOS' });
 });
 
 test('preparing a game without a configured fee recipient fails cleanly', async (t) => {
@@ -386,6 +418,223 @@ test('automatic settlement retries a rejected refund instead of abandoning it', 
   assert.equal(settled.automaticSettlement?.action, 'refund_open');
   assert.equal(settled.automaticSettlement?.status, 'broadcast');
 });
+
+test('retries a transient orphan rejection within the same submission pass', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-orphan-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameId = 'ac'.repeat(32);
+  const deadlineDaa = 10_000n;
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'aa'.repeat(32),
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const serialized = Object.fromEntries(Object.entries(request).map(([key, value]) => [key, typeof value === 'bigint' ? String(value) : value]));
+  const openRecord = {
+    gameId,
+    protocolVersion: 'EO/v10',
+    status: 'waiting_for_player_b',
+    request: serialized,
+    prepared: {
+      network: 'testnet-10',
+      creatorAddress: 'kaspatest:creator',
+      txJson: '{}',
+      preparedHash: '07'.repeat(32),
+      policy: {},
+      feeSompi: '1000',
+      covenantId: '03'.repeat(32),
+      scriptPublicKey: request.covenantScriptPublicKey,
+    },
+    createdAt: new Date().toISOString(),
+  };
+  const covenantUtxo = {
+    outpoint: { transactionId: gameId, index: 0 },
+    amount: '100000000',
+    scriptPublicKey: request.covenantScriptPublicKey,
+    blockDaaScore: Number(deadlineDaa - 29n),
+    isCoinbase: false,
+  };
+  // The node rejects the first broadcast because the parent is not anchored yet;
+  // the very next attempt, within the same pass, must be accepted.
+  let broadcasts = 0;
+  const rpc = {
+    getBlockDagInfo: async () => ({ virtualDaaScore: String(deadlineDaa + 5n) }),
+    getFeeEstimate: async () => ({ estimate: { priorityBucket: [{ feerate: 1 }] } }),
+    getUtxosByAddresses: async (addresses) => {
+      const [address] = addresses;
+      return address === request.covenantAddress ? { entries: [covenantUtxo] } : { entries: [] };
+    },
+    submitSafeJson: async () => {
+      broadcasts += 1;
+      if (broadcasts === 1) {
+        const error = new Error('RPC Server (remote error) -> Rejected transaction: transaction is an orphan where orphan is disallowed');
+        error.code = 'TRANSACTION_REJECTED';
+        error.cause = new Error('transaction is an orphan where orphan is disallowed');
+        throw error;
+      }
+      return 'cd'.repeat(32);
+    },
+  };
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame(openRecord);
+  const service = new BackendGameService({ rpc, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY, submissionRetryBaseMs: 1 });
+
+  await service.settleAutomaticGames();
+  assert.equal(broadcasts, 2, 'the orphan rejection is retried without reaching the player');
+  const settled = await store.loadGame(gameId);
+  assert.equal(settled.status, 'refund_open_broadcast');
+  assert.equal(settled.automaticSettlement?.status, 'broadcast');
+});
+
+test('prepares a join against the creator output while the creation is unconfirmed', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-join-prep-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameId = 'a1'.repeat(32);
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'aa'.repeat(32),
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame(unconfirmedGameRecord({ gameId, request }));
+  await store.saveOperation(creationOperation(gameId, '07'.repeat(32), 'broadcast'));
+  let captured;
+  const joinTxJson = JSON.stringify({
+    inputs: [{ transactionId: gameId, index: 0, sequence: '0', signatureScript: 'aa', utxo: { amount: '100000000', scriptPublicKey: request.covenantScriptPublicKey, blockDaaScore: String(UNCONFIRMED_INPUT_DAA_SCORE), covenantId: '03'.repeat(32) } }],
+    outputs: [{ value: '200000000', scriptPublicKey: '00', covenant: null }],
+  });
+  const chain = {
+    getCurrentDaaScore: async () => 500n,
+    getUtxos: async () => { throw new Error('prepareJoin must not read the confirmed covenant UTXO'); },
+    prepareJoin: async ({ game }) => {
+      captured = game;
+      return { txJson: joinTxJson, preparedHash: 'ab'.repeat(32), feeSompi: 0n, feerate: 1 };
+    },
+  };
+  const service = new BackendGameService({ chain, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  const result = await service.prepareJoin(gameId, { joinerAddress: 'kaspatest:joiner', joinerPublicKey: 'bb'.repeat(32), joinerCommitment: 'dd'.repeat(32) });
+
+  assert.equal(result.gameId, gameId);
+  assert.equal(captured.currentInput.transactionId, gameId);
+  assert.equal(captured.currentInput.amount, 100_000_000n);
+  assert.equal(captured.currentInput.scriptPublicKey, request.covenantScriptPublicKey);
+  assert.equal(captured.currentInput.covenantId, '03'.repeat(32));
+  assert.equal(captured.currentInput.redeemScript, request.covenantRedeemScript, 'the covenant input must carry its redeem script for the P2SH signature script');
+  assert.equal(captured.currentInput.blockDaaScore, UNCONFIRMED_INPUT_DAA_SCORE, 'the parent must be described as not yet mined');
+  assert.equal(captured.currentCovenantId, '03'.repeat(32));
+});
+
+test('a join is gated on its creation reaching the network', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-join-gate-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameId = 'a2'.repeat(32);
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'aa'.repeat(32),
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame(unconfirmedGameRecord({ gameId, request }));
+  const chain = {
+    getCurrentDaaScore: async () => 500n,
+    getUtxos: async () => ({ entries: [] }),
+    prepareJoin: async () => ({ txJson: '{}', preparedHash: 'ab'.repeat(32), feeSompi: 0n, feerate: 1 }),
+  };
+  const service = new BackendGameService({ chain, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+  const joiner = { joinerAddress: 'kaspatest:joiner', joinerPublicKey: 'bb'.repeat(32), joinerCommitment: 'dd'.repeat(32) };
+  await store.saveJoinPrepared({
+    preparedHash: 'ab'.repeat(32), gameId, joinerAddress: joiner.joinerAddress, joinerPublicKey: joiner.joinerPublicKey,
+    joinerCommitment: joiner.joinerCommitment, txJson: '{}', feeSompi: '0', priorityFeerate: 1,
+    joinedAddress: 'kaspatest:joined', joinedScriptPublicKey: '00', joinedRedeemScript: '00', covenantId: '03'.repeat(32), createdAt: new Date().toISOString(),
+  });
+
+  await store.saveOperation(creationOperation(gameId, '07'.repeat(32), 'failed'));
+  await assert.rejects(service.prepareJoin(gameId, joiner), { code: 'CREATION_FAILED' });
+  await assert.rejects(service.submitJoin(gameId, { preparedHash: 'ab'.repeat(32), signedTxJson: '{}' }), { code: 'CREATION_FAILED' });
+
+  await store.saveOperation(creationOperation(gameId, '07'.repeat(32), 'submitting'));
+  await assert.rejects(service.prepareJoin(gameId, joiner), { code: 'CREATION_PENDING' });
+});
+
+test('a prepared join for a re-signed creation is rejected', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-join-stale-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameIdA = 'a3'.repeat(32);
+  const gameIdB = 'b3'.repeat(32);
+  const matchId = 'c3'.repeat(32);
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'aa'.repeat(32),
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame(unconfirmedGameRecord({ gameId: gameIdA, request, matchId }));
+  await store.saveOperation(creationOperation(gameIdA, '07'.repeat(32), 'broadcast'));
+  await store.saveMatch({
+    matchId, status: 'started', gameId: gameIdB, creatorIndex: 0, creatorSide: 'even', stakeKas: 1,
+    players: [{ address: 'kaspatest:creator', publicKey: 'aa'.repeat(32), limitKas: 1 }, { address: 'kaspatest:joiner', publicKey: 'bb'.repeat(32), limitKas: 1 }],
+  });
+  await store.saveJoinPrepared({
+    preparedHash: 'ab'.repeat(32), gameId: gameIdA, matchId, joinerAddress: 'kaspatest:joiner', joinerPublicKey: 'bb'.repeat(32),
+    joinerCommitment: 'dd'.repeat(32), txJson: '{}', feeSompi: '0', priorityFeerate: 1,
+    joinedAddress: 'kaspatest:joined', joinedScriptPublicKey: '00', joinedRedeemScript: '00', covenantId: '03'.repeat(32), createdAt: new Date().toISOString(),
+  });
+  const chain = {
+    getCurrentDaaScore: async () => 500n,
+    getUtxos: async () => ({ entries: [] }),
+    prepareJoin: async () => ({ txJson: '{}', preparedHash: 'ab'.repeat(32), feeSompi: 0n, feerate: 1 }),
+  };
+  const service = new BackendGameService({ chain, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  await assert.rejects(service.submitJoin(gameIdA, { preparedHash: 'ab'.repeat(32), signedTxJson: '{}' }), { code: 'MATCH_NOT_READY' });
+});
+
+function serializedRequest(request) {
+  return Object.fromEntries(Object.entries(request).map(([key, value]) => [key, typeof value === 'bigint' ? String(value) : value]));
+}
+
+function unconfirmedGameRecord({ gameId, request, preparedHash = '07'.repeat(32), covenantId = '03'.repeat(32), matchId }) {
+  return {
+    gameId,
+    network: 'testnet-10',
+    protocolVersion: PROTOCOL_VERSION,
+    status: 'broadcast',
+    request: serializedRequest(request),
+    prepared: { network: 'testnet-10', creatorAddress: request.creatorAddress, txJson: '{}', preparedHash, policy: {}, feeSompi: '1000', covenantId, scriptPublicKey: request.covenantScriptPublicKey },
+    creationPreparedHash: preparedHash,
+    ...(matchId ? { matchId } : {}),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function creationOperation(gameId, preparedHash, status) {
+  return { operationId: `${PROTOCOL_VERSION}\u0000submission\u0000creation\u0000${preparedHash}`, action: 'creation', gameId, preparedHash, transactionId: gameId, status, createdAt: new Date().toISOString(), metadata: {} };
+}
 
 async function matchRoles(service, matchId) {
   const firstView = await service.matchmakingStatus(matchId, 'kaspatest:first');

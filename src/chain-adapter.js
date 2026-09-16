@@ -138,6 +138,8 @@ export class KaspaChainAdapter {
         game,
         joinerPublicKey: request.joinerPublicKey,
         joinerCommitment: request.joinerCommitment,
+        // The creation output may still be in the mempool: the service describes
+        // it as a virtual UTXO (maximum DAA score) instead of a confirmed one.
         gameInput: game.currentInput,
         feeInputs: selectedEntries,
         feeSompi,

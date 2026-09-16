@@ -28,7 +28,7 @@ export async function loadCovenantTemplate() {
   return templatePromise;
 }
 
-export async function deriveCovenant({ creatorPublicKey, creatorCommitment, side, stakeSompi, deadlineDaa, gameFeePublicKey }) {
+export async function deriveCovenant({ creatorPublicKey, creatorCommitment, side, stakeSompi, deadlineDaa, gameFeePublicKey, addressPrefix }) {
   const template = await loadCovenantTemplate();
   verifyTemplateHash(template);
   const gameWalletHash = bytesToHex(blake2b256(hexToBytes(gameFeePublicKey))).toLowerCase();
@@ -40,12 +40,12 @@ export async function deriveCovenant({ creatorPublicKey, creatorCommitment, side
     creatorEven: side === 'even',
     gameWalletHash,
     settleFee: AUTOMATION_FEE_SOMPI,
-  }, { template });
+  }, { template, addressPrefix });
 }
 
-export async function verifyCreation({ txJson, creatorPublicKey, creatorCommitment, side, stakeKas, deadlineDaa, gameFeePublicKey, feeSompi, changeScriptPublicKey }) {
+export async function verifyCreation({ txJson, creatorPublicKey, creatorCommitment, side, stakeKas, deadlineDaa, gameFeePublicKey, feeSompi, changeScriptPublicKey, addressPrefix }) {
   const stakeSompi = BigInt(stakeKas) * SOMPI_PER_KAS;
-  const instance = await deriveCovenant({ creatorPublicKey, creatorCommitment, side, stakeSompi, deadlineDaa: BigInt(deadlineDaa), gameFeePublicKey });
+  const instance = await deriveCovenant({ creatorPublicKey, creatorCommitment, side, stakeSompi, deadlineDaa: BigInt(deadlineDaa), gameFeePublicKey, addressPrefix });
 
   let transaction;
   try {

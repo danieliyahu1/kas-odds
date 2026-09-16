@@ -2,21 +2,34 @@
 
 Live: <https://kaspa-even-odd.danieliyahu.com/>
 
-Initial protocol implementation for the non-custodial Even/Odd MVP on
-Kaspa `testnet-10`.
+Initial protocol implementation for the non-custodial Even/Odd MVP on Kaspa.
+The same image serves either Kaspa `mainnet` or `testnet-10`; the network is
+selected at runtime with the single `KASPA_NETWORK` environment variable, and
+the store file, wRPC node, and fee wallet all follow from it.
 
-The join flow is invite-only. A creator shares a URL containing only the
-protocol version and confirmed game identifier. The URL never contains a
-secret, commitment preimage, wallet key, or transaction template.
+Both ways to play begin with an off-chain lobby. "Play someone new" queues the
+wallet for matchmaking; "Play with a friend" opens a private room and the host
+shares a `/join?room=<sessionId>` link. Funds are locked only after the two
+players are matched: the creator signs the creation transaction first, then the
+matched opponent signs the join. The invite carries no secret, commitment
+preimage, wallet key, or transaction template.
 
 ## Current boundary
 
+- `src/network.js` is the single runtime registry of supported Kaspa networks.
+  Each profile maps the SDK network id (`mainnet`, `testnet-10`) to its bech32
+  address prefix (`kaspa`, `kaspatest`) and KasWare network name
+  (`kaspa_mainnet`, `kaspa_testnet_10`). `server-config.js` resolves the profile
+  once from `KASPA_NETWORK` and injects it downward; domain code never reads the
+  environment.
 - `src/protocol.js` validates sides, stake, sompi arithmetic, network, and
   fee separation.
-- `src/invite.js` parses and serializes the URL invite.
+- `src/invite.js` parses and serializes the game-id invite; a friend room link
+  is a `/join?room=<sessionId>` matchmaking session id instead.
 - `src/backend-game-service.js` is the production game use-case boundary. It
-  owns creation, joining, reveal, refund, claim, matchmaking, persistence, and
-  recovery orchestration behind the HTTP application.
+  owns creation, joining, reveal, refund, claim, matchmaking (the public queue
+  and invite-only friend rooms), persistence, and recovery orchestration behind
+  the HTTP application.
 - `src/create-game.js`, `src/join-game.js`, and `src/terminal-lifecycle.js` are
   exported protocol/lifecycle building blocks used by focused tests and library
   consumers; they are not the server's production request path.
@@ -27,9 +40,10 @@ secret, commitment preimage, wallet key, or transaction template.
   concern; the browser consumes the resulting artifact.
 - `src/covenant/even-odd.mjs` derives the per-game covenant instance: it loads
   the pinned artifact, substitutes the game state into the template state span,
-  verifies the template hash, and produces the P2SH-256 script and `kaspatest:`
-   address. Output is byte-for-byte cross-validated against the authoritative
-   Rust `covenant-oracle` (see `oracle/`).
+  verifies the template hash, and produces the P2SH-256 script and the
+  network-prefixed address (`kaspa:` on mainnet, `kaspatest:` on testnet-10).
+  Output is byte-for-byte cross-validated against the authoritative
+  Rust `covenant-oracle` (see `oracle/`).
 - `src/chain-adapter.js` provides the production `KaspaChainAdapter` gateway
   between the game use cases and the chain: `prepareCreation` (UTXOs + live
   priority feerate + local mass/relay floor policy via `src/fee-policy.js`),
@@ -47,8 +61,9 @@ secret, commitment preimage, wallet key, or transaction template.
 - `public/app.js` is the browser composition root. `public/app-controller.js`
   owns cancellable polling and stale-response protection; browser secrets and
   IndexedDB remain behind `public/secrets.js`.
-- `src/backend-game-store.js` persists game records, matchmaking sessions, and
-  non-secret transaction preparations atomically on disk. Reveal preimages are
+- `src/backend-game-store.js` persists game records, matchmaking sessions
+  (including invite-only friend rooms), and non-secret transaction preparations
+  atomically on disk. Reveal preimages are
   never stored here; they live only in the short-lived in-memory
   `src/ephemeral-preparations.js`.
 - `src/wasm-transaction.js` loads the pinned WASM SDK (`Transaction`,
@@ -59,17 +74,19 @@ secret, commitment preimage, wallet key, or transaction template.
   SafeJSON mutation outside input signature scripts.
 - The Rust `covenant-oracle` (`oracle/`, built from the pinned rusty-kaspa
   v2.0.1 rev `a41a333b…`) is a real-runtime regression oracle for the P2SH-256
-  script, `kaspatest:` address, state span, template hash, and genesis covenant
+  script, covenant address, state span, template hash, and genesis covenant
   id (see `test/covenant-oracle-runtime.test.js`). It depends on the vendored
   `silverscript` submodule (`silverscript-abi` by path) without modifying
   upstream code.
 
-## Pinned Even/Odd covenant (testnet-10)
+## Pinned Even/Odd covenant (network-agnostic)
 
-The canonical testnet covenant artifact is compiled by the `silverc` binary
+The canonical covenant artifact is compiled by the `silverc` binary
 from SilverScript `v1.0.0` (whose emitted artifact/compiler identifier remains
 `0.1.0`) from `covenant/even_odd.sil` into
-`covenant/even_odd.template.artifact.json`:
+`covenant/even_odd.template.artifact.json`. The artifact is identical on both
+networks: only the bech32 address prefix differs (Toccata covenants are live on
+mainnet and testnet-10, and the pinned WASM SDK is the mainnet Toccata release).
 
 - **contract**: `EvenOdd`, template hash `ade3453c…7e27a`
 - **state span**: `offset 1, len 261` (13 fields: `creator_hash`,
@@ -79,8 +96,8 @@ from SilverScript `v1.0.0` (whose emitted artifact/compiler identifier remains
 - **dispatch tags**: `join = b1d2ce8f`, `refund = 762ffa55`, `refund_open = 3a658a5b`
 - **terminal dispatch tags**: `reveal = 6b547798`, `fallback_claim = e8bae487`,
   `refund_all = 0e2b436c`
-- **P2SH-256**: `0xaa 0x20 <blake2b-256(redeemScript)>`; address prefix
-  `kaspatest`, version byte 8.
+- **P2SH-256**: `0xaa 0x20 <blake2b-256(redeemScript)>`; address prefix is the
+  configured network's (`kaspa` or `kaspatest`), version byte 8.
 - **reproducibility manifest**: `covenant/pins.json` pins the SilverScript
   release, source commit, emitted compiler version, plus source, artifact, and
   local Windows compiler SHA-256 values.
@@ -155,18 +172,33 @@ Runtime details:
   readable and writable and the store parses as valid JSON)
 - Liveness endpoint: `/healthz` (process liveness only)
 - Required runtime secrets: none beyond the fee wallet identity. The app holds
-  no private key — `GAME_FEE_ADDRESS` is a public wallet address — so it is
-  never a literal in this repository. In the cluster the Deployment reads it
-  from the `kaspa-even-odd-fee-address` Secret (`address` key) via
-  `valueFrom.secretKeyRef`; locally it is set with `--env-file=.env` (the
-  `.env` file is gitignored). Wallet private keys never leave the browser.
-- Required network: `KASPA_NETWORK=testnet-10` (the process fails closed for
-  any other value); `KASPA_WRPC_URL` pins the server's testnet-10 wRPC node
-  (the SDK resolver is the fallback). The browser never talks to a node
-  directly; all chain reads, fee estimation, transaction preparation, and
-  broadcast happen server-side.
-- The conditional on-chain game fee: `GAME_FEE_ADDRESS` is the `kaspatest:`
-  wallet address of the game wallet that receives 1% of the total locked pot
+  no private key — the fee wallet is a public address — so it is never a literal
+  in this repository. In the cluster the Deployment reads it from the
+  `kaspa-even-odd-game-fee-address` Secret (keys `mainnet` and `testnet-10`,
+  filled from the OCI Vault entries `kaspa-even-odd-game-fee-address-mainnet`
+  and `kaspa-even-odd-game-fee-address-testnet-10`) via `valueFrom.secretKeyRef`;
+  locally the same values are set with `--env-file=.env` (the `.env` file is
+  gitignored). Wallet private keys never leave the browser.
+- Required network: `KASPA_NETWORK` is the single switch and must be `mainnet`
+  or `testnet-10` — the process fails closed when it is unset or unknown. Each
+  profile fixes the address prefix (`kaspa` / `kaspatest`) and the KasWare
+  network name (`kaspa_mainnet` / `kaspa_testnet_10`), and the SDK resolver
+  picks the matching wRPC node. `KASPA_WRPC_URL` is an optional override that
+  pins a specific node. Every other network-specific value (the store file and
+  the fee wallet, below) follows from `KASPA_NETWORK`, so switching networks
+  changes exactly one variable. The browser never talks
+  to a node directly; all chain reads, fee estimation, transaction preparation,
+  and broadcast happen server-side.
+- The conditional on-chain game fee: each network has its own recipient wallet,
+  supplied as `GAME_FEE_ADDRESS_MAINNET` and `GAME_FEE_ADDRESS_TESTNET_10` (a
+  shared `GAME_FEE_ADDRESS` is still the fallback when the qualified name is
+  absent), so `KASPA_NETWORK` alone decides which wallet is used. Both live in
+  the `kaspa-even-odd-game-fee-address` Secret — keys `mainnet` and
+  `testnet-10` — which the ExternalSecret fills from the OCI Vault entries
+  `kaspa-even-odd-game-fee-address-mainnet` and
+  `kaspa-even-odd-game-fee-address-testnet-10` by name, so no value is ever in
+  Git. The wallet receives 1% of the total
+  locked pot
   when the pot is at least 100 KAS and the game settles with a winner (second
   reveal or fallback claim). Smaller pots have no platform fee. Kaspa
   version-0 (PubKey) addresses embed the recipient's x-only public key
@@ -174,19 +206,21 @@ directly, so the server decodes the address at startup and bakes that key
   into every game's covenant state. Each player locks exactly the displayed
   stake; automatic timeout refunds reserve 0.016 KAS from the locked amount for
   the network fee, while winner settlement pays the game fee from the total pot.
-  The fee recipient is runtime-only
-  configuration: the process boots without it, reports
+  The fee recipient is runtime configuration: the process boots without one,
+  reports
   `gameFeePublicKey: null` from `/api/config`, and rejects game creation with
   `INVALID_GAME_FEE` until it is configured — so a misconfigured pod never
-  serves a game without a fee recipient. Create the cluster Secret out-of-band
-  (its value never lives in Git):
-  `kubectl create secret generic kaspa-even-odd-fee-address --from-literal=address=kaspatest:...`
-  The Deployment references it with `valueFrom.secretKeyRef`, so the pod also
-  fails to be created when the Secret is missing.
+  serves a game without a fee recipient. The Deployment reads the keys with
+  `valueFrom.secretKeyRef`, so the pod is not created when the Secret is
+  missing, and each address prefix must match `KASPA_NETWORK` (a mismatched
+  prefix is rejected at startup).
 - Required persistent storage: the `kaspa-even-odd-state` PVC mounted at
-  `/var/lib/kaspa-even-odd` stores non-secret backend game metadata. It is
-  `ReadWriteOnce` and only ever mounted by a single replica; the Deployment uses
-  `strategy: Recreate` for that reason.
+  `/var/lib/kaspa-even-odd` stores non-secret backend game metadata. The store
+  file is derived from the network — `GAME_STORE_DIR` plus
+  `games-<network>-v10.json` — so a network switch never points two networks at
+  one file; `GAME_STORE_PATH` remains an explicit override, and locally it
+  defaults under `.data/`. The volume is `ReadWriteOnce` and only ever mounted by
+  a single replica; the Deployment uses `strategy: Recreate` for that reason.
 - Request controls: `MAX_REQUEST_BYTES` (default 1,000,000) caps request bodies,
   and `RATE_LIMIT_PER_MINUTE` (default 300) caps mutating API calls per client.
   Set `TRUST_PROXY=true` only behind a trusted proxy that rewrites
@@ -208,7 +242,9 @@ directly, so the server decodes the address at startup and bakes that key
   Telegram chat via `sendMessage` (`parse_mode` off, web preview disabled). The
   bot token (`TELEGRAM_FEEDBACK_BOT_TOKEN`) and chat id
   (`TELEGRAM_FEEDBACK_CHAT_ID`) are runtime-only configuration read from the
-  `kaspa-even-odd-telegram` Secret. Feedback is just the message the user wrote
+  `kaspa-even-odd-telegram` Secret (keys `bot-token` and `chat-id`, filled from
+  the OCI Vault entries `kaspa-even-odd-telegram-bot-token` and
+  `kaspa-even-odd-telegram-chat-id`). Feedback is just the message the user wrote
   — no wallet address, game id, transaction, page, or query string is attached,
   and the text is never logged. When Telegram is not configured the feedback is
   still stored in the queue — never discarded — records a
@@ -260,15 +296,15 @@ when it prepares the reveal transaction — after both commitments are confirmed
 on-chain and the number is public by design — so a server that also plays as a
 player cannot change its committed number after seeing an opponent's.
 
-The friend invite URL (`/join?v=…&game=<gameId>`) carries only the protocol
-version and confirmed game identifier; the server holds the rest of the public
-creation state. A rival game works the same way, except the server introduces
-the two players and attaches the creator's on-chain game to the matchmaking
-session. Matchmaking is "play up to": each player sets the most they are
-comfortable playing, the server pairs any two waiters, and the game is the
-lower of the two limits. Acceptance is on-chain, not off-chain: the assigned
-creator signs the creation transaction to lock their escrow, and the matched
-  rival signs the join transaction to take the other side. Until a join confirms,
+Both paths use the same off-chain lobby. A public game is "play up to": each
+player sets the most they are comfortable playing, the server pairs any two
+waiters, and the stake is the lower of the two limits. A friend game is a
+private room: the host fixes the stake and shares a `/join?room=<sessionId>`
+link, and only the wallet holding that link can take the second seat. In both
+cases the server assigns each player a side at match time, and no funds move
+until both players pick a number and lock: the assigned creator signs the
+creation transaction to escrow their stake, and the matched opponent signs the
+join to take the other side. Until a join confirms,
   the creator can reclaim their full stake at any time by signing the `refund`
   spend (the server builds and relays it), and after the deadline the
   permissionless `refund_open` entry can reclaim the creator's stake with no

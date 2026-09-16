@@ -1,4 +1,4 @@
-import { NETWORK, PROTOCOL_VERSION, ProtocolError, validateGameId, validateNetwork, validateSide, stakeToSompi, MIN_STAKE_KAS, MAX_STAKE_KAS } from './protocol.js';
+import { PROTOCOL_VERSION, ProtocolError, validateGameId, validateNetwork, validateSide, stakeToSompi, MIN_STAKE_KAS, MAX_STAKE_KAS } from './protocol.js';
 
 const PATH = '/join';
 const KNOWN_KEYS = ['v', 'game', 'pk', 'c', 's', 'k', 'd', 'a'];
@@ -7,10 +7,10 @@ const KNOWN_KEYS = ['v', 'game', 'pk', 'c', 's', 'k', 'd', 'a'];
 // the state-0 covenant and join without trusting (or even reaching) the app
 // server. The commitment and side are public; the choice stays hidden behind
 // the 32-byte nonce.
-export function serializeInvite({ gameId, origin, creation }) {
+export function serializeInvite({ gameId, origin, creation, network }) {
   const normalizedGameId = validateGameId(gameId);
   const base = new URL(origin);
-  validateNetwork(base.searchParams.get('network') ?? NETWORK);
+  validateNetwork(network);
   base.pathname = PATH;
   base.search = '';
   base.hash = '';
@@ -27,7 +27,7 @@ export function serializeInvite({ gameId, origin, creation }) {
   return base.toString();
 }
 
-export function parseInvite(rawUrl, expectedOrigin) {
+export function parseInvite(rawUrl, expectedOrigin, network) {
   let url;
   try {
     url = new URL(rawUrl);
@@ -56,7 +56,7 @@ export function parseInvite(rawUrl, expectedOrigin) {
     deadlineDaa: normalizeDaa(url.searchParams.get('d')),
     creatorAddress: url.searchParams.get('a') || null,
   } : null;
-  return { protocolVersion: PROTOCOL_VERSION, network: NETWORK, gameId, creation };
+  return { protocolVersion: PROTOCOL_VERSION, network: validateNetwork(network), gameId, creation };
 }
 
 function validateStake(value) {

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { ProtocolError, NETWORK, PROTOCOL_VERSION, validateGameId, validateNetwork } from './protocol.js';
+import { ProtocolError, PROTOCOL_VERSION, validateGameId, validateNetwork } from './protocol.js';
 
 const SECRET_FIELDS = /secret|nonce|preimage|private.?key|signature.?script/i;
 
@@ -103,7 +103,7 @@ export function bindWalletRecovery(wallet, reload) {
   return wallet.subscribe(({ reason }) => reload({ reason }));
 }
 
-export async function recoverAndCheckpoint({ chain, store, gameId, network = NETWORK, metadata = {} }) {
+export async function recoverAndCheckpoint({ chain, store, gameId, network, metadata = {} }) {
   if (!chain || typeof chain.readGameState !== 'function') throw new ProtocolError('CHAIN_UNAVAILABLE', 'Authoritative game-state reader is required');
   if (!store || typeof store.load !== 'function' || typeof store.save !== 'function') throw new ProtocolError('STORAGE_UNAVAILABLE', 'Recovery storage is required');
   const key = recoveryOperationKey({ gameId, network });
@@ -156,7 +156,7 @@ export class JsonRecoveryStore {
 
 export const FileRecoveryStore = JsonRecoveryStore;
 
-export function recoveryOperationKey({ gameId, network = NETWORK }) {
+export function recoveryOperationKey({ gameId, network }) {
   validateNetwork(network);
   return [PROTOCOL_VERSION, 'recovery', network, validateGameId(gameId)].join('\u0000');
 }

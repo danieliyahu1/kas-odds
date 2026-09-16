@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bech32Encode } from '../src/hashes/bech32.mjs';
+import { MATCH_VIEW, resolveMatchView } from '../public/app-controller.js';
 
 const feePublicKey = '11'.repeat(32);
 const feeAddress = bech32Encode('kaspatest', 0, Buffer.from(feePublicKey, 'hex'));
@@ -18,6 +19,7 @@ test('server serves the browser application and health probe', async (t) => {
       ...process.env,
       PORT: String(port),
       METRICS_PORT: String(metricsPort),
+      KASPA_NETWORK: 'testnet-10',
       GAME_STORE_PATH: join(directory, 'games.json'),
       GAME_FEE_ADDRESS: feeAddress,
       RATE_LIMIT_PER_MINUTE: '6',
@@ -32,7 +34,7 @@ test('server serves the browser application and health probe', async (t) => {
   t.after(() => rm(directory, { recursive: true, force: true }));
 
   await waitForServer(`http://127.0.0.1:${port}/readyz`);
-  const [page, host, rival, health, missing, demoApi, appScript, mainScript, secretsScript, verifyScript, coreScript, genesisScript, artifact, pins, wasmJs, icon] = await Promise.all([
+  const [page, host, rival, health, missing, demoApi, appScript, lobbyScript, mainScript, secretsScript, verifyScript, coreScript, genesisScript, artifact, pins, wasmJs, icon] = await Promise.all([
     fetch(`http://127.0.0.1:${port}/`),
     fetch(`http://127.0.0.1:${port}/host`),
     fetch(`http://127.0.0.1:${port}/rival`),
@@ -40,6 +42,7 @@ test('server serves the browser application and health probe', async (t) => {
     fetch(`http://127.0.0.1:${port}/public-game-list`),
     fetch(`http://127.0.0.1:${port}/api/demo/games`),
     fetch(`http://127.0.0.1:${port}/app.js`),
+    fetch(`http://127.0.0.1:${port}/lobby-controller.js`),
     fetch(`http://127.0.0.1:${port}/main.js`),
     fetch(`http://127.0.0.1:${port}/secrets.js`),
     fetch(`http://127.0.0.1:${port}/verify.js`),
@@ -63,6 +66,8 @@ test('server serves the browser application and health probe', async (t) => {
   assert.deepEqual(await health.json().then(({ ok, service, network }) => ({ ok, service, network })), { ok: true, service: 'kaspa-even-odd', network: 'testnet-10' });
   assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/api/config`)).json(), {
     network: 'testnet-10',
+    addressPrefix: 'kaspatest',
+    kaswareNetwork: 'kaspa_testnet_10',
     protocolVersion: 'EO/v10',
     gameFeePublicKey: feePublicKey,
   });
@@ -77,6 +82,8 @@ test('server serves the browser application and health probe', async (t) => {
   assert.doesNotMatch(csp, /wss:|ws:/);
   assert.equal(page.headers.get('x-frame-options'), 'DENY');
   const browserSource = await appScript.text();
+  const lobbySource = await lobbyScript.text();
+  assert.equal(lobbyScript.status, 200);
   const secretsSource = await secretsScript.text();
   assert.equal(verifyScript.status, 200);
   assert.equal(mainScript.status, 200);
@@ -91,32 +98,53 @@ test('server serves the browser application and health probe', async (t) => {
   assert.equal((await artifact.json()).contracts.EvenOdd.compiled.state_span.len, 261);
   assert.match(await pins.json().then((p) => p.rustyKaspa.webVendoredWasmFileSha256), /^[0-9a-f]{64}$/);
 
+  const runtimeConfigScript = await fetch(`http://127.0.0.1:${port}/runtime-config.js`);
+  assert.equal(runtimeConfigScript.status, 200);
+  assert.match(await runtimeConfigScript.text(), /loadRuntimeConfig/);
+  assert.match(pageHtml, /id="network-label"/);
+
   // The thin client talks only to this server; it never constructs or verifies
   // chain transactions itself beyond checking the prepared creation.
   assert.doesNotMatch(browserSource, /api\/demo|eo-demo-player|Simulate timeout/);
-  assert.match(browserSource, /api\/games\/prepare/);
-  assert.match(browserSource, /api\/games\/submit/);
-  assert.match(browserSource, /api\/games\/\$\{gameId\}\/join\/prepare/);
   assert.match(browserSource, /api\/games\/\$\{gameId\}\/reveal\/prepare/);
-  assert.match(browserSource, /api\/matchmaking\/join/);
-  assert.match(browserSource, /api\/matchmaking\/\$\{match\.matchId\}\/leave/);
   assert.doesNotMatch(browserSource, /api\/matchmaking\/\$\{match\.matchId\}\/confirm/);
+  // A matched pair shares one screen; only the joiner's creation wait differs.
+  assert.doesNotMatch(browserSource, /Waiting for your rival to create the game/);
+  // app.js keeps the DOM view and the game page; the lobby orchestration lives
+  // in the headless controller.
+  assert.match(browserSource, /function renderLobby/);
+  assert.match(browserSource, /function paintLobby/);
+  assert.match(browserSource, /Play for \$\{escapeHtml\(match\.stakeKas\)\} KAS/);
   assert.match(browserSource, /data-action="reveal"/);
-  assert.match(browserSource, /data-commit-number/);
-  assert.match(browserSource, /data-join-number/);
-  assert.match(browserSource, /createRevealSecret\(number/);
-  assert.match(browserSource, /verifyCreation\(/);
+  assert.match(browserSource, /data-match-number/);
   assert.match(browserSource, /loadSecretForGame/);
   assert.match(browserSource, /bindSecretToGame/);
   assert.match(browserSource, /deleteSecretForGame/);
-  assert.match(browserSource, /signPskt/);
-  assert.match(browserSource, /Find a rival/);
+  assert.match(browserSource, /kaswareSignPskt/);
+  assert.match(browserSource, /Find a player/);
   assert.match(browserSource, /Play with a friend/);
   assert.match(browserSource, /location\.pathname === '\/host'/);
   assert.match(browserSource, /Even \/ Odd|Even\/Odd/);
   assert.doesNotMatch(browserSource, /DEFAULT_WRPC_URL|WrpcClient|readRecoveryReadiness|game-client|client-actions/);
   assert.doesNotMatch(browserSource, /data-reveal-number|FIXED_NONCE|fill\(1\)|transientCommitment/);
   assert.doesNotMatch(browserSource, /Guess even|Joining unavailable|data-action="create"/);
+
+  // The lobby controller is headless: it owns the matchmaking endpoints, the
+  // polling lifecycle, and the parallel creation/join flow, and never touches
+  // the DOM.
+  assert.match(lobbySource, /\/api\/matchmaking\/join/);
+  assert.match(lobbySource, /\/api\/matchmaking\/room/);
+  assert.match(lobbySource, /\/api\/matchmaking\/\$\{roomId\}\/join/);
+  assert.match(lobbySource, /\/api\/matchmaking\/\$\{match\.matchId\}\/leave/);
+  assert.match(lobbySource, /\/api\/games\/prepare/);
+  assert.match(lobbySource, /\/api\/games\/submit/);
+  assert.match(lobbySource, /\/api\/games\/\$\{gameId\}\/join\/prepare/);
+  assert.match(lobbySource, /createSecret\(number/);
+  assert.match(lobbySource, /verifyCreation/);
+  assert.match(lobbySource, /resolveMatchView/);
+  assert.match(lobbySource, /shouldRerenderMatch/);
+  assert.match(lobbySource, /matchGameWaitState/);
+  assert.doesNotMatch(lobbySource, /document\.|window\.|localStorage/);
 
   // Regression: the repaint-dedup signature must not track the countdown, or
   // every tick rebuilds the join form and clears the joiner's number selection.
@@ -145,9 +173,12 @@ test('server serves the browser application and health probe', async (t) => {
 
   const modulePaths = [
     '/app.js',
+    '/app-controller.js',
+    '/lobby-controller.js',
     '/secrets.js',
     '/verify.js',
     '/kasware-signing.js',
+    '/kasware-connect.js',
     '/log.js',
     '/src/covenant/even-odd-core.mjs',
     '/src/covenant/template.mjs',
@@ -261,6 +292,7 @@ test('matchmaking joins and pairs when the lower limit sets the stake', async (t
       ...process.env,
       PORT: String(port),
       METRICS_PORT: String(metricsPort),
+      KASPA_NETWORK: 'testnet-10',
       GAME_STORE_PATH: join(directory, 'games.json'),
       RATE_LIMIT_PER_MINUTE: '60',
     },
@@ -293,6 +325,59 @@ test('matchmaking joins and pairs when the lower limit sets the stake', async (t
   assert.equal(secondStatus.status, 'matched');
   assert.equal(firstStatus.stakeKas, 6);
   assert.notEqual(firstStatus.role, secondStatus.role);
+
+  // Whichever role the server assigns, both players resolve to the same play
+  // screen rather than the joiner waiting on a separate status view.
+  assert.equal(firstStatus.opponentConnected, true);
+  assert.equal(secondStatus.opponentConnected, true);
+  assert.equal(resolveMatchView(firstStatus), MATCH_VIEW.PLAY);
+  assert.equal(resolveMatchView(secondStatus), MATCH_VIEW.PLAY);
+});
+
+test('a friend room pairs the invited wallet at the host stake', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-http-room-'));
+  const port = 3700 + Math.floor(Math.random() * 300);
+  const metricsPort = port + 600;
+  const child = spawn(process.execPath, ['src/server.js'], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      METRICS_PORT: String(metricsPort),
+      KASPA_NETWORK: 'testnet-10',
+      GAME_STORE_PATH: join(directory, 'games.json'),
+      RATE_LIMIT_PER_MINUTE: '60',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => child.kill());
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await waitForServer(`http://127.0.0.1:${port}/readyz`);
+
+  const origin = `http://127.0.0.1:${port}`;
+  const post = (path, body) => fetch(`${origin}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const host = await post('/api/matchmaking/room', { address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 6 }).then((response) => response.json());
+  assert.equal(host.status, 'waiting');
+  assert.equal(host.stakeKas, 6);
+
+  const friend = await post(`/api/matchmaking/${host.matchId}/join`, { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) }).then((response) => response.json());
+  assert.equal(friend.status, 'matched');
+  assert.equal(friend.stakeKas, 6);
+  assert.equal(friend.role, 'joiner');
+
+  const hostStatus = await fetch(`${origin}/api/matchmaking/${host.matchId}?address=kaspatest:host`).then((response) => response.json());
+  assert.equal(hostStatus.role, 'creator');
+  assert.notEqual(hostStatus.side, friend.side);
+  assert.equal(resolveMatchView(hostStatus), MATCH_VIEW.PLAY);
+
+  // The single second seat is already taken.
+  const rejected = await post(`/api/matchmaking/${host.matchId}/join`, { address: 'kaspatest:third', publicKey: 'c'.repeat(64) });
+  assert.equal(rejected.status, 400);
+  assert.equal((await rejected.json()).error, 'MATCH_FULL');
 });
 
 test('starts without a fee recipient configured and reports the game fee as not configured', async (t) => {
@@ -304,6 +389,7 @@ test('starts without a fee recipient configured and reports the game fee as not 
       ...process.env,
       PORT: String(port),
       METRICS_PORT: String(metricsPort),
+      KASPA_NETWORK: 'testnet-10',
       GAME_STORE_PATH: join(directory, 'games.json'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -313,6 +399,8 @@ test('starts without a fee recipient configured and reports the game fee as not 
   await waitForServer(`http://127.0.0.1:${port}/readyz`);
   assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/api/config`)).json(), {
     network: 'testnet-10',
+    addressPrefix: 'kaspatest',
+    kaswareNetwork: 'kaspa_testnet_10',
     protocolVersion: 'EO/v10',
     gameFeePublicKey: null,
   });

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BackendGameStore } from '../src/backend-game-store.js';
+import { GAME_RESULT_RETENTION_MS } from '../src/terminal-actions.js';
 
 test('matchmaking pairs two wallets and keeps the queue private to the store', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-match-'));
@@ -51,6 +52,58 @@ test('pairs any two waiters and stakes the lower limit', async (t) => {
   assert.equal(solo.stakeKas, null);
 });
 
+test('a private room holds a fixed stake and only the invited wallet may take the second seat', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-'));
+  const filePath = join(directory, 'games.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(filePath);
+
+  const room = await store.createPrivateMatch({ matchId: 'room', address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 7 });
+  assert.equal(room.status, 'waiting');
+  assert.equal(room.private, true);
+  assert.equal(room.stakeKas, 7);
+  assert.equal(room.players[0].limitKas, 7);
+  // The room is never part of the public backlog.
+  assert.equal(await store.countWaitingMatches(), 0);
+
+  const joined = await store.joinPrivateMatch('room', { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) });
+  assert.equal(joined.status, 'matched');
+  assert.equal(joined.creatorIndex, 0);
+  assert.equal(joined.stakeKas, 7);
+  assert.deepEqual(joined.players.map((player) => player.address), ['kaspatest:host', 'kaspatest:friend']);
+
+  // Reconnecting the invited wallet is idempotent; a third wallet is refused.
+  const reconnect = await store.joinPrivateMatch('room', { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) });
+  assert.equal(reconnect.players.length, 2);
+  await assert.rejects(store.joinPrivateMatch('room', { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_FULL' });
+  await assert.rejects(store.joinPrivateMatch('missing', { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_NOT_FOUND' });
+});
+
+test('a public waiter never fills a private room seat', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-queue-'));
+  const filePath = join(directory, 'games.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(filePath);
+
+  await store.createPrivateMatch({ matchId: 'room', address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 7 });
+  const waiter = await store.joinMatchmaking({ matchId: 'waiter', address: 'kaspatest:waiter', publicKey: 'b'.repeat(64), limitKas: 9 });
+  assert.equal(waiter.matchId, 'waiter');
+  assert.equal(waiter.status, 'waiting');
+  assert.equal((await store.loadMatch('room')).status, 'waiting');
+});
+
+test('an idle private room expires like a public session', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-idle-'));
+  const filePath = join(directory, 'games.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(filePath);
+
+  await store.createPrivateMatch({ matchId: 'idle', address: 'kaspatest:idle', publicKey: 'a'.repeat(64), stakeKas: 2 });
+  await store.updateMatch('idle', (match) => { match.players[0].lastSeenAt = new Date(Date.now() - 60_000).toISOString(); });
+  await store.createPrivateMatch({ matchId: 'fresh', address: 'kaspatest:fresh', publicKey: 'b'.repeat(64), stakeKas: 2 });
+  assert.equal((await store.loadMatch('idle')).status, 'cancelled');
+});
+
 test('persists games and transaction preparations', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-store-'));
   const filePath = join(directory, 'games.json');
@@ -81,7 +134,7 @@ test('reloads stored data from disk after a new instance', async (t) => {
   assert.equal((await second.loadGame('a'.repeat(64))).status, 'joined');
 });
 
-test('completing a game removes its durable aggregate and related preparations', async (t) => {
+test('completing a game keeps its terminal record and drops the live aggregates', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-complete-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -95,12 +148,36 @@ test('completing a game removes its durable aggregate and related preparations',
   await store.saveGame({ gameId, matchId, creationPreparedHash: 'p1', prepared: { txJson: 'creation' }, status: 'settled' });
   await store.saveMatch({ matchId, status: 'started', players: [] });
 
-  assert.equal(await store.completeGame({ gameId, matchId, creationPreparedHash: 'p1', prepared: { txJson: 'creation' } }), true);
-  assert.equal(await store.loadGame(gameId), null);
+  assert.equal(await store.completeGame({ gameId, matchId, creationPreparedHash: 'p1', prepared: { txJson: 'creation' }, status: 'settled', winner: 'creator' }), true);
+  const retained = await store.loadGame(gameId);
+  assert.equal(retained.status, 'settled');
+  assert.equal(retained.winner, 'creator');
+  assert.ok(retained.completedAt, 'the terminal record keeps a completion timestamp');
   assert.equal(await store.loadPrepared('p1'), null);
   assert.equal(await store.loadJoinPrepared('j1'), null);
   assert.equal(await store.loadActionPrepared('a1'), null);
   assert.equal(await store.loadMatch(matchId), null);
+});
+
+test('pruning removes finished games after the retrieval window but keeps live ones', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-complete-prune-'));
+  const filePath = join(directory, 'games.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(filePath);
+  const expired = 'e'.repeat(64);
+  const recent = 'r'.repeat(64);
+  const lively = 'l'.repeat(64);
+  const old = new Date(Date.now() - GAME_RESULT_RETENTION_MS - 60_000).toISOString();
+
+  await store.saveGame({ gameId: expired, status: 'settled', createdAt: old, completedAt: old });
+  await store.saveGame({ gameId: recent, status: 'settled', createdAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+  await store.saveGame({ gameId: lively, status: 'joined', createdAt: old });
+
+  await store.init();
+
+  assert.equal(await store.loadGame(expired), null, 'a finished game past the window is removed');
+  assert.ok(await store.loadGame(recent), 'a just-finished game is still readable');
+  assert.ok(await store.loadGame(lively), 'an unfinished game is never pruned');
 });
 
 test('startup pruning removes expired durable preparations', async (t) => {

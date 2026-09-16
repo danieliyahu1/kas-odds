@@ -2,6 +2,7 @@ import { access, mkdir, readFile, rename, unlink, writeFile, constants } from 'n
 import { randomInt } from 'node:crypto';
 import { dirname } from 'node:path';
 import { ProtocolError } from './protocol.js';
+import { GAME_RESULT_RETENTION_MS } from './terminal-actions.js';
 import { noopMetrics } from './metrics.js';
 
 const MATCH_WAIT_TIMEOUT_MS = 30_000;
@@ -29,6 +30,7 @@ export class BackendGameStore {
   async init() {
     await mkdir(dirname(this.filePath), { recursive: true });
     await this.pruneExpiredPreparations();
+    await this.pruneCompletedGames();
   }
 
   async pruneExpiredPreparations(now = Date.now()) {
@@ -38,6 +40,19 @@ export class BackendGameStore {
           const createdAt = Date.parse(record.createdAt ?? '');
           if (Number.isFinite(createdAt) && now - createdAt >= PREPARATION_RETENTION_MS) delete collection[preparedHash];
         }
+      }
+    });
+  }
+
+  // A finished game stays in the store for a short retrieval window (the game's
+  // deadline plus 20%, measured from its start), then it is removed. Only
+  // terminal games are pruned, so a game still settling keeps its funds claimable.
+  async pruneCompletedGames(now = Date.now()) {
+    const data = await this.#read();
+    if (!Object.values(data.games).some((record) => isExpiredCompletedGame(record, now))) return;
+    await this.#update((current) => {
+      for (const [gameId, record] of Object.entries(current.games)) {
+        if (isExpiredCompletedGame(record, now)) delete current.games[gameId];
       }
     });
   }
@@ -70,10 +85,19 @@ export class BackendGameStore {
     await this.#update((data) => { data.games[record.gameId] = record; });
   }
 
+  // Completing a game drops everything that only mattered while it was live, but
+  // keeps the terminal record itself (with `completedAt`) so both players can
+  // still read the result. `pruneCompletedGames` removes it after the window.
   async completeGame(record) {
     return this.#updateWithResult((data) => {
-      if (!data.games[record.gameId]) return false;
-      delete data.games[record.gameId];
+      const stored = data.games[record.gameId];
+      if (!stored) return false;
+      data.games[record.gameId] = {
+        ...stored,
+        ...record,
+        status: record.status ?? stored.status,
+        completedAt: record.completedAt ?? stored.completedAt ?? new Date().toISOString(),
+      };
       if (record.matchId) {
         delete data.matches[record.matchId];
         data.queue = data.queue.filter((matchId) => matchId !== record.matchId);
@@ -126,25 +150,14 @@ export class BackendGameStore {
 
   async joinMatchmaking(player) {
     return this.#updateWithResult((data) => {
-      const now = Date.now();
-      for (const match of Object.values(data.matches)) {
-        if (!['waiting', 'matched'].includes(match.status)) continue;
-        const lastSeen = Math.min(...match.players.map((player) => Date.parse(player.lastSeenAt ?? player.joinedAt ?? '')));
-        if (!Number.isFinite(lastSeen) || now - lastSeen > MATCH_WAIT_TIMEOUT_MS) match.status = 'cancelled';
-      }
-      data.queue = data.queue.filter((matchId) => data.matches[matchId]?.status === 'waiting');
-      const active = Object.values(data.matches).find((match) => ['waiting', 'matched'].includes(match.status)
-        && match.players.some((item) => item.address === player.address));
-      if (active) {
-        active.status = 'cancelled';
-        data.queue = data.queue.filter((matchId) => matchId !== active.matchId);
-      }
+      sweepIdleMatches(data, Date.now());
+      cancelActiveMatchesFor(data, player.address);
 
       const waiting = data.queue
         .map((matchId) => data.matches[matchId])
-        .find((match) => match?.status === 'waiting');
+        .find((match) => match?.status === 'waiting' && !match.private);
       const limitKas = Number.isInteger(player.limitKas) ? player.limitKas : DEFAULT_LIMIT_KAS;
-      const participant = { ...player, limitKas, joinedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString() };
+      const participant = participantRecord(player, limitKas);
       if (!waiting) {
         const match = { matchId: player.matchId, status: 'waiting', players: [participant], stakeKas: null, createdAt: participant.joinedAt };
         data.matches[match.matchId] = match;
@@ -159,6 +172,46 @@ export class BackendGameStore {
       waiting.creatorSide = randomInt(2) === 0 ? 'even' : 'odd';
       data.queue = data.queue.filter((matchId) => matchId !== waiting.matchId);
       return waiting;
+    });
+  }
+
+  // A private room holds a fixed stake and never enters the public queue: only a
+  // player who has the invite id can take the second seat.
+  async createPrivateMatch(player) {
+    return this.#updateWithResult((data) => {
+      sweepIdleMatches(data, Date.now());
+      cancelActiveMatchesFor(data, player.address);
+      const participant = participantRecord(player, player.stakeKas);
+      const match = {
+        matchId: player.matchId,
+        status: 'waiting',
+        private: true,
+        stakeKas: player.stakeKas,
+        creatorSide: randomInt(2) === 0 ? 'even' : 'odd',
+        players: [participant],
+        createdAt: participant.joinedAt,
+      };
+      data.matches[match.matchId] = match;
+      return match;
+    });
+  }
+
+  async joinPrivateMatch(matchId, player) {
+    return this.#updateWithResult((data) => {
+      sweepIdleMatches(data, Date.now());
+      const match = data.matches[matchId];
+      if (!match?.private || !isLiveMatch(match)) {
+        throw new ProtocolError('MATCH_NOT_FOUND', 'This friend invite is no longer available');
+      }
+      // A reconnect by a player already in the room is idempotent.
+      if (match.players.some((item) => item.address === player.address)) return match;
+      if (match.status !== 'waiting' || match.players.length !== 1) {
+        throw new ProtocolError('MATCH_FULL', 'This friend invite has already been used');
+      }
+      match.players.push(participantRecord(player, match.stakeKas));
+      match.status = 'matched';
+      match.creatorIndex = 0;
+      return match;
     });
   }
 
@@ -201,7 +254,7 @@ export class BackendGameStore {
 
   async countWaitingMatches() {
     const data = await this.#read();
-    return Object.values(data.matches).filter((match) => match?.status === 'waiting').length;
+    return Object.values(data.matches).filter((match) => match?.status === 'waiting' && !match.private).length;
   }
 
   async #update(change) {
@@ -296,6 +349,48 @@ function normalizeData(value) {
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// A session with no player seen within the wait window is dead: it can never be
+// matched or joined, so it is cancelled and dropped from the public queue. The
+// same rule covers public matches and private friend rooms.
+function sweepIdleMatches(data, now) {
+  for (const match of Object.values(data.matches)) {
+    if (!isLiveMatch(match)) continue;
+    const lastSeen = Math.min(...match.players.map((player) => Date.parse(player.lastSeenAt ?? player.joinedAt ?? '')));
+    if (!Number.isFinite(lastSeen) || now - lastSeen > MATCH_WAIT_TIMEOUT_MS) match.status = 'cancelled';
+  }
+  pruneQueue(data);
+}
+
+// A wallet may hold only one live session, so opening a new one retires the old.
+function cancelActiveMatchesFor(data, address) {
+  for (const match of Object.values(data.matches)) {
+    if (!isLiveMatch(match)) continue;
+    if (match.players.some((item) => item.address === address)) match.status = 'cancelled';
+  }
+  pruneQueue(data);
+}
+
+function isLiveMatch(match) {
+  return Boolean(match) && (match.status === 'waiting' || match.status === 'matched');
+}
+
+// Only a public waiting session waits in the queue; private rooms are invite-only.
+function pruneQueue(data) {
+  data.queue = data.queue.filter((matchId) => data.matches[matchId]?.status === 'waiting' && !data.matches[matchId]?.private);
+}
+
+function participantRecord(player, limitKas) {
+  return { ...player, limitKas, joinedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString() };
+}
+
+// Only a terminal record past its retrieval window is eligible for pruning; an
+// unfinished game is never removed, so its funds stay claimable.
+function isExpiredCompletedGame(record, now) {
+  if (!record?.completedAt) return false;
+  const startedAt = Date.parse(record.createdAt ?? record.completedAt ?? '');
+  return Number.isFinite(startedAt) && now - startedAt >= GAME_RESULT_RETENTION_MS;
 }
 
 function clone(value) {

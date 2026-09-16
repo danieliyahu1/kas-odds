@@ -1,5 +1,4 @@
 import {
-  NETWORK,
   PROTOCOL_VERSION,
   ProtocolError,
   stakeToSompi,
@@ -9,6 +8,7 @@ import {
   validateSide,
   AUTOMATION_FEE_SOMPI,
 } from './protocol.js';
+import { resolveNetworkProfile } from './network.js';
 import { serializeInvite } from './invite.js';
 import { deriveGameInstance, EVEN_ODD_TEMPLATE } from './covenant/even-odd.mjs';
 import { blake2b256 } from './hashes/blake2b.mjs';
@@ -46,10 +46,10 @@ export function prepareCreateGame({
      creatorEven: side === 'even',
     gameWalletHash,
     settleFee: AUTOMATION_FEE_SOMPI,
-  });
+  }, { addressPrefix: resolveNetworkProfile(network).addressPrefix });
   return Object.freeze({
     protocolVersion: PROTOCOL_VERSION,
-    network: NETWORK,
+    network,
     creatorAddress,
     side,
     creatorEven: side === 'even',
@@ -199,7 +199,7 @@ async function confirmAndPresent({ record, request, prepared, chain, store, invi
     message: 'Game created. Waiting for Player B.',
     transactionId: confirmed.transactionId,
     gameId: confirmed.transactionId,
-    inviteUrl: serializeInvite({ gameId: confirmed.transactionId, origin: inviteOrigin }),
+    inviteUrl: serializeInvite({ gameId: confirmed.transactionId, origin: inviteOrigin, network: request.network }),
   });
 }
 

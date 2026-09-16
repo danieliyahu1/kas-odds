@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { BackendGameService } from '../src/backend-game-service.js';
 import { BackendGameStore } from '../src/backend-game-store.js';
 import { prepareCreateGame } from '../src/create-game.js';
+import { winnerPayoutSompi } from '../src/protocol.js';
+import { GAME_RESULT_RETENTION_MS } from '../src/terminal-actions.js';
 
 const NETWORK = 'testnet-10';
 const GAME_FEE_PUBLIC_KEY = '11'.repeat(32);
@@ -203,5 +205,86 @@ test('unlocks the button after a minute but keeps the original attempt', async (
   const stored = await store.loadGame(GAME_ID);
   assert.equal(stored.reveals.length, 1, 'the original attempt is not discarded');
   assert.equal(stored.reveals[0].status, 'broadcast');
+});
+
+test('does not confirm a reveal whose continuation is still only in the mempool', async (t) => {
+  const spk = '0000aa20' + '0a'.repeat(32) + '87';
+  const record = baseRecord({
+    reveals: [pendingReveal({ transactionId: 'aa'.repeat(32), address: 'kaspatest:cont-a', scriptPublicKey: spk, submittedAt: new Date().toISOString() })],
+  });
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-mempool-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame(record);
+  // The node reports the continuation with block DAA score 0 while it is only in
+  // the mempool; chaining a settlement onto it would be an orphan.
+  let blockDaaScore = 0;
+  const service = new BackendGameService({
+    rpc: {
+      getBlockDagInfo: async () => ({ virtualDaaScore: '3000' }),
+      getFeeEstimate: async () => ({ estimate: { priorityBucket: [{ feerate: 1 }] } }),
+      getUtxosByAddresses: async (addresses) => {
+        const [address] = addresses;
+        return address === 'kaspatest:cont-a'
+          ? { entries: [{ outpoint: { transactionId: 'aa'.repeat(32), index: 0 }, amount: GROSS_POT, scriptPublicKey: spk, blockDaaScore, isCoinbase: false }] }
+          : { entries: [] };
+      },
+    },
+    store,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+
+  const unmined = await service.readGame(GAME_ID);
+  assert.equal(unmined.status, 'reveal_broadcast', 'a mempool parent must not count as confirmed');
+  assert.equal(unmined.revealCount, 0);
+
+  blockDaaScore = 100;
+  const mined = await service.readGame(GAME_ID);
+  assert.equal(mined.status, 'first_revealed');
+  assert.deepEqual(mined.revealedPicks, { creator: 1 });
+});
+
+test('keeps a finished game readable, then prunes it after the retrieval window', async (t) => {
+  const createdAt = new Date().toISOString();
+  const payoutSpk = `000020${CREATOR_PUBLIC_KEY}ac`;
+  const settlement = {
+    ...pendingReveal({ transactionId: 'ee'.repeat(32), address: CREATOR_ADDRESS, scriptPublicKey: payoutSpk, submittedAt: createdAt }),
+    winner: 'creator',
+    payoutAddress: CREATOR_ADDRESS,
+  };
+  const record = baseRecord({ createdAt, reveals: [settlement] });
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-retain-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame(record);
+  const payout = winnerPayoutSompi(BigInt(record.request.stakeSompi));
+  const service = new BackendGameService({
+    rpc: {
+      getBlockDagInfo: async () => ({ virtualDaaScore: '3000' }),
+      getFeeEstimate: async () => ({ estimate: { priorityBucket: [{ feerate: 1 }] } }),
+      getUtxosByAddresses: async (addresses) => {
+        const [address] = addresses;
+        return address === CREATOR_ADDRESS
+          ? { entries: [{ outpoint: { transactionId: settlement.transactionId, index: 0 }, amount: String(payout), scriptPublicKey: payoutSpk, blockDaaScore: 100, isCoinbase: false }] }
+          : { entries: [] };
+      },
+    },
+    store,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+
+  const firstReader = await service.readGame(GAME_ID);
+  assert.equal(firstReader.status, 'settled');
+  assert.equal(firstReader.winner, 'creator');
+
+  const retained = await store.loadGame(GAME_ID);
+  assert.equal(retained.status, 'settled');
+  assert.ok(retained.completedAt, 'the terminal record is kept with a completion timestamp');
+
+  const secondReader = await service.readGame(GAME_ID);
+  assert.equal(secondReader.status, 'settled', 'the second revealer can still read the result');
+
+  await store.pruneCompletedGames(Date.parse(createdAt) + GAME_RESULT_RETENTION_MS + 1_000);
+  await assert.rejects(service.readGame(GAME_ID), { code: 'GAME_NOT_FOUND' });
 });
 

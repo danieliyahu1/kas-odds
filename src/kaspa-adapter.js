@@ -45,7 +45,7 @@ export class KaspaCreationConfirmer {
           && BigInt(candidate.amount) === this.playerLockSompi
           && (!this.scriptPublicKey || script === this.scriptPublicKey);
       });
-      if (entry && virtualDaaScore >= BigInt(entry.blockDaaScore) + this.confirmationDepth) {
+      if (entry && isMinedDaaScore(entry.blockDaaScore) && virtualDaaScore >= BigInt(entry.blockDaaScore) + this.confirmationDepth) {
         return {
           status: 'confirmed',
           acceptingDaaScore: String(entry.blockDaaScore),
@@ -61,4 +61,14 @@ export class KaspaCreationConfirmer {
 
 function defaultWait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+// The node reports a UTXO it only knows from the mempool with block DAA score 0.
+// It is visible but not yet mined, so it cannot anchor a chained spend.
+export function isMinedDaaScore(blockDaaScore) {
+  try {
+    return BigInt(blockDaaScore ?? 0) > 0n;
+  } catch {
+    return false;
+  }
 }

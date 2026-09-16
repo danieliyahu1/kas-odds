@@ -15,6 +15,7 @@ import { parseTemplateArtifact } from '../src/covenant/even-odd-core.mjs';
 
 const FEE_PUBLIC_KEY = '11'.repeat(32);
 const gameWalletHash = bytesToHex(blake2b256(hexToBytes(FEE_PUBLIC_KEY))).toLowerCase();
+const deriveOnTestnet = (game, opts = {}) => deriveGameInstance(game, { ...opts, addressPrefix: 'kaspatest' });
 
 test('blake2b-256 single block matches published vector', () => {
   // abc -> published BLAKE2b-256 digest
@@ -31,7 +32,7 @@ test('blake2b-256 multi-block matches the covenant-oracle digest', () => {
   // wallet_pk=0x11*32 (game_wallet_hash = blake2b(wallet_pk)).
   const creatorPubkey = new Array(32).fill(7);
   const creatorCommit = new Array(32).fill(9);
-  const inst = deriveGameInstance({ creatorPubkey, creatorCommit, stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash });
+  const inst = deriveOnTestnet({ creatorPubkey, creatorCommit, stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash });
   assert.equal(inst.redeemScript.length, 1769);
   assert.equal(
     Buffer.from(blake2b256(Uint8Array.from(inst.redeemScript))).toString('hex'),
@@ -96,7 +97,7 @@ test('pinned SilverScript release matches the loaded artifact', () => {
 test('per-game instance matches the covenant-oracle P2SH address', () => {
   const creatorPubkey = new Array(32).fill(7);
   const creatorCommit = new Array(32).fill(9);
-  const inst = deriveGameInstance({ creatorPubkey, creatorCommit, stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash });
+  const inst = deriveOnTestnet({ creatorPubkey, creatorCommit, stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash });
   // Governed by the Rust covenant-oracle: encode_runtime_state_script + script_parts
   // + Address::new(Testnet, ScriptHash, blake2b256(instance)).
   assert.equal(inst.address, 'kaspatest:ppfa8qxsndz66jcnlyhljadjcsky2cv9vfqhk7u2pcypkwh5q9z47yvzemczr');
@@ -109,17 +110,32 @@ test('per-game instance matches the covenant-oracle P2SH address', () => {
   assert.equal(parseCovenantAddress(inst.address).version, 8);
 });
 
+test('derives the same mainnet script with a kaspa-prefixed address', () => {
+  const game = { creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash };
+  const testnet = deriveOnTestnet(game);
+  const mainnet = deriveGameInstance(game, { addressPrefix: 'kaspa' });
+  assert.equal(mainnet.address.startsWith('kaspa:'), true);
+  assert.notEqual(mainnet.address, testnet.address);
+  assert.equal(mainnet.p2shScript.toString('hex'), testnet.p2shScript.toString('hex'));
+  assert.equal(mainnet.templateHash, testnet.templateHash);
+});
+
+test('requires an address prefix to derive a covenant instance', () => {
+  const game = { creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash };
+  assert.throws(() => deriveGameInstance(game), { code: 'INVALID_STATE' });
+});
+
 test('different game state produces a different covenant address', () => {
   const base = { creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash };
-  const a = deriveGameInstance(base);
-  const b = deriveGameInstance({ ...base, creatorPubkey: new Array(32).fill(8) });
+  const a = deriveOnTestnet(base);
+  const b = deriveOnTestnet({ ...base, creatorPubkey: new Array(32).fill(8) });
   assert.notEqual(a.address, b.address);
 });
 
 test('rejects invalid game state', () => {
-  assert.throws(() => deriveGameInstance({ creatorPubkey: [1, 2, 3], creatorCommit: new Array(32).fill(9), stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash }));
-  assert.throws(() => deriveGameInstance({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: -1n, deadlineDaa: 500000000000n, gameWalletHash }));
-  assert.throws(() => deriveGameInstance({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 99999999n, deadlineDaa: 500000000000n, gameWalletHash }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveOnTestnet({ creatorPubkey: [1, 2, 3], creatorCommit: new Array(32).fill(9), stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash }));
+  assert.throws(() => deriveOnTestnet({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: -1n, deadlineDaa: 500000000000n, gameWalletHash }));
+  assert.throws(() => deriveOnTestnet({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 99999999n, deadlineDaa: 500000000000n, gameWalletHash }), { code: 'INVALID_STATE' });
 });
 
 test('rejects artifact ABI drift early and explicitly', () => {
@@ -141,12 +157,12 @@ test('rejects artifact ABI drift early and explicitly', () => {
 
 test('rejects stale status and creator-side vocabulary', () => {
   const base = { creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash };
-  assert.throws(() => deriveGameInstance({ ...base, status: 3 }), { code: 'INVALID_STATE' });
-  assert.throws(() => deriveGameInstance({ ...base, creatorEven: 2 }), { code: 'INVALID_STATE' });
-  assert.throws(() => deriveGameInstance({ ...base, creatorChoice: 2 }), { code: 'INVALID_STATE' });
-  assert.throws(() => deriveGameInstance({ ...base, settleFee: 1n }), { code: 'INVALID_STATE' });
-  assert.throws(() => deriveGameInstance({ ...base, settleFee: -2n }), { code: 'INVALID_STATE' });
-  assert.throws(() => deriveGameInstance({ ...base, settleFee: 3_200_000 }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveOnTestnet({ ...base, status: 3 }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveOnTestnet({ ...base, creatorEven: 2 }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveOnTestnet({ ...base, creatorChoice: 2 }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveOnTestnet({ ...base, settleFee: 1n }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveOnTestnet({ ...base, settleFee: -2n }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveOnTestnet({ ...base, settleFee: 3_200_000 }), { code: 'INVALID_STATE' });
 });
 
 function sha256(relativePath) {

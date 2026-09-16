@@ -7,28 +7,54 @@
 // delegated to the app server, which only ever sees the commitment hash (not
 // the number) until the reveal makes it public on-chain.
 import { bindSecretToGame, createRevealSecret, deleteSecretForGame, loadSecretForGame } from '/secrets.js';
-import { verifyCreation, verifyPreparedTransaction } from '/verify.js';
+import { loadCovenantTemplate, verifyCreation, verifyPreparedTransaction } from '/verify.js';
 import { logDebug, logInfo, logWarn, logError } from '/log.js';
 import { signWithKasware as kaswareSignPskt } from '/kasware-signing.js';
-import { createLatestRequestGate, createPollController, isTerminalGameStatus } from '/app-controller.js';
+import { connectKaswareAccount } from '/kasware-connect.js';
+import { actionErrorCopy, createLatestRequestGate, createPollController, isTerminalGameStatus } from '/app-controller.js';
+import { LOBBY_MODE, LOBBY_PHASE, createLobbyController } from './lobby-controller.js';
+import { loadRuntimeConfig, runtimeConfig } from '/runtime-config.js';
 
-const NETWORK = 'testnet-10';
-const KASWARE_NETWORK = 'kaspa_testnet_10';
 const app = document.querySelector('#app');
 const params = new URLSearchParams(location.search);
 const KASWARE_DOWNLOAD = 'https://chromewebstore.google.com/detail/kasware-wallet/hklhheigdmpoolooomdihmhlpjjdbklf';
+
+// Client-side timing for the pre-signature pipeline. The backend prepares in a
+// few hundred milliseconds; everything after that until KasWare opens is either
+// our own verification or the wallet extension. These marks make the split
+// visible in the console (`?debug=1`) so a slow lock can be attributed.
+function nowMs() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
+async function timedStep(step, run) {
+  const startedAt = nowMs();
+  try {
+    return await run();
+  } finally {
+    logInfo('lock_step_timing', { step, ms: Math.round(nowMs() - startedAt) });
+  }
+}
 
 const gamePoller = createPollController({ onPoll: (gameId) => refreshGame(gameId), intervalMs: 3500 });
 const gameRequestGate = createLatestRequestGate();
 
 export async function boot() {
   try {
+    // Warm the covenant artifact now so the first lock never waits on it.
+    void loadCovenantTemplate().catch(() => {});
+    cachedConfig = await loadRuntimeConfig();
+    applyNetworkLabel(cachedConfig.network);
     initWalletButton();
     initFeedback();
-    if (location.pathname === '/join') return renderJoinEntry(params.get('game'));
+    if (location.pathname === '/join') {
+      const room = params.get('room');
+      if (isRoomId(room)) return renderLobby({ mode: 'guest', roomId: room });
+      return renderBackendError('That invite link doesn\u2019t look right.');
+    }
     if (location.pathname === '/game') return renderGame(params.get('id') ?? params.get('game'));
-    if (location.pathname === '/host') return renderCreate();
-    if (location.pathname === '/rival') return renderMatchmaking();
+    if (location.pathname === '/host') return renderLobby({ mode: 'host', roomId: isRoomId(params.get('room')) ? params.get('room') : null });
+    if (location.pathname === '/rival') return renderLobby({ mode: 'public' });
     renderHome();
   } catch (error) {
     logError('boot_failed', { code: error.code, message: error.message });
@@ -36,338 +62,207 @@ export async function boot() {
   }
 }
 
+function applyNetworkLabel(network) {
+  const label = document.querySelector('#network-label');
+  if (label) label.textContent = network;
+}
+
 function renderHome() {
   app.innerHTML = `
     <section class="panel home-panel" aria-label="Play Even Odd">
       <div class="panel-head">
         <h1>Even / Odd</h1>
-        <p class="lead">A quick game of chance on Kaspa.</p>
+        <p class="lead">Two players. Two secret numbers. The total decides who takes the pot.</p>
       </div>
       <div class="home-actions">
-        <a class="primary home-button" href="/rival">Find a rival</a>
+        <a class="primary home-button" href="/rival">Play someone new</a>
         <a class="outline home-button" href="/host">Play with a friend</a>
       </div>
     </section>`;
 }
 
-function renderMatchmaking() {
-  app.innerHTML = `
-    <a class="back" href="/">Back</a>
-    <section class="panel" aria-label="Find a rival">
-      <div class="panel-head"><h2>Find a rival</h2><p class="lead">Your limit &mdash; the most you're comfortable playing. We match you with anyone; the lower limit sets the game.</p></div>
-      <div id="matchmaking-content">
-        <div class="stake-block">
-          <div class="stake-label-row">
-            <label for="match-limit">Play up to (KAS)</label>
-          </div>
-          <input id="match-limit" type="number" min="1" max="1000000" step="1" value="1" class="stake-input" aria-label="Play up to in KAS">
-          <p class="fate">Up to <span id="match-limit-fate">1 KAS</span> &mdash; matched with anyone.</p>
+function renderLobby({ mode, roomId = null }) {
+  const controller = createLobbyController({
+    mode,
+    roomId,
+    api,
+    connect: connectWallet,
+    sign: signWithKasware,
+    createSecret: createRevealSecret,
+    verifyCreation,
+    verifyPrepared: verifyPreparedTransaction,
+    bindSecret: bindSecretToGame,
+    gameFeePublicKey,
+    addressPrefix: () => runtimeConfig().addressPrefix,
+    remember: rememberAddress,
+    navigate: (path) => { location.href = path; },
+    replaceUrl: (path) => history.replaceState(null, '', path),
+    render: paintLobby,
+    logger: { info: logInfo, warn: logWarn, error: logError },
+    step: timedStep,
+  });
+  controller.start();
+  return controller;
+}
+
+// Thin DOM view for the lobby controller. The controller owns the phase; this
+// renders exactly one panel per phase, so the heading and body cannot drift from
+// the step the player is actually on. Every action is delegated back to the
+// controller.
+function paintLobby(snapshot, actions) {
+  const { mode, phase, match, number, draft, busy, note, error } = snapshot;
+  const label = mode === LOBBY_MODE.PUBLIC ? 'Play someone new' : 'Play with a friend';
+  const notice = `<div id="lobby-notice">${lobbyNoticeHtml(note)}</div>`;
+  const startButton = `<div class="actions"><button type="button" class="primary" id="lobby-start"${busy ? ' disabled' : ''}>`;
+  const cancelButton = '<div class="actions"><button type="button" class="outline" id="lobby-leave">Cancel</button></div>';
+  const paint = (title, body) => {
+    app.innerHTML = `
+      <a class="back" href="/">Back</a>
+      <section class="panel" aria-label="${label}">
+        <div class="panel-head"><h2>${escapeHtml(title)}</h2></div>
+        ${body}
+      </section>`;
+  };
+  const bindStart = (handler) => document.querySelector('#lobby-start').addEventListener('click', handler);
+
+  if (phase === LOBBY_PHASE.LIMIT) {
+    paint('Play someone new', `
+      <p class="lead">Set the most you'll play. We match you with one player &mdash; the lower of your two limits is the stake.</p>
+      <div class="stake-block">
+        <div class="stake-label-row"><label for="match-limit">Play up to (KAS)</label></div>
+        <input id="match-limit" type="number" min="1" max="1000000" step="1" value="${escapeHtml(draft ?? '1')}" class="stake-input" aria-label="Play up to in KAS">
+        <p class="fate">You'll never play for more than this.</p>
+      </div>
+      ${notice}
+      ${startButton}Find a player</button></div>`);
+    bindStart(() => void actions.connectLimit(document.querySelector('#match-limit').value));
+    return;
+  }
+
+  if (phase === LOBBY_PHASE.HOST_FORM) {
+    paint('Play with a friend', `
+      <p class="lead">Set the stake, then share the link. You'll both pick a number once your friend joins.</p>
+      <div class="stake-block">
+        <div class="stake-label-row"><label for="host-stake">Stake (KAS)</label></div>
+        <input id="host-stake" type="number" min="1" max="1000000" step="1" value="${escapeHtml(draft ?? '1')}" class="stake-input" aria-label="Stake in KAS">
+        <p class="fate">Winner takes the <span id="host-pot">2 KAS</span> pot.</p>
+      </div>
+      ${notice}
+      ${startButton}Create invite</button></div>`);
+    const stakeInput = document.querySelector('#host-stake');
+    stakeInput.addEventListener('input', () => {
+      const shown = Math.min(1000000, Math.max(1, Math.floor(Number(stakeInput.value) || 1)));
+      document.querySelector('#host-pot').textContent = `${shown * 2} KAS`;
+    });
+    bindStart(() => void actions.connectHost(stakeInput.value));
+    return;
+  }
+
+  if (phase === LOBBY_PHASE.GUEST_ENTRY) {
+    paint('Join your friend', `
+      <p class="lead">Connect your wallet to take the second seat.</p>
+      ${notice}
+      ${startButton}Connect wallet</button></div>`);
+    bindStart(() => void actions.connectGuest());
+    return;
+  }
+
+  if (phase === LOBBY_PHASE.RESUME) {
+    paint('Play with a friend', `
+      <p class="lead">Reconnect your wallet to return to your game.</p>
+      ${notice}
+      ${startButton}Reconnect</button></div>`);
+    bindStart(() => void actions.resume());
+    return;
+  }
+
+  if (phase === LOBBY_PHASE.WAITING) {
+    if (mode === LOBBY_MODE.PUBLIC) {
+      paint('Looking for a player', `
+        <div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Your limit: up to ${escapeHtml(match.myLimitKas)} KAS.</span></div>
+        <p class="muted-note">You'll pick your number when we match.</p>
+        ${cancelButton}`);
+    } else {
+      const link = roomInviteUrl(match.matchId);
+      paint('Waiting for your friend', `
+        <p class="lead">Share this link. You'll both pick a number once they join.</p>
+        <div class="invite-box" id="invite-box">
+          <p class="muted-note">${escapeHtml(link)}</p>
+          <button class="share-button" data-action="copy-link">Copy link</button>
         </div>
-        <div class="actions"><button type="button" class="primary" id="match-start">Find a rival</button></div>
-      </div>
-    </section>`;
-
-  const content = document.querySelector('#matchmaking-content');
-  let provider;
-  let account;
-  let match;
-  const matchPoller = createPollController({ onPoll: () => refreshMatch(), intervalMs: 2500 });
-  let number = null;
-  let started = false;
-
-  const limitInput = document.querySelector('#match-limit');
-  const limitFate = document.querySelector('#match-limit-fate');
-  const rawLimit = () => Math.floor(Number(limitInput.value) || 1);
-  const syncLimit = () => { limitFate.textContent = `${Math.min(1000000, Math.max(1, rawLimit()))} KAS`; };
-  limitInput.addEventListener('input', syncLimit);
-  syncLimit();
-
-  async function startMatchmaking() {
-    const button = document.querySelector('#match-start');
-    const typed = Number(limitInput.value);
-    if (!Number.isInteger(typed) || typed < 1 || typed > 1000000) {
-      return showNotice('#matchmaking-content', 'Enter a limit', 'Use a whole number from 1 to 1,000,000 KAS.', 'error');
+        <p class="fate">Stake: ${escapeHtml(match.stakeKas)} KAS each &mdash; winner takes the ${escapeHtml(match.stakeKas * 2)} KAS pot.</p>
+        ${cancelButton}`);
+      bindShare(link);
     }
-    button.disabled = true;
-    try {
-      ({ provider, account } = await connectKasware('#matchmaking-content'));
-      rememberAddress(account.address);
-      match = await api('/api/matchmaking/join', { method: 'POST', body: { address: account.address, publicKey: account.publicKey, limitKas: rawLimit() } });
-      renderMatchState();
-      matchPoller.start();
-      await refreshMatch();
-    } catch (error) {
-      button.disabled = false;
-      logError('matchmaking_failed', { code: error.code, message: error.message });
-      if (guardKaswareShortfall('#matchmaking-content', error)) return;
-      showNotice('#matchmaking-content', 'Could not find a rival', error.message, 'error');
-    }
+    document.querySelector('#lobby-leave').addEventListener('click', () => void actions.leave());
+    return;
   }
 
-  document.querySelector('#match-start').addEventListener('click', startMatchmaking);
-
-  function renderMatchState() {
-    if (match.status === 'waiting') {
-      content.innerHTML = `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Finding your rival</span></div><p class="muted-note">Up to ${escapeHtml(match.myLimitKas)} KAS. You'll pick your number once we match.</p><button type="button" class="outline" id="match-leave">Cancel</button>`;
-      document.querySelector('#match-leave').addEventListener('click', leave);
-      return;
-    }
-    if (match.status === 'cancelled' || !match.opponentConnected) {
-      content.innerHTML = '<div class="notice error"><strong>Your rival left.</strong>No KAS was locked.</div><div class="actions"><a class="primary home-button" href="/rival">Find another rival</a></div>';
-      return;
-    }
-    // The creator starts the game by signing; the matched rival joins once the
-    // on-chain game appears (the join transaction spends the creator output).
-    if (match.role === 'creator' && match.gameId) {
-      location.href = `/game?id=${match.gameId}`;
-      return;
-    }
-    if ((match.role === 'creator' && !match.gameId) || (match.role === 'joiner' && match.gameId)) {
-      renderMatchPlay();
-      return;
-    }
-    content.innerHTML = `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for your rival to create the game</span></div><button type="button" class="outline" id="match-leave">Cancel</button>`;
-    document.querySelector('#match-leave').addEventListener('click', leave);
-  }
-
-  function renderMatchPlay() {
-    const isCreator = match.role === 'creator';
-    content.innerHTML = `
-      <div class="notice"><strong>Rival found.</strong>You're ${escapeHtml(capitalize(match.side))}. The game is <strong>${escapeHtml(match.stakeKas)} KAS each</strong>.</div>
-      <p class="muted-note">You were in for up to ${escapeHtml(match.myLimitKas)} KAS. Your rival up to ${escapeHtml(match.rivalLimitKas)}. The lower limit wins.</p>
-      <div class="summary">
-        <div class="sum-item"><small>Stake</small><strong>${escapeHtml(match.stakeKas)} KAS</strong></div>
-        <div class="sum-item"><small>Pot</small><strong>${escapeHtml(match.stakeKas * 2)} KAS</strong></div>
-      </div>
+  if (phase === LOBBY_PHASE.PICK) {
+    const selected = (value) => number === value;
+    paint("You're matched", `
+      <p class="lead">You're <strong class="side-strong">${escapeHtml(capitalize(match.side))}</strong>. <strong>${escapeHtml(match.stakeKas)} KAS</strong> each.</p>
+      <p class="fate">${winnerSummary(match.stakeKas)}</p>
       <fieldset class="choice-group">
         <legend>Your number</legend>
         <div class="choice-row">
-          <button type="button" class="choice num" data-match-number="1" aria-pressed="false"><span class="num-big">1</span><small class="num-tag">Odd</small></button>
-          <button type="button" class="choice num" data-match-number="0" aria-pressed="false"><span class="num-big">2</span><small class="num-tag">Even</small></button>
+          <button type="button" class="choice num${selected(1) ? ' selected' : ''}" data-match-number="1" aria-pressed="${selected(1)}"><span class="num-big">1</span></button>
+          <button type="button" class="choice num${selected(0) ? ' selected' : ''}" data-match-number="0" aria-pressed="${selected(0)}"><span class="num-big">2</span></button>
         </div>
       </fieldset>
       <div id="match-number-notice"></div>
-      <div class="actions"><button type="button" class="primary" id="match-play" disabled>${isCreator ? 'Create' : 'Join'} for ${escapeHtml(match.stakeKas)} KAS</button></div>`;
-    document.querySelectorAll('[data-match-number]').forEach((button) => button.addEventListener('click', () => {
-      number = Number(button.dataset.matchNumber);
-      document.querySelectorAll('[data-match-number]').forEach((item) => {
-        const selected = item === button;
-        item.classList.toggle('selected', selected);
-        item.setAttribute('aria-pressed', String(selected));
-      });
-      document.querySelector('#match-play').disabled = false;
-    }));
-    document.querySelector('#match-play').addEventListener('click', () => {
-      started = true;
-      matchPoller.stop();
-      if (isCreator) void startCreation();
-      else void startJoin();
-    });
+      <div class="actions"><button type="button" class="primary" id="match-play"${number === null ? ' disabled' : ''}>Play for ${escapeHtml(match.stakeKas)} KAS</button></div>`);
+    document.querySelectorAll('[data-match-number]').forEach((button) => button.addEventListener('click', () => actions.selectNumber(Number(button.dataset.matchNumber))));
+    document.querySelector('#match-play').addEventListener('click', () => void actions.play());
+    return;
   }
 
-  async function refreshMatch() {
-    if (started) return;
-    try {
-      const previous = match;
-      match = await api(`/api/matchmaking/${match.matchId}?address=${encodeURIComponent(account.address)}`);
-      const changed = previous.status !== match.status
-        || previous.opponentConnected !== match.opponentConnected
-        || previous.gameId !== match.gameId
-        || previous.stakeKas !== match.stakeKas;
-      if (changed) renderMatchState();
-    } catch (error) {
-      if (error.code === 'MATCH_NOT_FOUND') matchPoller.stop();
+  if (phase === LOBBY_PHASE.PREPARING) {
+    paint('Getting your game ready', `
+      <div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">This only takes a moment.</span></div>`);
+    return;
+  }
+
+  if (phase === LOBBY_PHASE.WALLET) {
+    paint('Confirm in your wallet', `
+      <p class="lead">Approve <strong>${escapeHtml(lockKas(match.stakeKas))} KAS</strong>.</p>
+      <p class="muted-note">Your stake stays locked until the game ends.</p>`);
+    return;
+  }
+
+  if (phase === LOBBY_PHASE.ABANDONED) {
+    if (mode === LOBBY_MODE.PUBLIC) {
+      paint('Your opponent left', `
+        <div class="notice"><strong>No KAS was locked.</strong></div>
+        <div class="actions"><a class="primary home-button" href="/rival">Find another player</a></div>`);
+    } else {
+      paint('Your friend left', `
+        <div class="notice"><strong>No KAS was locked.</strong></div>
+        <div class="actions"><a class="primary home-button" href="/host">Start a new game</a></div>`);
     }
+    return;
   }
 
-  async function startCreation() {
-    try {
-      content.innerHTML = `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Preparing your ${escapeHtml(match.stakeKas)} KAS game</span></div>`;
-      const secret = await createRevealSecret(number, { operationKey: `creation:${match.matchId}` });
-      const prepared = await api('/api/games/prepare', { method: 'POST', body: {
-        creatorAddress: account.address,
-        creatorPublicKey: account.publicKey,
-        creatorCommitment: secret.commitment,
-        side: match.side,
-        stakeKas: match.stakeKas,
-        matchId: match.matchId,
-      } });
-      const verified = await verifyCreation({ txJson: prepared.txJson, creatorPublicKey: account.publicKey, creatorCommitment: secret.commitment, side: match.side, stakeKas: match.stakeKas, deadlineDaa: prepared.deadlineDaa, gameFeePublicKey: await gameFeePublicKey(), feeSompi: prepared.feeSompi, changeScriptPublicKey: prepared.changeScriptPublicKey });
-      showNotice('#matchmaking-content', 'Confirm in KasWare', `Approve ${lockKas(match.stakeKas)} KAS (your full stake).`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
-      if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
-      const game = await api('/api/games/submit', { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson, matchId: match.matchId } });
-      await bindSecretToGame(game.gameId, secret.secretId);
-      location.href = `/game?id=${game.gameId}`;
-    } catch (error) {
-      showMatchStartError(error);
-    }
-  }
-
-  async function startJoin() {
-    try {
-      content.innerHTML = `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Preparing your ${escapeHtml(match.stakeKas)} KAS game</span></div>`;
-      await waitForJoinableGame(match.gameId);
-      const secret = await createRevealSecret(number, { operationKey: `join:${match.gameId}` });
-      await bindSecretToGame(match.gameId, secret.secretId);
-      const prepared = await api(`/api/games/${match.gameId}/join/prepare`, { method: 'POST', body: {
-        joinerAddress: account.address,
-        joinerPublicKey: account.publicKey,
-        joinerCommitment: secret.commitment,
-        matchId: match.matchId,
-      } });
-      const verified = verifyPreparedTransaction(prepared, 'join');
-      showNotice('#matchmaking-content', 'Confirm in KasWare', `Approve ${lockKas(match.stakeKas)} KAS (your full stake).`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
-      if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
-      await api(`/api/games/${match.gameId}/join/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
-      location.href = `/game?id=${match.gameId}`;
-    } catch (error) {
-      showMatchStartError(error);
-    }
-  }
-
-  async function waitForJoinableGame(gameId) {
-    while (true) {
-      const game = await api(`/api/games/${gameId}`);
-      if (game.canJoin) return;
-      await new Promise((resolve) => setTimeout(resolve, 2500));
-    }
-  }
-
-  function showMatchStartError(error) {
-    started = false;
-    logError('match_start_failed', { code: error.code, message: error.message });
-    const copy = actionErrorCopy(error);
-    content.innerHTML = `<div class="notice error"><strong>${escapeHtml(copy.title)}</strong>${escapeHtml(copy.message)}</div><div class="actions"><button type="button" class="primary" id="match-retry">Try again</button></div>`;
-    document.querySelector('#match-retry').addEventListener('click', () => {
-      started = true;
-      if (match.role === 'creator') void startCreation();
-      else void startJoin();
-    });
-  }
-
-  async function leave() {
-    matchPoller.stop();
-    await api(`/api/matchmaking/${match.matchId}/leave`, { method: 'POST', body: { address: account.address } }).catch(() => {});
-    location.href = '/';
-  }
+  const retry = error?.action === 'start' ? actions.retryStart : error?.action === 'lobby' ? actions.retry : null;
+  paint(error?.title ?? 'Please try again', `
+    <div class="notice error"><strong>${escapeHtml(error?.message ?? 'Something went wrong.')}</strong></div>
+    ${retry
+      ? '<div class="actions"><button type="button" class="primary" id="lobby-retry">Try again</button></div>'
+      : '<div class="actions"><a class="primary home-button" href="/">Back to start</a></div>'}`);
+  if (retry) document.querySelector('#lobby-retry').addEventListener('click', () => void retry());
 }
 
-function renderCreate() {
-  app.innerHTML = `
-    <section class="panel" aria-label="Start a game">
-      <div class="panel-head">
-        <h1>Even / Odd</h1>
-      </div>
-      <form class="form" id="create-form">
-        <fieldset class="choice-group">
-          <legend>Your side</legend>
-          <div class="choice-row">
-            <button type="button" class="choice selected" data-side="even" aria-pressed="true">Even</button>
-            <button type="button" class="choice" data-side="odd" aria-pressed="false">Odd</button>
-          </div>
-        </fieldset>
-        <fieldset class="choice-group">
-          <legend>Your number</legend>
-          <div class="choice-row">
-            <button type="button" class="choice num" data-commit-number="1" aria-pressed="false"><span class="num-big">1</span><small class="num-tag">Odd</small></button>
-            <button type="button" class="choice num" data-commit-number="0" aria-pressed="false"><span class="num-big">2</span><small class="num-tag">Even</small></button>
-          </div>
-        </fieldset>
-        <div class="stake-block">
-          <div class="stake-label-row">
-            <label for="stake">Your stake (KAS)</label>
-          </div>
-          <input id="stake" type="number" min="1" max="1000000" step="1" value="1" aria-label="Stake in KAS" class="stake-input">
-          <p class="fate">Winner takes the pot &mdash; <span id="stake-fate">2 KAS</span>.</p>
-        </div>
-        <div id="create-notice"></div>
-        <p class="muted-note">Your number is saved only in this browser. Clearing site data before you reveal forfeits your stake.</p>
-        <div class="actions">
-          <button type="submit" class="primary" id="create-submit">Play for 1 KAS</button>
-        </div>
-      </form>
-    </section>`;
-
-  let side = 'even';
-  let number = null;
-
-  document.querySelectorAll('[data-side]').forEach((button) => {
-    button.addEventListener('click', () => {
-      side = button.dataset.side;
-      document.querySelectorAll('[data-side]').forEach((item) => {
-        const selected = item === button;
-        item.classList.toggle('selected', selected);
-        item.setAttribute('aria-pressed', String(selected));
-      });
-    });
-  });
-  document.querySelectorAll('[data-commit-number]').forEach((button) => {
-    button.addEventListener('click', () => {
-      number = Number(button.dataset.commitNumber);
-      document.querySelectorAll('[data-commit-number]').forEach((item) => {
-        const selected = item === button;
-        item.classList.toggle('selected', selected);
-        item.setAttribute('aria-pressed', String(selected));
-      });
-    });
-  });
-
-  const stakeInput = document.querySelector('#stake');
-  const stakeFate = document.querySelector('#stake-fate');
-  const submit = document.querySelector('#create-submit');
-
-  const stakeState = () => {
-    const raw = Math.floor(Number(stakeInput.value) || 1);
-    return Math.min(1000000, Math.max(1, raw));
-  };
-  const syncStake = () => {
-    const stake = stakeState();
-    submit.textContent = `Play for ${stake} KAS`;
-    stakeFate.textContent = `${stake * 2} KAS`;
-  };
-  stakeInput.addEventListener('input', syncStake);
-  syncStake();
-
-  document.querySelector('#create-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const stake = stakeState();
-    if (!Number.isInteger(Number(stakeInput.value)) || Number(stakeInput.value) < 1 || Number(stakeInput.value) > 1000000) {
-      return showNotice('#create-notice', 'Enter a stake', 'Use a whole number from 1 to 1,000,000 KAS.', 'error');
-    }
-    if (number === null) return showNotice('#create-notice', 'Pick a number', 'Choose 1 or 2 before you play.', 'error');
-    submit.disabled = true;
-    try {
-      const { provider, account } = await connectKasware('#create-notice');
-      rememberAddress(account.address);
-      const secret = await createRevealSecret(number, { operationKey: `creation:${account.address}:${side}:${stake}` });
-      const prepared = await api('/api/games/prepare', { method: 'POST', body: {
-        creatorAddress: account.address,
-        creatorPublicKey: account.publicKey,
-        creatorCommitment: secret.commitment,
-        side,
-        stakeKas: stake,
-      } });
-      const verified = await verifyCreation({ txJson: prepared.txJson, creatorPublicKey: account.publicKey, creatorCommitment: secret.commitment, side, stakeKas: stake, deadlineDaa: prepared.deadlineDaa, gameFeePublicKey: await gameFeePublicKey(), feeSompi: prepared.feeSompi, changeScriptPublicKey: prepared.changeScriptPublicKey });
-      showNotice('#create-notice', 'Confirm in KasWare', `Approve ${lockKas(stake)} KAS (your full stake). Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
-      if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
-      const game = await api('/api/games/submit', { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
-      await bindSecretToGame(game.gameId, secret.secretId);
-      location.href = `/game?id=${game.gameId}`;
-    } catch (error) {
-      submit.disabled = false;
-      logError('create_game_failed', { code: error.code, message: error.message });
-      if (guardKaswareShortfall('#create-notice', error)) return;
-      showNotice('#create-notice', 'Game was not created', error.message, 'error');
-    }
-  });
+function lobbyNoticeHtml(note) {
+  if (!note) return '';
+  if (note.kind === 'kasware') {
+    return `<div class="notice error"><strong>Install KasWare to play</strong>Even/Odd needs the KasWare wallet extension in your browser to play.<div class="actions"><a class="primary" href="${KASWARE_DOWNLOAD}" target="_blank" rel="noopener noreferrer">Install KasWare</a></div></div>`;
+  }
+  const kind = note.kind === 'error' ? 'error' : '';
+  return `<div class="notice ${kind}"><strong>${escapeHtml(note.title)}</strong> ${escapeHtml(note.message ?? '')}</div>`;
 }
 
-async function renderJoinEntry(gameId) {
-  if (!isGameId(gameId)) return renderBackendError('That game link doesn\u2019t look right.');
-  return renderGame(gameId);
+function roomInviteUrl(matchId) {
+  return `${location.origin}/join?room=${matchId}`;
 }
 
 async function renderGame(gameId) {
@@ -380,45 +275,45 @@ async function renderGame(gameId) {
   }
 }
 
-function paintGameHeader(status, role, game) {
+function paintGameHeader(status, role, game, revealMine) {
   if (status === 'settled') {
-    const won = winnerIsYou(game, role);
-    return { title: won ? 'You won.' : game.winner === 'creator' ? `${capitalize(game.creator?.side)} took it.` : 'Game over.', loading: false };
+    if (role === 'creator' || role === 'joiner') return { title: winnerIsYou(game, role) ? 'You won.' : 'You lost.', loading: false };
+    return { title: `${capitalize(winnerSideName(game))} took the pot.`, loading: false };
   }
+  if (role === 'viewer') return { title: 'You are watching this game.', loading: false };
   if (role === 'creator' && game.status === 'waiting_for_player_b') return { title: 'Your game is ready.', loading: false };
-  if (game.status === 'joined' || game.status === 'first_revealed' || game.status === 'reveal_broadcast' || game.status === 'settlement_broadcast') return { title: "It's on.", loading: false };
-  if (game.canJoin) return { title: "You're in.", loading: false };
-  return { title: 'Locking it in.', loading: true };
+  if (game.status === 'joined' || game.status === 'first_revealed' || game.status === 'reveal_broadcast' || game.status === 'settlement_broadcast') {
+    return { title: revealMine ? 'Your turn to reveal.' : `Waiting for your ${game.matchmaking ? 'opponent' : 'friend'}.`, loading: false };
+  }
+  return { title: 'Getting your game ready.', loading: true };
 }
 
 async function paintGame(gameId, game) {
   const role = detectRole(game);
-  const yourSide = role === 'creator' ? game.creator?.side : role === 'joiner' ? (game.creator?.side === 'even' ? 'odd' : 'even') : null;
-  const header = paintGameHeader(game.status, role, game);
-  const joinerView = role === 'joiner' || (role === 'viewer' && game.canJoin);
   const active = !['settled', 'fallback_claimed', 'refunded', 'creator_refunded'].includes(game.status);
   void forgetRevealSecret(gameId, !active);
   const myPendingReveal = (game.pendingReveals ?? []).find((item) => item.role === role) ?? null;
   const myPendingSafety = (game.pendingSafety ?? []).find((item) => item.role === role) ?? null;
   const revealMine = (game.canReveal || Boolean(myPendingReveal)) && (role === 'creator' || role === 'joiner') && !isMyReveal(game, role);
-  const waiting = active && !joinerView && !revealMine;
+  const header = paintGameHeader(game.status, role, game, revealMine);
+  const isPlayer = role === 'creator' || role === 'joiner';
+  const waiting = active && isPlayer && !revealMine;
 
   app.innerHTML = `
     <a class="back" href="/" data-action="exit">Exit</a>
     <section class="panel" aria-label="Game">
       <div class="panel-head">
-        ${header.loading ? '<div class="header-loading"><span class="spinner large confirm" aria-hidden="true"></span><h2>Locking it in</h2></div>' : `<h2>${header.title}</h2>`}
+        ${header.loading ? `<div class="header-loading"><span class="spinner large confirm" aria-hidden="true"></span><h2>${escapeHtml(header.title)}</h2></div>` : `<h2>${escapeHtml(header.title)}</h2>`}
       </div>
       <div class="game-body">
         ${gameDetails(game)}
-        ${active ? (joinerView ? joinSection(game, yourSide ?? (game.creator?.side === 'even' ? 'odd' : 'even')) : '') + inviteBox(game, waiting) + (revealMine ? revealSection(game, myPendingReveal) : '') : ''}
+        ${active ? inviteBox(game, waiting) + (revealMine ? revealSection(game, myPendingReveal) : '') : ''}
         ${resultOverlay(game, role)}
         ${safetySection(game, myPendingSafety)}
         ${terminalSection(game)}
       </div>
     </section>`;
 
-  await bindJoin(gameId, game);
   bindReveal(gameId);
   bindShare();
   bindSafety(gameId, game, myPendingSafety);
@@ -436,7 +331,7 @@ function recoveryFromGame(game) {
 function inviteBox(game, waiting) {
   if (['settled', 'fallback_claimed', 'refunded', 'creator_refunded'].includes(game.status)) return '';
   const waitingRow = waiting
-    ? `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for your ${game.matchmaking ? 'rival' : 'friend'}</span></div>`
+    ? `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for your ${game.matchmaking ? 'opponent' : 'friend'}</span></div>`
     : '';
   if (game.matchmaking) return `<div class="invite-box" id="invite-box">${waitingRow}</div>`;
   return `
@@ -452,79 +347,8 @@ function gameDetails(game) {
   return `
     <div class="summary">
       <div class="sum-item"><small>Stake</small><strong>${escapeHtml(amount)} KAS</strong></div>
-      <div class="sum-item"><small>Lock</small><strong>${escapeHtml(lockKas(amount))} KAS</strong></div>
       <div class="sum-item"><small>Pot</small><strong>${escapeHtml(pot)} KAS</strong></div>
     </div>`;
-}
-
-function joinSection(game, yourSide) {
-  if (!game.canJoin) return '';
-  const theirStake = game.stakeKas;
-  return `
-    <div class="hero-card" id="join-card">
-      <p class="lead">You're <strong class="side-strong">${capitalize(yourSide)}</strong>.</p>
-      <form class="form" id="join-form">
-        <fieldset class="choice-group">
-          <legend>Your number</legend>
-          <div class="choice-row">
-            <button type="button" class="choice num" data-join-number="1" aria-pressed="false"><span class="num-big">1</span><small class="num-tag">Odd</small></button>
-            <button type="button" class="choice num" data-join-number="0" aria-pressed="false"><span class="num-big">2</span><small class="num-tag">Even</small></button>
-          </div>
-        </fieldset>
-        <p class="fate">Each player locks ${escapeHtml(theirStake)} KAS. ${winnerSummary(theirStake)}</p>
-        <div id="join-notice"></div>
-        <p class="muted-note">Your number is saved only in this browser. Clearing site data before you reveal forfeits your stake.</p>
-        <div class="actions">
-          <button type="submit" class="primary" id="join-submit" disabled>Join for ${escapeHtml(theirStake)} KAS</button>
-        </div>
-      </form>
-    </div>`;
-}
-
-async function bindJoin(gameId, game) {
-  const form = document.querySelector('#join-form');
-  if (!form) return;
-  const theirStake = game.stakeKas;
-  const submit = form.querySelector('button[type="submit"]');
-  let number = null;
-  document.querySelectorAll('[data-join-number]').forEach((button) => {
-    button.addEventListener('click', () => {
-      number = Number(button.dataset.joinNumber);
-      document.querySelectorAll('[data-join-number]').forEach((item) => {
-        const selected = item === button;
-        item.classList.toggle('selected', selected);
-        item.setAttribute('aria-pressed', String(selected));
-      });
-      submit.disabled = false;
-    });
-  });
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    if (number === null) return showNotice('#join-notice', 'Pick a number', 'Choose 1 or 2 before you join.', 'error');
-    submit.disabled = true;
-    try {
-      const { provider, account } = await connectKasware('#join-notice');
-      rememberAddress(account.address);
-      const secret = await createRevealSecret(number, { operationKey: `join:${gameId}` });
-      await bindSecretToGame(gameId, secret.secretId);
-      const prepared = await api(`/api/games/${gameId}/join/prepare`, { method: 'POST', body: {
-        joinerAddress: account.address,
-        joinerPublicKey: account.publicKey,
-        joinerCommitment: secret.commitment,
-      } });
-      const verified = verifyPreparedTransaction(prepared, 'join');
-      showNotice('#join-notice', 'Confirm in KasWare', `Lock ${lockKas(theirStake)} KAS. Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
-      if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
-      await api(`/api/games/${gameId}/join/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
-      await refreshGame(gameId);
-    } catch (error) {
-      submit.disabled = false;
-      logError('join_game_failed', { code: error.code, message: error.message });
-      if (guardKaswareShortfall('#join-notice', error)) return;
-      showNotice('#join-notice', error.message, '', 'error');
-    }
-  });
 }
 
 function revealSection(game, pending) {
@@ -571,13 +395,13 @@ function bindReveal(gameId) {
         reveal.disabled = false;
         return;
       }
-      const prepared = await api(`/api/games/${gameId}/reveal/prepare`, { method: 'POST', body: {
+      const prepared = await timedStep('prepare_reveal', () => api(`/api/games/${gameId}/reveal/prepare`, { method: 'POST', body: {
         playerAddress: account.address,
         playerPublicKey: account.publicKey,
         choice: secret.choice,
         nonceHex: secret.nonceHex,
-      } });
-      const verified = verifyPreparedTransaction(prepared, 'reveal');
+      } }));
+      const verified = await timedStep('verify_reveal', () => Promise.resolve(verifyPreparedTransaction(prepared, 'reveal')));
       showNotice('#reveal-notice', 'Confirm in KasWare', `Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
       const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
       if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
@@ -597,8 +421,7 @@ function bindReveal(gameId) {
   });
 }
 
-function bindShare() {
-  const url = location.href;
+function bindShare(url = location.href) {
   const copy = document.querySelector('[data-action="copy-link"]');
   if (copy) {
     copy.addEventListener('click', async () => {
@@ -644,7 +467,7 @@ function safetySection(game, pending) {
     if (connectedAddress() !== game.firstRevealer) return '';
     return `
       <div id="game-safety" class="safety">
-        <p class="lead">If your ${game.matchmaking ? 'rival' : 'friend'} never reveals</p>
+        <p class="lead">If your ${game.matchmaking ? 'opponent' : 'friend'} never reveals</p>
         <p class="muted-note">You can claim the pot after the wait. ${feeSummary(game.stakeKas)}</p>
         ${control('Claim pot')}
       </div>`;
@@ -653,7 +476,7 @@ function safetySection(game, pending) {
 }
 
 function terminalSection(game) {
-  if (game.status === 'fallback_claimed') return `<div class="notice"><strong>Pot claimed.</strong>Your ${game.matchmaking ? 'rival' : 'friend'} never revealed, so you took the pot.</div>`;
+  if (game.status === 'fallback_claimed') return `<div class="notice"><strong>Pot claimed.</strong>Your ${game.matchmaking ? 'opponent' : 'friend'} never revealed, so you took the pot.</div>`;
   if (game.status === 'refunded' || game.status === 'creator_refunded') return '<div class="notice"><strong>Canceled.</strong>Your stake was returned.</div>';
   if (game.status === 'refund_partial') return '<div class="notice"><strong>Partial refund.</strong>One stake was returned. The other player can still refund theirs.</div>';
   return '';
@@ -718,18 +541,6 @@ function bindExit(gameId, game, role, pending) {
 function showActionError(selector, error) {
   const copy = actionErrorCopy(error);
   showNotice(selector, copy.title, copy.message, 'error');
-}
-
-function actionErrorCopy(error) {
-  const copy = {
-    STORAGE_MASS_EXCEEDED: ['Transaction not ready', 'Your wallet needs a smaller available coin. Receive a small separate payment, then try again. Your game funds remain safe.'],
-    NO_UTXOS: ['Network fee unavailable', 'This wallet needs a small separate balance to pay the network fee.'],
-    NO_ORDINARY_UTXOS: ['Network fee unavailable', 'This wallet needs a small separate balance to pay the network fee.'],
-    INSUFFICIENT_UTXOS: ['Not enough KAS for the network fee', 'Add a small amount of KAS to this wallet, then try again.'],
-    FEE_REPRICING_FAILED: ['Network fee changed', 'The network fee changed while preparing this action. Please try again.'],
-    TRANSACTION_REJECTED: ['Transaction not accepted', 'The network did not accept this action. Wait a few seconds, then try again. Your game funds remain safe.'],
-  }[error.code] ?? ['Please try again', 'Something went wrong. Please try again in a few seconds. Your game funds remain safe.'];
-  return { title: copy[0], message: copy[1] };
 }
 
 function winnerIsYou(game, role) {
@@ -828,9 +639,10 @@ function formatWait(seconds) {
 
 function signWithKasware(provider, txJson) {
   logInfo('kasware_sign_request');
+  const startedAt = nowMs();
   return Promise.resolve(kaswareSignPskt(provider, txJson))
     .then((signed) => {
-      logInfo('kasware_sign_result', { returned: typeof signed === 'string' && signed.length > 0 });
+      logInfo('kasware_sign_result', { returned: typeof signed === 'string' && signed.length > 0, ms: Math.round(nowMs() - startedAt) });
       return signed;
     })
     .catch((error) => {
@@ -943,7 +755,8 @@ function showToast(message) {
 }
 
 function shortAddress(address) {
-  const body = address.startsWith('kaspatest:') ? address.slice('kaspatest:'.length) : address;
+  const prefix = `${runtimeConfig().addressPrefix}:`;
+  const body = address.startsWith(prefix) ? address.slice(prefix.length) : address;
   return `${body.slice(0, 6)}\u2026${body.slice(-4)}`;
 }
 
@@ -971,6 +784,13 @@ async function refreshGame(gameId, options = {}) {
     window.__gameStatus = signature;
     await paintGame(gameId, game);
   } catch (error) {
+    // A finished game is readable for a short window, then it is removed. Past
+    // that window the link is a dead end, not a transient error to retry.
+    if (error.code === 'GAME_NOT_FOUND' && gameRequestGate.isCurrent(requestRevision)) {
+      stopGameRefresh();
+      renderGameEnded();
+      return;
+    }
     // A transient refresh may race a broadcast; the next tick retries.
     if (options.reportErrors) throw error;
   }
@@ -987,54 +807,45 @@ function gameSignature(game) {
     (game.pendingSafety ?? []).map((item) => `${item.action}:${item.role}:${item.retryable}`).join(',')].join('|');
 }
 
-async function connectKasware(selector) {
+// Wallet connection with no DOM side effects, for the lobby controller.
+async function connectWallet() {
   const provider = globalThis.kasware;
   if (!provider) {
     logError('kasware_missing', { download: KASWARE_DOWNLOAD });
-    renderKaswareShortfall(selector);
     const error = new Error('KasWare wallet extension is not installed');
     error.code = 'KASWARE_UNAVAILABLE';
     throw error;
   }
-  logInfo('kasware_connect_start', { selector });
-  showNotice(selector, 'Connecting to KasWare', 'Confirm the connection in your wallet.', '');
-  const accounts = await provider.requestAccounts().catch((error) => {
-    logError('kasware_request_accounts_failed', { message: error?.message });
-    return null;
-  });
-  const address = Array.isArray(accounts) ? accounts[0] : accounts;
-  if (!address) {
-    logWarn('kasware_connection_rejected');
-    throw new Error('KasWare connection was not approved');
+  const { kaswareNetwork, addressPrefix, network: configuredNetwork } = runtimeConfig();
+  logInfo('kasware_connect_start');
+  const startedAt = nowMs();
+  // Kaspa gives each network its own account address, so the network must be
+  // settled before the account is read; the helper owns that ordering.
+  let account;
+  try {
+    account = await connectKaswareAccount({
+      provider, kaswareNetwork, addressPrefix, configuredNetwork,
+      onSwitch: (from) => logInfo('kasware_switch_network', { from, to: kaswareNetwork }),
+    });
+  } catch (error) {
+    logError('kasware_connect_failed', { code: error?.code, message: error?.message });
+    throw error;
   }
-  let publicKey = await provider.getPublicKey();
-  let network = await provider.getNetwork();
-  logDebug('kasware_session', { network, hasPublicKey: Boolean(publicKey) });
-  if (network !== KASWARE_NETWORK) {
-    if (typeof provider.switchNetwork !== 'function') {
-      logError('kasware_network_unsupported', { network, expected: KASWARE_NETWORK });
-      throw new Error(`Switch KasWare to ${NETWORK}`);
-    }
-    logInfo('kasware_switch_network', { from: network, to: KASWARE_NETWORK });
-    await provider.switchNetwork(KASWARE_NETWORK);
-    network = await provider.getNetwork();
-    if (network !== KASWARE_NETWORK) {
-      logError('kasware_network_switch_failed', { network, expected: KASWARE_NETWORK });
-      throw new Error(`Switch KasWare to ${NETWORK}`);
-    }
-  }
-  if (!address.startsWith('kaspatest:') || !/^[0-9a-f]{64}$|^(02|03)[0-9a-f]{64}$/i.test(publicKey ?? '')) {
-    logError('kasware_invalid_account', { testnet: address.startsWith('kaspatest:'), publicKeyLength: publicKey?.length });
-    throw new Error('KasWare did not return a valid testnet account');
-  }
-  if (publicKey.length === 66) publicKey = publicKey.slice(2);
-  if (typeof provider.signPskt !== 'function') {
-    logError('kasware_signing_unavailable');
-    throw new Error('KasWare transaction signing is unavailable');
-  }
-  logInfo('kasware_connected', { network: KASWARE_NETWORK });
+  logInfo('kasware_connected', { network: kaswareNetwork, ms: Math.round(nowMs() - startedAt) });
   watchKasware(provider);
-  return { provider, account: { address, publicKey } };
+  return { provider, account };
+}
+
+// The game page connects inline, so it keeps the in-place notice and install
+// prompt; the lobby renders the same states through its controller.
+async function connectKasware(selector) {
+  showNotice(selector, 'Connecting to KasWare', 'Confirm the connection in your wallet.', '');
+  try {
+    return await connectWallet();
+  } catch (error) {
+    if (error?.code === 'KASWARE_UNAVAILABLE') renderKaswareShortfall(selector);
+    throw error;
+  }
 }
 
 function watchKasware(provider) {
@@ -1053,6 +864,16 @@ function watchKasware(provider) {
 
 function renderBackendError(message) {
   app.innerHTML = `<a class="back" href="/">Exit</a><section class="panel"><p class="lead">Something went wrong.</p><div class="notice error"><strong>${escapeHtml(message)}</strong></div></section>`;
+}
+
+function renderGameEnded() {
+  app.innerHTML = `
+    <a class="back" href="/">Exit</a>
+    <section class="panel">
+      <p class="lead">This game has ended.</p>
+      <div class="notice"><strong>The result is no longer available.</strong>Every game stays viewable for a short time after it finishes.</div>
+      <div class="actions"><a class="primary" href="/">Play again</a></div>
+    </section>`;
 }
 
 async function api(url, options = {}) {
@@ -1097,10 +918,11 @@ function showNotice(selector, title, message, kind) {
   const node = document.querySelector(selector);
   if (!node) return;
   const body = message ? escapeHtml(message) : '';
-  node.innerHTML = `<div class="notice ${kind}"><strong>${escapeHtml(title)}</strong>${body}</div>`;
+  node.innerHTML = `<div class="notice ${kind}"><strong>${escapeHtml(title)}</strong> ${body}</div>`;
 }
 
 function isGameId(value) { return /^[0-9a-f]{64}$/i.test(value ?? ''); }
+function isRoomId(value) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value ?? ''); }
 function formatKas(sompi) { return (Number(sompi) / 100_000_000).toFixed(8).replace(/0+$/, '').replace(/\.$/, ''); }
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]); }
 function lockKas(stakeKas) { return Number(stakeKas); }

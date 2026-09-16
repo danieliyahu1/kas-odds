@@ -17,6 +17,12 @@ Browser           -> HTTP application
 Browser wallet    -> browser signing only
 ```
 
+`src/network.js` is the single runtime registry of supported networks. The
+composition root resolves one profile from `KASPA_NETWORK` and injects it into
+the wRPC client, the HTTP application, and the game service; domain modules take
+the network id and address prefix as explicit inputs and never read the
+environment. The same image therefore serves `mainnet` or `testnet-10`.
+
 `src/chain-adapter.js` normalizes node responses, fee policy, transaction
 preparation, submission, and confirmation. Domain and protocol modules remain
 environment-independent. `src/index.js` exports reusable protocol building
@@ -45,8 +51,9 @@ JSON, creates parent directories, serializes mutations, writes atomically, and
 returns clones. `src/feedback.js` uses the same fail-closed rule: only a missing
 spill file means an empty queue; malformed or unreadable state is an error.
 
-The deployment uses `/var/lib/kaspa-even-odd/games-v10.json` and
-`/var/lib/kaspa-even-odd/feedback-spill.json` on the persistent volume.
+The deployment uses `/var/lib/kaspa-even-odd/games-mainnet-v10.json` and
+`/var/lib/kaspa-even-odd/feedback-spill.json` on the persistent volume; the game
+store path is network-scoped so two profiles never share a record set.
 
 ## Verification And Delivery
 

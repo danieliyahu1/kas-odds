@@ -46,28 +46,35 @@ spec:
               value: "3000"
             - name: METRICS_PORT
               value: "9464"
+            # The single switch between networks: the address prefix, KasWare
+            # network, wRPC node, store file, and fee wallet all follow from it.
             - name: KASPA_NETWORK
               value: "testnet-10"
-            - name: GAME_STORE_PATH
-              value: /var/lib/kaspa-even-odd/games-v10.json
-            - name: GAME_FEE_ADDRESS
+            - name: GAME_STORE_DIR
+              value: /var/lib/kaspa-even-odd
+            - name: GAME_FEE_ADDRESS_MAINNET
               valueFrom:
                 secretKeyRef:
-                  name: kaspa-even-odd-fee-address
-                  key: address
+                  name: kaspa-even-odd-game-fee-address
+                  key: mainnet
+            - name: GAME_FEE_ADDRESS_TESTNET_10
+              valueFrom:
+                secretKeyRef:
+                  name: kaspa-even-odd-game-fee-address
+                  key: testnet-10
             - name: FEEDBACK_SPILL_PATH
               value: /var/lib/kaspa-even-odd/feedback-spill.json
             - name: TELEGRAM_FEEDBACK_BOT_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: kaspa-even-odd-telegram
-                  key: botToken
+                  key: bot-token
                   optional: true
             - name: TELEGRAM_FEEDBACK_CHAT_ID
               valueFrom:
                 secretKeyRef:
                   name: kaspa-even-odd-telegram
-                  key: chatId
+                  key: chat-id
                   optional: true
           volumeMounts:
             - name: game-state

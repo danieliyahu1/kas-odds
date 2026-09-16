@@ -52,19 +52,39 @@ test('charges exactly 1% at and above the 100 KAS pot threshold', () => {
 });
 
 test('decodes the payer fee public key from a version-0 wallet address', () => {
-  assert.equal(validateGameFeeAddress(feeAddress), feePublicKey);
+  assert.equal(validateGameFeeAddress(feeAddress, 'kaspatest'), feePublicKey);
+});
+
+test('decodes a mainnet fee address only when the mainnet prefix is expected', () => {
+  const mainnetFeeAddress = bech32Encode('kaspa', 0, Buffer.from(feePublicKey, 'hex'));
+  assert.equal(validateGameFeeAddress(mainnetFeeAddress, 'kaspa'), feePublicKey);
+  assert.throws(() => validateGameFeeAddress(mainnetFeeAddress, 'kaspatest'), { code: 'INVALID_GAME_FEE' });
 });
 
 test('rejects invalid fee addresses and treats missing fee configuration as unconfigured', () => {
-  assert.throws(() => validateGameFeeAddress('kaspatest:not-an-address'), { code: 'INVALID_GAME_FEE' });
-  assert.throws(() => validateGameFeeAddress(bech32Encode('kaspa', 0, Buffer.from(feePublicKey, 'hex'))), { code: 'INVALID_GAME_FEE' });
-  assert.equal(resolveGameFeePublicKey({}), null);
+  assert.throws(() => validateGameFeeAddress('kaspatest:not-an-address', 'kaspatest'), { code: 'INVALID_GAME_FEE' });
+  assert.equal(resolveGameFeePublicKey({}, 'testnet-10'), null);
 });
 
 test('prefers the configured fee address over the raw public key', () => {
-  assert.equal(resolveGameFeePublicKey({ GAME_FEE_ADDRESS: feeAddress }), feePublicKey);
-  assert.equal(resolveGameFeePublicKey({ GAME_FEE_ADDRESS: feeAddress, GAME_FEE_PUBLIC_KEY: '22'.repeat(32) }), feePublicKey);
-  assert.equal(resolveGameFeePublicKey({ GAME_FEE_PUBLIC_KEY: '22'.repeat(32) }), '22'.repeat(32));
+  assert.equal(resolveGameFeePublicKey({ GAME_FEE_ADDRESS: feeAddress }, 'testnet-10'), feePublicKey);
+  assert.equal(resolveGameFeePublicKey({ GAME_FEE_ADDRESS: feeAddress, GAME_FEE_PUBLIC_KEY: '22'.repeat(32) }, 'testnet-10'), feePublicKey);
+  assert.equal(resolveGameFeePublicKey({ GAME_FEE_PUBLIC_KEY: '22'.repeat(32) }, 'testnet-10'), '22'.repeat(32));
+});
+
+test('selects the fee address that matches the runtime network', () => {
+  const mainnetFeeAddress = bech32Encode('kaspa', 0, Buffer.from(feePublicKey, 'hex'));
+  const testnetEnv = { GAME_FEE_ADDRESS: feeAddress, GAME_FEE_ADDRESS_MAINNET: mainnetFeeAddress };
+  const mainnetEnv = { KASPA_NETWORK: 'mainnet', GAME_FEE_ADDRESS: feeAddress, GAME_FEE_ADDRESS_MAINNET: mainnetFeeAddress };
+  assert.equal(resolveGameFeePublicKey(testnetEnv, 'testnet-10'), feePublicKey);
+  assert.equal(resolveGameFeePublicKey(mainnetEnv, 'mainnet'), feePublicKey);
+});
+
+test('a network-qualified fee address always wins, even when unset on a network', () => {
+  const mainnetFeeAddress = bech32Encode('kaspa', 0, Buffer.from(feePublicKey, 'hex'));
+  assert.equal(resolveGameFeePublicKey({ GAME_FEE_ADDRESS: feeAddress, GAME_FEE_ADDRESS_MAINNET: '' }, 'mainnet'), null);
+  assert.equal(resolveGameFeePublicKey({ GAME_FEE_ADDRESS: feeAddress, GAME_FEE_ADDRESS_MAINNET: mainnetFeeAddress }, 'testnet-10'), feePublicKey);
+  assert.throws(() => resolveGameFeePublicKey({ GAME_FEE_ADDRESS_MAINNET: feeAddress }, 'mainnet'), { code: 'INVALID_GAME_FEE' });
 });
 
 test('prepares deterministic game metadata and separates fees', () => {
@@ -75,17 +95,24 @@ test('prepares deterministic game metadata and separates fees', () => {
   assert.match(request.covenantScriptPublicKey, /^aa20[0-9a-f]{64}87$/);
 });
 
-test('rejects wrong network and incomplete covenant state', () => {
-  assert.throws(() => prepareCreateGame({ ...valid, network: 'mainnet' }), { code: 'WRONG_NETWORK' });
+test('rejects an unsupported network and incomplete covenant state', () => {
+  assert.throws(() => prepareCreateGame({ ...valid, network: 'testnet-11' }), { code: 'WRONG_NETWORK' });
   assert.throws(() => prepareCreateGame({ ...valid, creatorCommitment: undefined }), { code: 'INVALID_GAME_STATE' });
+});
+
+test('prepares a mainnet game with a kaspa-prefixed covenant address', () => {
+  const request = prepareCreateGame({ ...valid, network: 'mainnet' });
+  assert.equal(request.network, 'mainnet');
+  assert.match(request.covenantAddress, /^kaspa:/);
+  assert.match(request.covenantScriptPublicKey, /^aa20[0-9a-f]{64}87$/);
 });
 
 test('serializes and parses an invite with only version and game id', () => {
   const gameId = 'b'.repeat(64);
-  const invite = serializeInvite({ gameId, origin: 'https://example.test/create' });
+  const invite = serializeInvite({ gameId, origin: 'https://example.test/create', network: 'testnet-10' });
   assert.equal(invite, `https://example.test/join?v=EO%2Fv10&game=${gameId}`);
-  assert.deepEqual(parseInvite(invite, 'https://example.test'), { protocolVersion: 'EO/v10', network: 'testnet-10', gameId, creation: null });
-  assert.throws(() => parseInvite(`${invite}&secret=do-not-accept`, 'https://example.test'), { code: 'INVALID_INVITE' });
+  assert.deepEqual(parseInvite(invite, 'https://example.test', 'testnet-10'), { protocolVersion: 'EO/v10', network: 'testnet-10', gameId, creation: null });
+  assert.throws(() => parseInvite(`${invite}&secret=do-not-accept`, 'https://example.test', 'testnet-10'), { code: 'INVALID_INVITE' });
 });
 
 test('serializes and parses an invite carrying the full creation state', () => {
@@ -98,11 +125,11 @@ test('serializes and parses an invite carrying the full creation state', () => {
     deadlineDaa: 500000000123n,
     creatorAddress: 'kaspatest:creator',
   };
-  const invite = serializeInvite({ gameId, origin: 'https://example.test/create', creation });
-  const parsed = parseInvite(invite, 'https://example.test');
+  const invite = serializeInvite({ gameId, origin: 'https://example.test/create', creation, network: 'testnet-10' });
+  const parsed = parseInvite(invite, 'https://example.test', 'testnet-10');
   assert.deepEqual(parsed.creation, creation);
   assert.deepEqual(parsed.gameId, gameId);
-  assert.throws(() => parseInvite(`${invite}&zz=1`, 'https://example.test'), { code: 'INVALID_INVITE' });
+  assert.throws(() => parseInvite(`${invite}&zz=1`, 'https://example.test', 'testnet-10'), { code: 'INVALID_INVITE' });
 });
 
 test('confirms creation before producing an invite', async () => {
@@ -169,18 +196,22 @@ test('connects supported KasWare and signs exact prepared SafeJSON', async () =>
 test('requests a KasWare network switch when the wallet is on another network', async () => {
   let network = 'kaspa_mainnet';
   const switches = [];
+  // Kaspa gives each network its own address: the account read before the
+  // switch no longer belongs to the wallet once it lands on testnet-10.
+  const addressNow = () => (network === 'kaspa_testnet_10' ? valid.creatorAddress : 'kaspa:mainnet');
   const provider = {
-    requestAccounts: async () => [valid.creatorAddress],
+    requestAccounts: async () => [addressNow()],
     getPublicKey: async () => 'ab'.repeat(32),
     getNetwork: async () => network,
     switchNetwork: async (next) => { switches.push(next); network = next; },
-    getAccounts: async () => [valid.creatorAddress],
+    getAccounts: async () => [addressNow()],
     signPskt: async () => 'signed',
   };
   const wallet = new KaswareWalletAdapter(provider);
   const account = await wallet.connect();
   assert.deepEqual(switches, ['kaspa_testnet_10']);
   assert.equal(account.network, 'testnet-10');
+  assert.equal(account.address, valid.creatorAddress);
 });
 
 test('rejects a KasWare connection that is not approved', async () => {

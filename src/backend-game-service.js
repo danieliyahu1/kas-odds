@@ -7,11 +7,13 @@ import { prepareRevealTransaction, prepareTerminalTransaction, prepareCovenantOn
 import { parityOutcome, verifyRevealPreimage } from './reveal.js';
 import { createTransactionIntent } from './transaction-intent.js';
 import { blake2b256 } from './hashes/blake2b.mjs';
-import { FALLBACK_CLAIM_DAA_OFFSET, FIVE_MINUTE_DAA_OFFSET, NO_REVEAL_REFUND_DAA_OFFSET, TESTNET10_DAA_PER_SECOND, safetyReadiness } from './terminal-actions.js';
-import { playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, automaticFallbackPayoutSompi, automaticRefundPayoutSompi, AUTOMATION_FEE_SOMPI, MIN_STAKE_KAS, stakeToSompi, NETWORK, PROTOCOL_VERSION, ProtocolError, validateGameFeePublicKey, validateGameId } from './protocol.js';
+import { FALLBACK_CLAIM_DAA_OFFSET, FIVE_MINUTE_DAA_OFFSET, NO_REVEAL_REFUND_DAA_OFFSET, DAA_PER_SECOND, safetyReadiness } from './terminal-actions.js';
+import { playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, automaticFallbackPayoutSompi, automaticRefundPayoutSompi, AUTOMATION_FEE_SOMPI, MIN_STAKE_KAS, stakeToSompi, PROTOCOL_VERSION, ProtocolError, UNCONFIRMED_INPUT_DAA_SCORE, validateGameFeePublicKey, validateGameId } from './protocol.js';
+import { DEFAULT_NETWORK_PROFILE } from './network.js';
 import { noopMetrics } from './metrics.js';
 import { EphemeralPreparations } from './ephemeral-preparations.js';
 import { KaspaChainAdapter } from './chain-adapter.js';
+import { isMinedDaaScore } from './kaspa-adapter.js';
 import { logger } from './logger.js';
 import { assertSignedTransactionFee, signedTransactionFeeDiagnostics } from './transaction-mass.js';
 import { TerminalFundingSelector } from './terminal-funding.js';
@@ -23,6 +25,17 @@ import { assignedSide as matchmakingAssignedSide, findMatchPlayer, MatchmakingSe
 // keeping the original attempt: the first answer the chain gives wins.
 const PENDING_RETRY_MS = 60_000;
 
+// A chained transaction can be rejected for a few seconds until its parent is
+// anchored, or right after a reorg. Those rejections are transient, so the same
+// signed transaction is retried with backoff before the error reaches the player.
+const SUBMISSION_RETRY_ATTEMPTS = 4;
+const SUBMISSION_RETRY_BASE_MS = 2_000;
+const RETRYABLE_SUBMISSION_PATTERN = /orphan|mempool|double.?spend|reorg|not (?:yet )?(?:synced|finalized)|conflict|out of order/i;
+
+// Creation operation states that gate the join broadcast: the join may only go
+// out once the creation reached the node, and must be dropped if it never did.
+const CREATION_STATE = Object.freeze({ BROADCAST: 'broadcast', SUBMITTING: 'submitting', FAILED: 'failed' });
+
 // Application use cases for the Even/Odd game.
 //
 // The browser is a thin client: it owns the hidden number and nonce (never sent
@@ -31,10 +44,12 @@ const PENDING_RETRY_MS = 60_000;
 // broadcasts to the node. The service therefore never learns a player's number
 // before both commitments are confirmed on-chain and the number is public.
 export class BackendGameService {
-  constructor({ rpc, chain, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey }) {
+  constructor({ rpc, chain, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey, network = DEFAULT_NETWORK_PROFILE, submissionRetryBaseMs = SUBMISSION_RETRY_BASE_MS }) {
     this.chain = chain ?? new KaspaChainAdapter({ rpc });
     this.funding = null;
-    this.matchmaking = new MatchmakingService({ store, metrics, logPlayer: (event, address, fields) => this.#logPlayer(event, address, fields) });
+    this.network = network;
+    this.submissionRetryBaseMs = submissionRetryBaseMs;
+    this.matchmaking = new MatchmakingService({ store, metrics, logPlayer: (event, address, fields) => this.#logPlayer(event, address, fields), addressPrefix: network.addressPrefix });
     this.store = store;
     this.metrics = metrics;
     this.ephemeral = ephemeral;
@@ -44,13 +59,21 @@ export class BackendGameService {
   // Static config only: deliberately does not touch the node, so booting the
   // client never blocks on a wRPC round-trip.
   networkStatus() {
-    return { network: NETWORK, protocolVersion: PROTOCOL_VERSION, gameFeePublicKey: this.gameFeePublicKey };
+    return { network: this.network.id, addressPrefix: this.network.addressPrefix, kaswareNetwork: this.network.kaswareNetwork, protocolVersion: PROTOCOL_VERSION, gameFeePublicKey: this.gameFeePublicKey };
   }
 
   // --- Matchmaking ---------------------------------------------------------
 
   async joinMatchmaking(input) {
     return this.matchmaking.join(input);
+  }
+
+  async createRoom(input) {
+    return this.matchmaking.createRoom(input);
+  }
+
+  async joinRoom(matchId, input) {
+    return this.matchmaking.joinRoom(matchId, input);
   }
 
   async matchmakingStatus(matchId, address) {
@@ -68,7 +91,7 @@ export class BackendGameService {
     if (input.matchId) await this.#validateMatchCreation(input);
     const currentDaaScore = await this.chain.getCurrentDaaScore();
     const request = prepareCreateGame({
-      network: NETWORK,
+      network: this.network.id,
       creatorAddress: input.creatorAddress,
       creatorPublicKey: input.creatorPublicKey,
       creatorCommitment: input.creatorCommitment,
@@ -89,7 +112,7 @@ export class BackendGameService {
       ...(input.matchId ? { matchId: input.matchId } : {}),
     });
     this.metrics.recordGameEvent('creation_prepared');
-    return { network: NETWORK, preparedHash: prepared.preparedHash, txJson: prepared.txJson, feeSompi: String(prepared.feeSompi), deadlineDaa: String(request.deadlineDaa), changeScriptPublicKey: prepared.policy?.changeScriptPublicKey };
+    return { network: this.network.id, preparedHash: prepared.preparedHash, txJson: prepared.txJson, feeSompi: String(prepared.feeSompi), deadlineDaa: String(request.deadlineDaa), changeScriptPublicKey: prepared.policy?.changeScriptPublicKey };
   }
 
   async submitCreation({ preparedHash, signedTxJson, matchId }) {
@@ -117,7 +140,7 @@ export class BackendGameService {
     this.#logPlayer('creation_submit', request.creatorAddress, { gameId: transactionId, matchId: matchId ?? null });
     await this.#saveGame({
       gameId: transactionId,
-      network: NETWORK,
+      network: this.network.id,
       protocolVersion: PROTOCOL_VERSION,
       status: 'broadcast',
       request: record.request,
@@ -129,7 +152,7 @@ export class BackendGameService {
     await this.#updateOperation(operationId, { gameId: transactionId });
     if (matchId) await this.#attachMatchGame(matchId, request, transactionId);
     this.metrics.recordGameEvent('creation_submitted');
-    return { gameId: transactionId, network: NETWORK, status: 'broadcast' };
+    return { gameId: transactionId, network: this.network.id, status: 'broadcast' };
   }
 
   async prepareJoin(gameId, input) {
@@ -143,11 +166,14 @@ export class BackendGameService {
     const creation = deserializePrepared(gameRecord.prepared);
     const joinerPublicKey = normalizePublicKey(input.joinerPublicKey, 'joiner public key');
     const joinerCommitment = normalizeHex(input.joinerCommitment, 32, 'joiner commitment');
-    if (typeof input.joinerAddress !== 'string' || !input.joinerAddress.startsWith('kaspatest:')) {
-      throw new ProtocolError('INVALID_ADDRESS', 'Player B must use a testnet address');
+    if (typeof input.joinerAddress !== 'string' || !input.joinerAddress.startsWith(`${this.network.addressPrefix}:`)) {
+      throw new ProtocolError('INVALID_ADDRESS', 'Player B must use a wallet on the configured network');
     }
     this.#logPlayer('join_prepare', input.joinerAddress, { gameId: id, matchId: input.matchId ?? null });
-    const { entry, currentDaaScore } = await this.#openCreationUtxo(id, request, creation);
+    // The creation reaches the node before the match exposes its game id, so the
+    // join can be built against the creator's output without waiting for a block.
+    await this.#assertCreationBroadcast(gameRecord);
+    const currentDaaScore = await this.chain.getCurrentDaaScore();
     if (currentDaaScore >= request.deadlineDaa) throw new ProtocolError('GAME_EXPIRED', 'The joining deadline has passed');
 
     const joined = deriveGameInstance({
@@ -161,10 +187,10 @@ export class BackendGameService {
          gameWalletHash: request.gameWalletHash,
          settleFee: request.settleFeeSompi,
          status: 1,
-    });
+    }, { addressPrefix: this.network.addressPrefix });
     const prepared = await this.chain.prepareJoin({
       request: {
-        network: NETWORK,
+        network: this.network.id,
         gameId: id,
         joinerAddress: input.joinerAddress,
         joinerPublicKey,
@@ -172,14 +198,8 @@ export class BackendGameService {
       },
       game: {
         stakeSompi: request.stakeSompi,
-        currentInput: {
-          ...entry,
-          transactionId: id,
-          index: 0,
-          covenantId: creation.covenantId,
-        },
+        currentInput: this.#unconfirmedCreationInput(id, request, creation),
         currentCovenantId: creation.covenantId,
-        currentRedeemScript: request.covenantRedeemScript,
         continuationScriptPublicKey: `0000${joined.p2shScript.toString('hex')}`,
         continuationCovenant: { authorizingInput: 0, covenantId: creation.covenantId },
       },
@@ -212,10 +232,13 @@ export class BackendGameService {
     const gameRecord = await this.store.loadGame(id);
     if (!gameRecord) throw new ProtocolError('GAME_NOT_FOUND', 'Game was not found');
     if (gameRecord.matchId && prepared.matchId !== gameRecord.matchId) throw new ProtocolError('MATCH_NOT_READY', 'This join does not belong to the matchmaking session');
+    // A re-signed creation changes the game id; the prepared join must belong to
+    // the game the match is currently pointing at.
+    if (gameRecord.matchId) await this.#validateMatchJoin(gameRecord.matchId, id, prepared.joinerAddress);
     if (gameRecord.join?.transactionId) throw new ProtocolError('GAME_ALREADY_JOINED', 'Another player already joined this game');
-    const request = deserializeRequest(gameRecord.request);
-    const creation = deserializePrepared(gameRecord.prepared);
-    await this.#openCreationUtxo(id, request, creation);
+    // Broadcast the join only once its creation is on the network: the chained
+    // transaction becomes minable in the DAA score after the creation.
+    await this.#assertCreationBroadcast(gameRecord);
     const operationId = operationKey('join', preparedHash);
     const existing = await this.store.loadOperation(operationId);
     let transactionId;
@@ -273,6 +296,7 @@ export class BackendGameService {
     if (pendingMine) throw new ProtocolError('ACTION_PENDING', 'The previous reveal is still confirming');
     const current = await this.#currentGameUtxo(gameRecord, request, confirmedReveals);
     const first = confirmedReveals[0];
+    if (first) logger.info('settlement_reveal_parent', { gameId: id, transactionId: current.transactionId, parentBlockDaaScore: String(current.entry.blockDaaScore ?? 0), currentDaaScore: String(current.currentDaaScore) });
     const state = this.#revealGameState(id, gameRecord, request, current, confirmedReveals);
 
     const { continuation, winner } = this.#revealContinuation({ request, gameRecord, player, choice, publicKey, first });
@@ -505,13 +529,13 @@ export class BackendGameService {
     if (pollSoon) return 30_000;
     if (nextDaa === null) return 300_000;
     const remainingDaa = nextDaa - currentDaa;
-    return Math.max(1_000, Number(remainingDaa) * 1_000 / Number(TESTNET10_DAA_PER_SECOND) + 1_000);
+    return Math.max(1_000, Number(remainingDaa) * 1_000 / Number(DAA_PER_SECOND) + 1_000);
   }
 
   async #validateAutomaticFee(action, txJson, reservedFeeSompi) {
     const estimatedRate = await this.chain.getPriorityFeerate();
     const priorityFeerate = Number.isFinite(estimatedRate) && estimatedRate >= 0 ? estimatedRate : DEFAULT_RELAY_FLOOR_RATE;
-    const diagnostics = signedTransactionFeeDiagnostics({ network: NETWORK, signedTxJson: txJson, priorityFeerate });
+    const diagnostics = signedTransactionFeeDiagnostics({ network: this.network.id, signedTxJson: txJson, priorityFeerate });
     if (diagnostics.paidFeeSompi < diagnostics.requiredFeeSompi) {
       const error = new ProtocolError('INSUFFICIENT_TRANSACTION_FEE', 'Embedded automatic settlement fee is below the current network fee.');
       error.transactionDiagnostics = { ...diagnostics, reservedFeeSompi: BigInt(reservedFeeSompi) };
@@ -665,7 +689,7 @@ export class BackendGameService {
     const readiness = await this.#safetyReadiness(refreshed, request, automaticAction ?? safetyAction);
     return {
       gameId: id,
-      network: NETWORK,
+      network: this.network.id,
       status,
       confirmationStatus: confirmation.status,
       stakeKas: Number(request.stakeSompi / 100_000_000n),
@@ -718,7 +742,7 @@ export class BackendGameService {
            gameWalletHash: request.gameWalletHash,
            settleFee: request.settleFeeSompi,
            status: 2,
-        }),
+        }, { addressPrefix: this.network.addressPrefix }),
         winner: null,
       };
     }
@@ -731,7 +755,7 @@ export class BackendGameService {
     const first = confirmedReveals[0];
     return {
       gameId,
-      network: NETWORK,
+      network: this.network.id,
       confirmationStatus: 'confirmed',
       joinedDaaScore: current.joinedDaaScore,
       currentDaaScore: current.currentDaaScore,
@@ -796,7 +820,7 @@ export class BackendGameService {
     const expected = reveal.winner ? winnerPayoutSompi(request.stakeSompi) : grossPotSompi(request.stakeSompi);
     try {
       const { entry, currentDaaScore } = await this.#expectedUtxo(descriptor, expected);
-      if (currentDaaScore < BigInt(entry.blockDaaScore) + 1n) return null;
+      if (!isDaaConfirmed(entry, currentDaaScore)) return null;
       return currentDaaScore;
     } catch (error) {
       if (error?.code === 'ACTION_NOT_CONFIRMED') return null;
@@ -836,7 +860,7 @@ export class BackendGameService {
       : { transactionId: item.transactionId, address: item.playerAddress, scriptPublicKey: playerScriptPublicKey(publicKey), outputIndex: 0 };
     try {
       const { entry, currentDaaScore } = await this.#expectedUtxo(descriptor, value);
-      if (currentDaaScore < BigInt(entry.blockDaaScore) + 1n) return null;
+      if (!isDaaConfirmed(entry, currentDaaScore)) return null;
       return currentDaaScore;
     } catch (error) {
       if (error?.code === 'ACTION_NOT_CONFIRMED') return null;
@@ -848,20 +872,56 @@ export class BackendGameService {
     return this.chain.findExpectedUtxo(descriptor, valueSompi);
   }
 
+  // Single description of the creator's covenant output, shared by the on-chain
+  // reader and the local builder so both agree on what the deposit looks like.
+  #creationOutput(gameId, request, prepared) {
+    return {
+      transactionId: gameId,
+      index: 0,
+      amount: playerLockSompi(request.stakeSompi),
+      scriptPublicKey: prepared.scriptPublicKey,
+      covenantId: prepared.covenantId,
+      redeemScript: request.covenantRedeemScript,
+    };
+  }
+
+  // The creation output described as a not-yet-mined parent (chained mempool
+  // transaction) so the join can be prepared and signed before one confirmation.
+  #unconfirmedCreationInput(gameId, request, prepared) {
+    return { ...this.#creationOutput(gameId, request, prepared), blockDaaScore: UNCONFIRMED_INPUT_DAA_SCORE };
+  }
+
   async #openCreationUtxo(gameId, request, prepared) {
+    const expected = this.#creationOutput(gameId, request, prepared);
     const [utxos, currentDaaScore] = await Promise.all([
       this.chain.getUtxos(request.covenantAddress),
       this.chain.getCurrentDaaScore(),
     ]);
     const entry = (utxos.entries ?? utxos).find((candidate) => {
       const outpoint = candidate.outpoint ?? candidate;
-      return outpoint.transactionId === gameId && outpoint.index === 0
-        && BigInt(candidate.amount) === playerLockSompi(request.stakeSompi)
-        && candidate.scriptPublicKey === prepared.scriptPublicKey;
+      return outpoint.transactionId === expected.transactionId && outpoint.index === expected.index
+        && BigInt(candidate.amount) === expected.amount
+        && candidate.scriptPublicKey === expected.scriptPublicKey;
     });
     if (!entry) throw new ProtocolError('GAME_NOT_OPEN', 'The game deposit is no longer available');
-    if (currentDaaScore < BigInt(entry.blockDaaScore) + 1n) throw new ProtocolError('GAME_NOT_CONFIRMED', 'The game deposit is still confirming');
+    if (!isDaaConfirmed(entry, currentDaaScore)) throw new ProtocolError('GAME_NOT_CONFIRMED', 'The game deposit is still confirming');
     return { entry, currentDaaScore };
+  }
+
+  // Broadcast ordering: a join is only valid after its creation reached the
+  // node. The creation is broadcast inside submitCreation before the match
+  // exposes the game id, so this gate orders the pair and drops a join whose
+  // creation never made it or is still being broadcast.
+  async #assertCreationBroadcast(record) {
+    const state = await this.#creationState(record);
+    if (state === CREATION_STATE.FAILED) throw new ProtocolError('CREATION_FAILED', 'The game creation did not reach the network; the join was not broadcast');
+    if (state === CREATION_STATE.SUBMITTING) throw new ProtocolError('CREATION_PENDING', 'The game creation is still being broadcast; try again');
+  }
+
+  async #creationState(record) {
+    if (!record?.creationPreparedHash) return CREATION_STATE.BROADCAST;
+    const operation = await this.store.loadOperation(operationKey('creation', record.creationPreparedHash));
+    return operation?.status ?? CREATION_STATE.BROADCAST;
   }
 
   async #confirmJoin(record, request) {
@@ -876,11 +936,11 @@ export class BackendGameService {
         && candidate.scriptPublicKey === record.join.joinedScriptPublicKey;
     });
     if (!entry) return { status: 'observed' };
-    return { status: currentDaaScore >= BigInt(entry.blockDaaScore) + 1n ? 'confirmed' : 'observed' };
+    return { status: isDaaConfirmed(entry, currentDaaScore) ? 'confirmed' : 'observed' };
   }
 
   async #actionFunding(address, measure) {
-    this.funding ??= new TerminalFundingSelector({ chain: this.chain });
+    this.funding ??= new TerminalFundingSelector({ chain: this.chain, network: this.network.id });
     return this.funding.select(address, measure);
   }
 
@@ -913,7 +973,9 @@ export class BackendGameService {
       return index === outputIndex && candidate.scriptPublicKey === scriptPublicKey;
     });
     if (!entry) return null;
-    return BigInt(entry.blockDaaScore ?? entry.utxo?.blockDaaScore ?? 0);
+    const blockDaaScore = BigInt(entry.blockDaaScore ?? entry.utxo?.blockDaaScore ?? 0);
+    // A mempool-only output (DAA score 0) cannot anchor a timeout yet.
+    return blockDaaScore > 0n ? blockDaaScore : null;
   }
 
   #refundCurrentOutput(record) {
@@ -972,8 +1034,9 @@ export class BackendGameService {
   }
 
   async #completeGame(record, status) {
-    const removed = await this.store.completeGame(record);
-    if (!removed) return;
+    if (record.completedAt) return;
+    const retained = await this.store.completeGame(record);
+    if (!retained) return;
     logger.info('game_completed', {
       gameId: record.gameId,
       status,
@@ -993,6 +1056,13 @@ export class BackendGameService {
     await this.matchmaking.recordBacklog();
   }
 
+  // Removes finished games once their retrieval window has passed, so the store
+  // does not grow without bound. Called on startup and periodically by a scheduler.
+  async pruneCompletedGames(now) {
+    if (typeof this.store.pruneCompletedGames !== 'function') return;
+    await this.store.pruneCompletedGames(now);
+  }
+
   async reconcilePendingSubmissions() {
     if (typeof this.store.listOperations !== 'function') return 0;
     let reconciled = 0;
@@ -1003,7 +1073,7 @@ export class BackendGameService {
         const prepared = await this.store.loadPrepared(operation.preparedHash);
         if (!prepared) continue;
         await this.store.saveGame({
-          gameId: operation.transactionId, network: NETWORK, protocolVersion: PROTOCOL_VERSION,
+          gameId: operation.transactionId, network: this.network.id, protocolVersion: PROTOCOL_VERSION,
           status: 'broadcast', request: prepared.request, prepared: prepared.prepared,
           creationPreparedHash: operation.preparedHash, createdAt: operation.createdAt,
           ...(operation.metadata?.matchId ? { matchId: operation.metadata.matchId } : {}),
@@ -1043,14 +1113,23 @@ export class BackendGameService {
     const startedAt = new Date().toISOString();
     const base = { operationId, action, gameId, preparedHash, transactionId, metadata, createdAt: existing?.createdAt ?? startedAt };
     await this.store.saveOperation({ ...base, status: 'submitting', updatedAt: startedAt });
-    try {
-      const submittedTransactionId = await submit();
-      await this.store.saveOperation({ ...base, gameId: gameId ?? submittedTransactionId, transactionId: submittedTransactionId, status: 'broadcast', updatedAt: new Date().toISOString() });
-      return submittedTransactionId;
-    } catch (error) {
-      await this.store.saveOperation({ ...base, status: 'failed', lastError: publicError(error), updatedAt: new Date().toISOString() });
-      throw error;
+    let lastError;
+    for (let attempt = 1; attempt <= SUBMISSION_RETRY_ATTEMPTS; attempt += 1) {
+      try {
+        const submittedTransactionId = await submit();
+        await this.store.saveOperation({ ...base, gameId: gameId ?? submittedTransactionId, transactionId: submittedTransactionId, status: 'broadcast', updatedAt: new Date().toISOString() });
+        if (attempt > 1) logger.info('submission_retry_recovered', { operationId, action, attempt, transactionId: submittedTransactionId });
+        return submittedTransactionId;
+      } catch (error) {
+        lastError = error;
+        if (attempt === SUBMISSION_RETRY_ATTEMPTS || !isRetryableSubmissionError(error)) break;
+        const retryDelayMs = this.submissionRetryBaseMs * attempt;
+        logger.warn('submission_retry_scheduled', { operationId, action, attempt, retryDelayMs, code: error?.code, message: error?.message });
+        await delay(retryDelayMs);
+      }
     }
+    await this.store.saveOperation({ ...base, status: 'failed', lastError: publicError(lastError), updatedAt: new Date().toISOString() });
+    throw lastError;
   }
 
   #player(record, request, address, publicKey) {
@@ -1076,7 +1155,7 @@ export class BackendGameService {
   async #submitSignedTransaction(action, signedTxJson, priorityFeerate) {
     let diagnostics;
     try {
-      diagnostics = assertSignedTransactionFee({ network: NETWORK, signedTxJson, priorityFeerate });
+      diagnostics = assertSignedTransactionFee({ network: this.network.id, signedTxJson, priorityFeerate });
     } catch (error) {
       logger.warn('signed_transaction_fee_rejected', { action, ...feeLogFields(error.transactionDiagnostics) });
       throw error;
@@ -1107,6 +1186,24 @@ function transactionIdFromSafeJson(txJson) {
 
 function publicError(error) {
   return { code: String(error?.code ?? 'UNKNOWN'), message: String(error?.message ?? 'Operation failed') };
+}
+
+// The node reports a mempool UTXO with block DAA score 0. It is visible but not
+// mined, so it must not count as confirmed: chaining a spend onto it produces an
+// orphan until the parent is included in a block.
+function isDaaConfirmed(entry, currentDaaScore) {
+  if (!isMinedDaaScore(entry?.blockDaaScore ?? entry?.utxo?.blockDaaScore)) return false;
+  return BigInt(currentDaaScore) >= BigInt(entry.blockDaaScore ?? entry.utxo.blockDaaScore) + 1n;
+}
+
+function isRetryableSubmissionError(error) {
+  if (error?.code !== 'TRANSACTION_REJECTED') return false;
+  const message = String(error?.cause?.message ?? error?.message ?? '');
+  return RETRYABLE_SUBMISSION_PATTERN.test(message);
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function normalizeHex(value, bytes, name) {

@@ -63,7 +63,7 @@ export function sanitizeFields(fields = {}, { redactAddresses = true } = {}) {
 function sanitizeValue(value, fieldName) {
   if (typeof value === 'string') {
     const sanitized = fieldName === 'nodeMessage' || MESSAGE_FIELD.test(fieldName)
-      ? value.replace(/kaspatest:[a-z0-9]+/gi, '<address>')
+      ? value.replace(/\bkaspa[a-z]*:[a-z0-9]+/gi, '<address>')
         .replace(/\b[0-9a-f]{64}\b/gi, '<txid>')
         .replace(/\b[0-9a-f]{65,}\b/gi, '<hex>')
       : value;

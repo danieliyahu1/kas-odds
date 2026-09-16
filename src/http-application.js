@@ -1,12 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { extname, join, normalize } from 'node:path';
-import { ProtocolError, NETWORK } from './protocol.js';
+import { ProtocolError } from './protocol.js';
+import { DEFAULT_NETWORK_PROFILE } from './network.js';
 
 const CONTENT_TYPES = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.wasm': 'application/wasm', '.svg': 'image/svg+xml; charset=utf-8' };
 const CONTENT_SECURITY_POLICY = ["default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "worker-src 'self' blob:", "child-src 'self' blob:", "style-src 'self'", "img-src 'self' data:", "font-src 'self'", "connect-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'"] .join('; ');
 
-export function createHttpApplication({ gameService, store, relay, metrics, feedbackService, mutatingLimiter, feedbackLimiter, paths, maxRequestBytes, trustedProxy = false, startedAt = new Date().toISOString(), wakeAutomaticSettlementLoop = () => {}, logger = console }) {
+export function createHttpApplication({ gameService, store, relay, metrics, feedbackService, mutatingLimiter, feedbackLimiter, paths, maxRequestBytes, trustedProxy = false, startedAt = new Date().toISOString(), wakeAutomaticSettlementLoop = () => {}, logger = console, network = DEFAULT_NETWORK_PROFILE }) {
   const requestHandler = (req, res) => {
     const requestId = randomUUID();
     const trace = { requestId, requestBytesRead: 0, contentLength: req.headers['content-length'] ?? undefined };
@@ -49,9 +50,9 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
         return sendJson(res, 429, { error: 'RATE_LIMITED', message: 'Too many requests; slow down and retry shortly' });
       }
     }
-    if (pathname === '/healthz') return sendJson(res, 200, { ok: true, service: 'kaspa-even-odd', network: NETWORK, startedAt });
+    if (pathname === '/healthz') return sendJson(res, 200, { ok: true, service: 'kaspa-even-odd', network: network.id, startedAt });
     if (pathname === '/readyz') {
-      try { await store.health(); return sendJson(res, 200, { ok: true, service: 'kaspa-even-odd', network: NETWORK, startedAt }); }
+      try { await store.health(); return sendJson(res, 200, { ok: true, service: 'kaspa-even-odd', network: network.id, startedAt }); }
       catch { return sendJson(res, 503, { ok: false, service: 'kaspa-even-odd', error: 'STORAGE_UNAVAILABLE' }); }
     }
     if (req.method === 'GET' && pathname === '/api/config') return sendJson(res, 200, await gameService.networkStatus());
@@ -63,10 +64,13 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
     if (req.method === 'POST' && pathname === '/api/games/prepare') return sendJson(res, 200, await gameService.prepareCreation(await readJson(req, maxRequestBytes, trace)));
     if (req.method === 'POST' && pathname === '/api/games/submit') { const result = await gameService.submitCreation(await readJson(req, maxRequestBytes, trace)); wakeAutomaticSettlementLoop(); return sendJson(res, 202, result); }
     if (req.method === 'POST' && pathname === '/api/matchmaking/join') return sendJson(res, 200, await gameService.joinMatchmaking(await readJson(req, maxRequestBytes, trace)));
+    if (req.method === 'POST' && pathname === '/api/matchmaking/room') return sendJson(res, 200, await gameService.createRoom(await readJson(req, maxRequestBytes, trace)));
     const matchStatus = pathname.match(/^\/api\/matchmaking\/([0-9a-f-]{36})$/i);
     const matchLeave = pathname.match(/^\/api\/matchmaking\/([0-9a-f-]{36})\/leave$/i);
+    const matchJoin = pathname.match(/^\/api\/matchmaking\/([0-9a-f-]{36})\/join$/i);
     if (req.method === 'GET' && matchStatus) return sendJson(res, 200, await gameService.matchmakingStatus(matchStatus[1], new URL(req.url ?? '/', 'http://localhost').searchParams.get('address')));
     if (req.method === 'POST' && matchLeave) { const body = await readJson(req, maxRequestBytes, trace); return sendJson(res, 200, await gameService.leaveMatchmaking(matchLeave[1], body.address)); }
+    if (req.method === 'POST' && matchJoin) return sendJson(res, 200, await gameService.joinRoom(matchJoin[1], await readJson(req, maxRequestBytes, trace)));
     const gameMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})$/i);
     const joinMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})\/join\/(prepare|submit)$/i);
     const revealMatch = pathname.match(/^\/api\/games\/([0-9a-f]{64})\/reveal\/(prepare|submit)$/i);
@@ -122,7 +126,7 @@ function sendError(res, error, context, logger) {
   if (error?.cause) logger.error('rpc_transaction_rejected', { ...fields, nodeMessage: error.cause?.message ?? String(error.cause), ...error.transactionDiagnostics });
   else if (clientError) logger.warn('client_request_rejected', fields);
   else logger.error('server_error', { ...fields, stack: error?.stack });
-  sendJson(res, responseStatus(code, clientError, notFound), { error: code, message: clientError ? error.message : 'Kaspa testnet10 backend is unavailable', requestId: context.requestId });
+  sendJson(res, responseStatus(code, clientError, notFound), { error: code, message: clientError ? error.message : 'Kaspa backend is unavailable', requestId: context.requestId });
 }
 
 function responseStatus(code, clientError, notFound) {
@@ -135,7 +139,7 @@ function sendJson(res, status, body) { if (res.writableEnded || res.destroyed) r
 function sendText(res, status, body, contentType) { res.writeHead(status, { 'content-type': contentType, 'cache-control': 'no-store' }); res.end(body); }
 async function serveFile(root, requestPath, res) { const safePath = normalize(requestPath).replace(/^([.][.][\\/])+/, ''); try { const body = await readFile(join(root, safePath)); res.writeHead(200, { 'content-type': CONTENT_TYPES[extname(safePath)] ?? 'application/octet-stream', 'cache-control': 'no-store' }); res.end(body); } catch (error) { if (error?.code === 'ENOENT') return sendJson(res, 404, { error: 'not_found' }); throw error; } }
 function routeLabel(pathname) {
-  if (pathname === '/healthz') return '/healthz'; if (pathname === '/readyz') return '/readyz'; if (pathname === '/api/config') return '/api/config'; if (pathname === '/api/feedback') return '/api/feedback'; if (pathname === '/api/games/prepare') return '/api/games/prepare'; if (pathname === '/api/games/submit') return '/api/games/submit'; if (pathname === '/api/matchmaking/join') return '/api/matchmaking/join'; if (/^\/api\/matchmaking\/[0-9a-f-]{36}\/leave$/i.test(pathname)) return '/api/matchmaking/:id/leave'; if (/^\/api\/matchmaking\/[0-9a-f-]{36}$/i.test(pathname)) return '/api/matchmaking/:id'; if (/^\/api\/games\/[0-9a-f]{64}\/join\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/join/:step'; if (/^\/api\/games\/[0-9a-f]{64}\/reveal\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/reveal/:step'; if (/^\/api\/games\/[0-9a-f]{64}\/creator_refund\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/:action/:step'; if (/^\/api\/games\/[0-9a-f]{64}$/i.test(pathname)) return '/api/games/:id'; if (/^\/api\/relay\/[0-9a-f]{64}$/i.test(pathname)) return '/api/relay/:id'; if (['/', '/host', '/rival', '/join', '/game'].includes(pathname)) return 'page'; if (/^\/(app|styles)\.\w+$/.test(pathname) || /^\/[A-Za-z0-9_-]+\.(?:js|mjs)$/.test(pathname)) return 'asset'; if (pathname.startsWith('/src/')) return 'source'; if (pathname.startsWith('/vendor/')) return 'vendor'; if (pathname.startsWith('/covenant/')) return 'covenant'; return 'other';
+  if (pathname === '/healthz') return '/healthz'; if (pathname === '/readyz') return '/readyz'; if (pathname === '/api/config') return '/api/config'; if (pathname === '/api/feedback') return '/api/feedback'; if (pathname === '/api/games/prepare') return '/api/games/prepare'; if (pathname === '/api/games/submit') return '/api/games/submit'; if (pathname === '/api/matchmaking/join') return '/api/matchmaking/join'; if (pathname === '/api/matchmaking/room') return '/api/matchmaking/room'; if (/^\/api\/matchmaking\/[0-9a-f-]{36}\/join$/i.test(pathname)) return '/api/matchmaking/:id/join'; if (/^\/api\/matchmaking\/[0-9a-f-]{36}\/leave$/i.test(pathname)) return '/api/matchmaking/:id/leave'; if (/^\/api\/matchmaking\/[0-9a-f-]{36}$/i.test(pathname)) return '/api/matchmaking/:id'; if (/^\/api\/games\/[0-9a-f]{64}\/join\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/join/:step'; if (/^\/api\/games\/[0-9a-f]{64}\/reveal\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/reveal/:step'; if (/^\/api\/games\/[0-9a-f]{64}\/creator_refund\/(prepare|submit)$/i.test(pathname)) return '/api/games/:id/:action/:step'; if (/^\/api\/games\/[0-9a-f]{64}$/i.test(pathname)) return '/api/games/:id'; if (/^\/api\/relay\/[0-9a-f]{64}$/i.test(pathname)) return '/api/relay/:id'; if (['/', '/host', '/rival', '/join', '/game'].includes(pathname)) return 'page'; if (/^\/(app|styles)\.\w+$/.test(pathname) || /^\/[A-Za-z0-9_-]+\.(?:js|mjs)$/.test(pathname)) return 'asset'; if (pathname.startsWith('/src/')) return 'source'; if (pathname.startsWith('/vendor/')) return 'vendor'; if (pathname.startsWith('/covenant/')) return 'covenant'; return 'other';
 }
 function clientAddress(req, trustedProxy) { if (trustedProxy) { const forwarded = req.headers['x-forwarded-for']; if (typeof forwarded === 'string' && forwarded.length > 0) return forwarded.split(',')[0].trim(); } return req.socket.remoteAddress ?? 'unknown'; }
 function isStaticRoute(route) { return ['asset', 'source', 'vendor', 'covenant'].includes(route); }

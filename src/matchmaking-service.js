@@ -1,16 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { MIN_STAKE_KAS, ProtocolError, stakeToSompi } from './protocol.js';
+import { DEFAULT_NETWORK_PROFILE } from './network.js';
 import { normalizePublicKey } from './create-game.js';
 
 export class MatchmakingService {
-  constructor({ store, metrics, logPlayer }) {
+  constructor({ store, metrics, logPlayer, addressPrefix = DEFAULT_NETWORK_PROFILE.addressPrefix }) {
     this.store = store;
     this.metrics = metrics;
     this.logPlayer = logPlayer;
+    this.addressPrefix = addressPrefix;
   }
 
   async join(input) {
-    const address = matchmakingAddress(input.address);
+    const address = matchmakingAddress(input.address, this.addressPrefix);
     const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
     const limitKas = input.limitKas === undefined ? MIN_STAKE_KAS : Number(input.limitKas);
     stakeToSompi(limitKas);
@@ -24,8 +26,32 @@ export class MatchmakingService {
     return matchResponse(match, address);
   }
 
+  // A friend game is a private session: the host fixes the stake and shares the
+  // invite id, and neither player can lock funds until the room is matched.
+  async createRoom(input) {
+    const address = matchmakingAddress(input.address, this.addressPrefix);
+    const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
+    const stakeKas = Number(input.stakeKas);
+    stakeToSompi(stakeKas);
+    const match = await this.store.createPrivateMatch({ matchId: randomUUID(), address, publicKey, stakeKas });
+    this.logPlayer('matchmaking_room_created', address, { matchId: match.matchId, stakeKas });
+    this.metrics.recordGameEvent('matchmaking_room_created');
+    await this.recordBacklog();
+    return matchResponse(match, address);
+  }
+
+  async joinRoom(matchId, input) {
+    const address = matchmakingAddress(input.address, this.addressPrefix);
+    const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
+    const match = await this.store.joinPrivateMatch(matchId, { address, publicKey });
+    this.logPlayer('matchmaking_room_joined', address, { matchId: match.matchId, stakeKas: match.stakeKas });
+    this.metrics.recordGameEvent('matchmaking_room_joined');
+    await this.recordBacklog();
+    return matchResponse(match, address);
+  }
+
   async status(matchId, address) {
-    const playerAddress = matchmakingAddress(address);
+    const playerAddress = matchmakingAddress(address, this.addressPrefix);
     const match = await this.store.loadMatch(matchId);
     findMatchPlayer(match, playerAddress);
     await this.store.touchMatch(matchId, playerAddress);
@@ -33,7 +59,7 @@ export class MatchmakingService {
   }
 
   async leave(matchId, address) {
-    const playerAddress = matchmakingAddress(address);
+    const playerAddress = matchmakingAddress(address, this.addressPrefix);
     const match = await this.store.loadMatch(matchId);
     findMatchPlayer(match, playerAddress);
     await this.store.leaveMatch(matchId, playerAddress);
@@ -80,7 +106,7 @@ export function matchResponse(match, address) {
   };
 }
 
-function matchmakingAddress(value) {
-  if (typeof value !== 'string' || !value.startsWith('kaspatest:')) throw new ProtocolError('INVALID_ADDRESS', 'Matchmaking requires a testnet wallet');
+function matchmakingAddress(value, addressPrefix) {
+  if (typeof value !== 'string' || !value.startsWith(`${addressPrefix}:`)) throw new ProtocolError('INVALID_ADDRESS', 'Matchmaking requires a wallet on the configured network');
   return value;
 }
