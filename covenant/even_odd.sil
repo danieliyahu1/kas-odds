@@ -26,8 +26,12 @@ pragma silverscript ^0.1.0;
 // full network fee; neither timeout transaction signs additional inputs.
 //
 // The creator funds the covenant output holding their full escrow. Until a
-// joiner matches, only `refund` may spend it, and only after the `deadline_daa`
-// has passed.
+// joiner matches, only `refund` (creator-signed) may spend it, immediately and
+// without waiting for `deadline_daa`. Once the deadline has passed and still no
+// joiner matched, `refund_open` additionally allows anyone to relay the refund.
+// The deadline is a policy bound, not a security bound: `refund` proves the
+// creator over the spending transaction, and `refund_open` pays the fixed
+// creator lock, so neither can be redirected mid-flight.
 //
 // Commitments are public-nonce commitments: each player commits to blake2b(
 // choice || nonce ); `nonce` is revealed together with `choice` at reveal so
@@ -55,8 +59,10 @@ contract EvenOdd(
     int status = 0;
     int settle_fee = init_settle_fee;
 
-    // Creator reclaims their full escrow after the join deadline if no joiner
-    // matched. No game value is ever used for fees (KEO-1 safeguard).
+    // Creator reclaims their full escrow any time while no joiner has matched
+    // (status == 0). The creator signs the refund spend, proving authorship
+    // even before the open-game deadline; no joiner can claim the pot this way.
+    // No game value is ever used for fees (KEO-1 safeguard).
     entry refund(pubkey creator_pk) {
         require(stake >= 100000000);
         require(creator_even == 0 || creator_even == 1);
@@ -65,7 +71,6 @@ contract EvenOdd(
         require(blake2b(byte[](creator_pk)) == creator_hash);
         byte[36] creator_spk = new ScriptPubKeyP2PK(creator_pk);
         require(tx.inputs[1].scriptPubKey == byte[](creator_spk));
-        require(tx.daa >= deadline_daa);
 
         // Exactly one payout: the creator gets their full lock back.
         require(OpAuthOutputCount(this.activeInputIndex) == 0);

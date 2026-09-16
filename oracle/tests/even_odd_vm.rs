@@ -14,7 +14,7 @@ use kaspa_txscript_errors::TxScriptError;
 use secp256k1::{Keypair, Secp256k1, SecretKey};
 use silverscript_abi::{ArtifactValue, SilAbiArtifact, encode_contract_entry_sig_script, encode_runtime_state_script};
 
-// Protocol v9 economics: pots below 100 KAS pay the winner in full. Larger pots
+// Protocol v10 economics: pots below 100 KAS pay the winner in full. Larger pots
 // pay the winner 99% and the game wallet 1%; canceled games refund the full lock.
 const STAKE: u64 = 100_000_000;
 const ESCROW: u64 = STAKE;
@@ -58,13 +58,18 @@ fn vm_accepts_join_with_one_game_input_and_ordinary_funding() {
 }
 
 #[test]
-fn vm_accepts_creator_refund_only_after_the_join_deadline() {
+fn vm_accepts_signed_creator_refund_before_and_after_the_join_deadline() {
     let artifact = artifact();
     let creator = player(1);
+    let joiner = player(2);
     let wallet = player(3);
     let open = open_game_state(&artifact, &creator, &vec![9; 32], &wallet);
-    assert_creator_refund(&artifact, &open, &creator, DEADLINE_DAA, true);
-    assert_creator_refund(&artifact, &open, &creator, DEADLINE_DAA - 1, false);
+    // The creator may sign the refund immediately, not only after the deadline.
+    assert_signed_creator_refund(&artifact, &open, &creator, DEADLINE_DAA - 1, true);
+    assert_signed_creator_refund(&artifact, &open, &creator, DEADLINE_DAA, true);
+    // Only the creator can prove authorship; another key fails either way.
+    assert_signed_creator_refund(&artifact, &open, &joiner, DEADLINE_DAA - 1, false);
+    assert_signed_creator_refund(&artifact, &open, &joiner, DEADLINE_DAA, false);
 }
 
 #[test]
@@ -166,7 +171,7 @@ fn assert_reveal_spend(artifact: &SilAbiArtifact, state_script: &[u8], player: &
     }
 }
 
-fn assert_creator_refund(artifact: &SilAbiArtifact, state_script: &[u8], creator: &Player, daa: u64, should_pass: bool) {
+fn assert_signed_creator_refund(artifact: &SilAbiArtifact, state_script: &[u8], creator: &Player, daa: u64, should_pass: bool) {
     let script = instance_script(artifact, state_script);
     let covenant_id = Hash::from_bytes([0x33; 32]);
     let invocation = entry_sigscript(artifact, "refund", vec![ArtifactValue::Bytes(creator.pubkey.clone())], &script);

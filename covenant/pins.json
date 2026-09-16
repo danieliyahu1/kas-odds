@@ -4,14 +4,14 @@
     "release": "v1.0.0",
     "sourceCommit": "3ed973335b59269293564805cc2c58a14595ec03",
     "compilerVersion": "0.1.0",
-    "windowsX64CompilerSha256": "ce1e0ef5f1f415f371d3d2426e788597a388635da8cbe93e72e95a4f754b29af"
+    "windowsX64CompilerSha256": "d63b77c2fa057b316efc2059e2ea44c626c2d413140f0bacdc34f9499943391f"
   },
   "covenant": {
     "source": "covenant/even_odd.sil",
-    "sourceSha256": "7b5befbd0979b189444a56962ebd7c30a2c6a7aecb20d5298ff40bc8d849bcc4",
+    "sourceSha256": "96f006494308ca0e573e313fcbb1126bf7278ae6a9422992489da7521c03a4e3",
     "artifact": "covenant/even_odd.template.artifact.json",
-    "artifactSha256": "f8fbe74aff01392b6bac24f92a900c51f1998c184627bccfac441e8cb48c4889",
-    "templateHash": "711a7f1a3e88015ea111e810c9fbd2c4f314d3ba8b910e7f82c8c2ba873aaba5",
+    "artifactSha256": "7e54dcd45c4ddcd8c8204abd75836f9a422616b6591ed63dcc4203871de88403",
+    "templateHash": "ade3453c61ac5858b344b22ccf373e7e44ab18c14506f49b69e29f763057e27a",
     "constructorArgs": "covenant/constructor-args.json",
     "constructorArgsSha256": "c14cbb58e965c9fb68c9e1f7ff535dbee72fdd68e204f008c21a4383d09592d2"
   },

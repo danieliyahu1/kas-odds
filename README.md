@@ -71,7 +71,7 @@ from SilverScript `v1.0.0` (whose emitted artifact/compiler identifier remains
 `0.1.0`) from `covenant/even_odd.sil` into
 `covenant/even_odd.template.artifact.json`:
 
-- **contract**: `EvenOdd`, template hash `4db84ab2…fb9d13f`
+- **contract**: `EvenOdd`, template hash `ade3453c…7e27a`
 - **state span**: `offset 1, len 261` (13 fields: `creator_hash`,
   `joiner_hash`, `creator_commit`, `joiner_commit`, `stake`, `deadline_daa`,
   `creator_even`, `creator_choice`, `joiner_choice`, `first_revealer_hash`,
@@ -269,8 +269,10 @@ comfortable playing, the server pairs any two waiters, and the game is the
 lower of the two limits. Acceptance is on-chain, not off-chain: the assigned
 creator signs the creation transaction to lock their escrow, and the matched
   rival signs the join transaction to take the other side. Until a join confirms,
-  the permissionless `refund_open` entry can reclaim the creator's stake after
-  the deadline, reserving the network fee from that lock. The server builds and
+  the creator can reclaim their full stake at any time by signing the `refund`
+  spend (the server builds and relays it), and after the deadline the
+  permissionless `refund_open` entry can reclaim the creator's stake with no
+  signature, reserving the network fee from that lock. The server builds and
   broadcasts every transaction, so it is required for the normal flow; the
   covenant still enforces the reveal/claim/refund timeouts on-chain regardless
   of who broadcasts.
