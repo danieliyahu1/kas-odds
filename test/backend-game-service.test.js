@@ -128,7 +128,7 @@ test('network status is served without touching the node or exposing a browser w
   const service = new BackendGameService({ rpc, store: new BackendGameStore(join(directory, 'games.json')), gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
   const status = await service.networkStatus();
   assert.equal(status.network, 'testnet-10');
-  assert.equal(status.protocolVersion, 'EO/v9');
+  assert.equal(status.protocolVersion, 'EO/v10');
   assert.equal(status.gameFeePublicKey, GAME_FEE_PUBLIC_KEY);
   assert.equal(status.wrpcUrl, undefined);
 });
@@ -188,7 +188,7 @@ test('reconciles a broadcast operation after game persistence failed', async (t)
   const transactionId = 'a'.repeat(64);
   const preparedHash = 'b'.repeat(64);
   await store.savePrepared({ preparedHash, request: { creatorAddress: 'kaspatest:creator' }, prepared: { txJson: '{}' }, createdAt: '2026-01-01T00:00:00.000Z' });
-  await store.saveOperation({ operationId: `EO/v9\u0000submission\u0000creation\u0000${preparedHash}`, action: 'creation', gameId: transactionId, preparedHash, transactionId, status: 'broadcast', createdAt: '2026-01-01T00:00:00.000Z', metadata: {} });
+  await store.saveOperation({ operationId: `EO/v10\u0000submission\u0000creation\u0000${preparedHash}`, action: 'creation', gameId: transactionId, preparedHash, transactionId, status: 'broadcast', createdAt: '2026-01-01T00:00:00.000Z', metadata: {} });
   const service = new BackendGameService({ rpc: {}, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
   assert.equal(await service.reconcilePendingSubmissions(), 1);
   const game = await store.loadGame(transactionId);

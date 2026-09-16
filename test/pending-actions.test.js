@@ -34,7 +34,7 @@ function serializedRequest() {
 function baseRecord(overrides = {}) {
   return {
     gameId: GAME_ID,
-    protocolVersion: 'EO/v9',
+    protocolVersion: 'EO/v10',
     status: 'joined',
     request: serializedRequest(),
     prepared: {

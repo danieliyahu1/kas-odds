@@ -15,7 +15,7 @@ export function readServerConfig(env = process.env) {
   if (!Number.isInteger(rateLimitPerMinute) || rateLimitPerMinute < 1) throw new Error('RATE_LIMIT_PER_MINUTE must be a positive integer');
   return {
     port, metricsPort, network, gameFeePublicKey: resolveGameFeePublicKey(env), maxRequestBytes, rateLimitPerMinute,
-    trustedProxy: env.TRUST_PROXY === 'true', storePath: env.GAME_STORE_PATH ?? '.data/games-v9.json',
+    trustedProxy: env.TRUST_PROXY === 'true', storePath: env.GAME_STORE_PATH ?? '.data/games-v10.json',
     feedbackSpillPath: env.FEEDBACK_SPILL_PATH ?? join('.data', 'feedback-spill.json'),
     paths: { publicRoot: fileURLToPath(new URL('../public/', import.meta.url)), sourceRoot: fileURLToPath(new URL('./', import.meta.url)), covenantRoot: fileURLToPath(new URL('../covenant/', import.meta.url)), vendorRoot: fileURLToPath(new URL('../vendor/', import.meta.url)) },
   };

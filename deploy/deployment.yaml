@@ -49,7 +49,7 @@ spec:
             - name: KASPA_NETWORK
               value: "testnet-10"
             - name: GAME_STORE_PATH
-              value: /var/lib/kaspa-even-odd/games-v9.json
+              value: /var/lib/kaspa-even-odd/games-v10.json
             - name: GAME_FEE_ADDRESS
               valueFrom:
                 secretKeyRef:

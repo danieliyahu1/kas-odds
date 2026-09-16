@@ -1,4 +1,4 @@
-import { ProtocolError } from './protocol.js';
+import { ProtocolError, PROTOCOL_VERSION } from './protocol.js';
 import { TERMINAL_COPY } from './terminal-actions.js';
 import {
   prepareRevealTransaction,
@@ -76,7 +76,7 @@ export async function recoverTerminalAction({ operationKey, action, request, cha
 
 export function terminalOperationKey({ action, request, prepared }) {
   if (!action || !request?.caller || !prepared?.preparedHash) throw new ProtocolError('INVALID_TRANSACTION', 'Terminal operation identity is incomplete');
-  return ['EO/v9', action, request.caller, prepared.preparedHash].join('\u0000');
+  return [PROTOCOL_VERSION, action, request.caller, prepared.preparedHash].join('\u0000');
 }
 
 export function terminalStatusMessage(action, status) {

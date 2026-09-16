@@ -86,7 +86,7 @@ test('recovery projection fails closed and logs only safe fields', () => {
   createRecoveryLogger({ info: (entry) => entries.push(entry), warn: () => {} }).transaction({
     transactionId: 'aa'.repeat(32), action: 'reveal', phase: 'joined', status: 'confirmed', nonceHex: 'bb'.repeat(32), commitment: 'cc'.repeat(32),
   });
-   assert.deepEqual(entries[0], { transactionId: 'aa'.repeat(32), action: 'reveal', protocolVersion: 'EO/v9', templateHash: undefined, phase: 'joined', confirmationStatus: 'confirmed' });
+   assert.deepEqual(entries[0], { transactionId: 'aa'.repeat(32), action: 'reveal', protocolVersion: 'EO/v10', templateHash: undefined, phase: 'joined', confirmationStatus: 'confirmed' });
   assert.doesNotMatch(JSON.stringify(entries), /bb|cc/);
 });
 
@@ -95,7 +95,7 @@ test('recovery checkpoints authoritative state and reloads after a wallet change
   const chain = { readGameState: async () => ({ confirmationStatus: 'confirmed', status: 'open', checkpoint: { daaScore: '7' } }) };
   const view = await recoverAndCheckpoint({ chain, store, gameId: 'aa'.repeat(32) });
   assert.equal(view.status, 'confirmed');
-   assert.equal((await store.load('EO/v9\u0000recovery\u0000testnet-10\u0000' + 'aa'.repeat(32))).checkpoint.daaScore, '7');
+   assert.equal((await store.load('EO/v10\u0000recovery\u0000testnet-10\u0000' + 'aa'.repeat(32))).checkpoint.daaScore, '7');
   const events = [];
   const unsubscribe = bindWalletRecovery({ subscribe: (listener) => { events.push(listener); return () => {}; } }, (event) => events.push(event));
   events[0]({ reason: 'network' });

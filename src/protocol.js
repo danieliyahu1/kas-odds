@@ -1,6 +1,6 @@
 import { bech32Decode } from './hashes/bech32.mjs';
 
-export const PROTOCOL_VERSION = 'EO/v9';
+export const PROTOCOL_VERSION = 'EO/v10';
 export const NETWORK = 'testnet-10';
 export const ADDRESS_PREFIX = 'kaspatest';
 export const MIN_STAKE_KAS = 1;

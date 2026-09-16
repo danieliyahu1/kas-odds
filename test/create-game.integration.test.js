@@ -89,7 +89,7 @@ test('creates, checkpoints, confirms, and exposes only the confirmed invite', as
     message: 'Game created. Waiting for Player B.',
     transactionId,
     gameId: transactionId,
-    inviteUrl: `https://example.test/join?v=EO%2Fv9&game=${transactionId}`,
+    inviteUrl: `https://example.test/join?v=EO%2Fv10&game=${transactionId}`,
   });
   assert.deepEqual(calls, { signed: 1, submitted: 1, confirmed: 1 });
   const saved = await store.load(createOperationKey(prepared));

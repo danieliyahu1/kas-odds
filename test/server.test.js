@@ -63,7 +63,7 @@ test('server serves the browser application and health probe', async (t) => {
   assert.deepEqual(await health.json().then(({ ok, service, network }) => ({ ok, service, network })), { ok: true, service: 'kaspa-even-odd', network: 'testnet-10' });
   assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/api/config`)).json(), {
     network: 'testnet-10',
-    protocolVersion: 'EO/v9',
+    protocolVersion: 'EO/v10',
     gameFeePublicKey: feePublicKey,
   });
   assert.equal(missing.status, 404);
@@ -310,7 +310,7 @@ test('starts without a fee recipient configured and reports the game fee as not 
   await waitForServer(`http://127.0.0.1:${port}/readyz`);
   assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/api/config`)).json(), {
     network: 'testnet-10',
-    protocolVersion: 'EO/v9',
+    protocolVersion: 'EO/v10',
     gameFeePublicKey: null,
   });
 });
