@@ -404,7 +404,7 @@ async function paintGame(gameId, game) {
   const waiting = active && !joinerView && !revealMine;
 
   app.innerHTML = `
-    <a class="back" href="/">Exit</a>
+    <a class="back" href="/" data-action="exit">Exit</a>
     <section class="panel" aria-label="Game">
       <div class="panel-head">
         ${header.loading ? '<div class="header-loading"><span class="spinner large confirm" aria-hidden="true"></span><h2>Locking it in</h2></div>' : `<h2>${header.title}</h2>`}
@@ -413,7 +413,7 @@ async function paintGame(gameId, game) {
         ${gameDetails(game)}
         ${active ? (joinerView ? joinSection(game, yourSide ?? (game.creator?.side === 'even' ? 'odd' : 'even')) : '') + inviteBox(game, waiting) + (revealMine ? revealSection(game, myPendingReveal) : '') : ''}
         ${resultOverlay(game, role)}
-        ${safetySection(game, role, myPendingSafety)}
+        ${safetySection(game, myPendingSafety)}
         ${terminalSection(game)}
       </div>
     </section>`;
@@ -422,6 +422,7 @@ async function paintGame(gameId, game) {
   bindReveal(gameId);
   bindShare();
   bindSafety(gameId, game, myPendingSafety);
+  bindExit(gameId, game, role, myPendingSafety);
   bindRecoveryCountdown(recoveryFromGame(game), () => refreshGame(gameId));
   bindPlayAgain();
   if (!active || isTerminalGameStatus(game.status)) stopGameRefresh();
@@ -626,29 +627,15 @@ function automaticNoticeHtml(game) {
   return `<p class="lead">${label}</p><p class="muted-note">${escapeHtml(remaining)}. No wallet signature is required.</p>`;
 }
 
-function safetySection(game, role, pending) {
+function safetySection(game, pending) {
   const autoNote = automaticNoticeHtml(game);
-  if (game.status === 'waiting_for_player_b') {
-    const labels = { creator_refund: 'Cancel game' };
-    let cancelControl = '';
-    if (role === 'creator') {
-      cancelControl = pending
-        ? pending.retryable
-          ? `<div class="actions"><button type="button" class="outline" data-action="safety" data-safety-action="${escapeHtml(pending.action)}">${escapeHtml(labels[pending.action] ?? 'Try again')}</button></div>`
-          : '<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for confirmation</span></div>'
-        : '<div class="actions"><button type="button" class="outline" data-action="safety" data-safety-action="creator_refund">Cancel game</button></div>';
-    }
-    if (!autoNote && !cancelControl) return '';
-    return `<div id="game-safety" class="safety">${autoNote}${cancelControl}</div>`;
-  }
-  if (autoNote) {
-    return `<div id="game-safety" class="safety">${autoNote}</div>`;
-  }
+  if (autoNote) return `<div id="game-safety" class="safety">${autoNote}</div>`;
+  // An unmatched game is cancelled through the Exit link, so it never shows the
+  // generic recovery control.
+  if (game.status === 'waiting_for_player_b') return '';
   if (pending) {
-    const labels = { creator_refund: 'Cancel game' };
-    const label = labels[pending.action] ?? 'Try again';
     const pendingControl = pending.retryable
-      ? `<div class="actions"><button type="button" class="outline" data-action="safety" data-safety-action="${escapeHtml(pending.action)}">${escapeHtml(label)}</button></div>`
+      ? `<div class="actions"><button type="button" class="outline" data-action="safety" data-safety-action="${escapeHtml(pending.action)}">Try again</button></div>`
       : '<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for confirmation</span></div>';
     return `<div id="game-safety" class="safety">${pendingControl}</div>`;
   }
@@ -672,6 +659,24 @@ function terminalSection(game) {
   return '';
 }
 
+async function runSafetyAction(gameId, action) {
+  const { provider, account } = await connectKasware('#game-safety');
+  const prepared = await api(`/api/games/${gameId}/${action}/prepare`, { method: 'POST', body: {
+    playerAddress: account.address,
+    playerPublicKey: account.publicKey,
+  } });
+  const verified = verifyPreparedTransaction(prepared, 'refund');
+  showNotice('#game-safety', 'Confirm in KasWare', `Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
+  const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
+  if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
+  await api(`/api/games/${gameId}/${action}/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
+}
+
+function renderSafetyFailure(error) {
+  if (guardKaswareShortfall('#game-safety', error)) return;
+  showActionError('#game-safety', error);
+}
+
 function bindSafety(gameId, game, pending) {
   const safetyButton = document.querySelector('[data-action="safety"]');
   if (!safetyButton || safetyButton.disabled) return;
@@ -679,22 +684,33 @@ function bindSafety(gameId, game, pending) {
   safetyButton.addEventListener('click', async () => {
     safetyButton.disabled = true;
     try {
-      const { provider, account } = await connectKasware('#game-safety');
-      const prepared = await api(`/api/games/${gameId}/${safetyAction}/prepare`, { method: 'POST', body: {
-        playerAddress: account.address,
-        playerPublicKey: account.publicKey,
-      } });
-      const verified = verifyPreparedTransaction(prepared, 'refund');
-      showNotice('#game-safety', 'Confirm in KasWare', `Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
-      const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
-      if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
-      await api(`/api/games/${gameId}/${safetyAction}/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
+      await runSafetyAction(gameId, safetyAction);
       await refreshGame(gameId);
     } catch (error) {
       safetyButton.disabled = false;
       logError('safety_action_failed', { code: error.code, message: error.message });
-      if (guardKaswareShortfall('#game-safety', error)) return;
-      showActionError('#game-safety', error);
+      renderSafetyFailure(error);
+    }
+  });
+}
+
+function bindExit(gameId, game, role, pending) {
+  const exit = document.querySelector('[data-action="exit"]');
+  if (!exit) return;
+  const cancelInFlight = pending?.action === 'creator_refund' && !pending.retryable;
+  const cancelsOpenGame = game.status === 'waiting_for_player_b' && game.canCancel && role === 'creator';
+  if (!cancelsOpenGame || cancelInFlight) return;
+  exit.addEventListener('click', async (event) => {
+    event.preventDefault();
+    exit.classList.add('disabled');
+    try {
+      await runSafetyAction(gameId, 'creator_refund');
+      stopGameRefresh();
+      location.href = '/';
+    } catch (error) {
+      exit.classList.remove('disabled');
+      logError('cancel_game_failed', { code: error.code, message: error.message });
+      renderSafetyFailure(error);
     }
   });
 }

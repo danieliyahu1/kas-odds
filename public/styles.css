@@ -87,6 +87,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 
 .back { display: inline-block; color: var(--muted); text-decoration: none; font-size: 13px; margin-bottom: 20px; }
 .back:hover { color: var(--text); }
+.back.disabled { pointer-events: none; opacity: 0.5; }
 
 .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 20px; }
 .sum-item { background: var(--bg); padding: 14px 16px; }
