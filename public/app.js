@@ -619,11 +619,30 @@ function flashCopy(button) {
   setTimeout(() => { button.textContent = original; }, 1600);
 }
 
+function automaticNoticeHtml(game) {
+  if (!game.automaticAction || !['waiting_for_player_b', 'refund_open_broadcast', 'joined', 'first_revealed'].includes(game.status)) return '';
+  const label = game.automaticAction === 'fallback_claim' ? 'Automatic fallback claim' : 'Automatic refund';
+  const remaining = game.automaticRemainingSeconds == null ? 'checking the timeout' : game.automaticReady ? 'ready; the backend will relay it' : `in about ${game.automaticRemainingSeconds}s`;
+  return `<p class="lead">${label}</p><p class="muted-note">${escapeHtml(remaining)}. No wallet signature is required.</p>`;
+}
+
 function safetySection(game, role, pending) {
-  if (game.automaticAction && ['waiting_for_player_b', 'refund_open_broadcast', 'joined', 'first_revealed'].includes(game.status)) {
-    const label = game.automaticAction === 'fallback_claim' ? 'Automatic fallback claim' : 'Automatic refund';
-    const remaining = game.automaticRemainingSeconds == null ? 'checking the timeout' : game.automaticReady ? 'ready; the backend will relay it' : `in about ${game.automaticRemainingSeconds}s`;
-    return `<div id="game-safety" class="safety"><p class="lead">${label}</p><p class="muted-note">${escapeHtml(remaining)}. No wallet signature is required.</p></div>`;
+  const autoNote = automaticNoticeHtml(game);
+  if (game.status === 'waiting_for_player_b') {
+    const labels = { creator_refund: 'Cancel game' };
+    let cancelControl = '';
+    if (role === 'creator') {
+      cancelControl = pending
+        ? pending.retryable
+          ? `<div class="actions"><button type="button" class="outline" data-action="safety" data-safety-action="${escapeHtml(pending.action)}">${escapeHtml(labels[pending.action] ?? 'Try again')}</button></div>`
+          : '<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for confirmation</span></div>'
+        : '<div class="actions"><button type="button" class="outline" data-action="safety" data-safety-action="creator_refund">Cancel game</button></div>';
+    }
+    if (!autoNote && !cancelControl) return '';
+    return `<div id="game-safety" class="safety">${autoNote}${cancelControl}</div>`;
+  }
+  if (autoNote) {
+    return `<div id="game-safety" class="safety">${autoNote}</div>`;
   }
   if (pending) {
     const labels = { creator_refund: 'Cancel game' };
@@ -634,7 +653,6 @@ function safetySection(game, role, pending) {
     return `<div id="game-safety" class="safety">${pendingControl}</div>`;
   }
   const control = (label) => recoveryControlHtml(recoveryFromGame(game), label, 'safety');
-  const isParticipant = role === 'creator' || role === 'joiner';
   if (game.safetyAction === 'fallback_claim' && game.status === 'first_revealed') {
     if (connectedAddress() !== game.firstRevealer) return '';
     return `
@@ -642,13 +660,6 @@ function safetySection(game, role, pending) {
         <p class="lead">If your ${game.matchmaking ? 'rival' : 'friend'} never reveals</p>
         <p class="muted-note">You can claim the pot after the wait. ${feeSummary(game.stakeKas)}</p>
         ${control('Claim pot')}
-      </div>`;
-  }
-  if (game.safetyAction === 'creator_refund' && game.status === 'waiting_for_player_b') {
-    if (role !== 'creator') return '';
-    return `
-      <div id="game-safety" class="safety">
-        ${control('Cancel game')}
       </div>`;
   }
   return '';

@@ -11,9 +11,9 @@ test('derives lifecycle status from confirmed and pending game events', () => {
 
 test('derives only actions permitted by the projected status', () => {
   assert.deepEqual(deriveAvailableActions({ status: 'waiting_for_player_b', firstRevealer: null }), {
-    safetyAction: 'creator_refund', automaticAction: 'refund_open', canReveal: false, firstRevealer: null,
+    safetyAction: 'creator_refund', automaticAction: 'refund_open', canReveal: false, canCancel: true, firstRevealer: null,
   });
   assert.deepEqual(deriveAvailableActions({ status: 'first_revealed', firstRevealer: 'kaspatest:creator' }), {
-    safetyAction: null, automaticAction: 'fallback_claim', canReveal: true, firstRevealer: 'kaspatest:creator',
+    safetyAction: null, automaticAction: 'fallback_claim', canReveal: true, canCancel: false, firstRevealer: 'kaspatest:creator',
   });
 });

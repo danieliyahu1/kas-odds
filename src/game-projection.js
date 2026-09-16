@@ -16,6 +16,7 @@ export function deriveAvailableActions({ status, firstRevealer }) {
     automaticAction: ['waiting_for_player_b', 'refund_open_broadcast'].includes(status) ? 'refund_open'
       : status === 'first_revealed' ? 'fallback_claim' : status === 'joined' ? 'refund_all' : null,
     canReveal: ['joined', 'first_revealed'].includes(status),
+    canCancel: status === 'waiting_for_player_b',
     firstRevealer: firstRevealer ?? null,
   };
 }

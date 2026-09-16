@@ -176,6 +176,25 @@ test('prepares an unmatched creator refund with lock time and ordinary payout', 
   assert.equal(transaction.outputs[0].value, '100000000');
 });
 
+test('prepares an immediate creator refund (cancel) with lock time zero', () => {
+  const prepared = prepareTerminalTransaction({
+    action: 'refund',
+    gameInput: { ...gameInput, amount: 100_000_000n },
+    lockTime: 0n,
+    args: [new Uint8Array(32).fill(7)],
+    payoutValue: 100_000_000n,
+    recipientScriptPublicKey: '000051',
+    feeInputs: [feeInput],
+    feeSompi: 1_000n,
+    change: { value: 999_000n, scriptPublicKey: '000051' },
+  });
+  const transaction = JSON.parse(serializeTerminalTransaction(prepared));
+  assert.equal(transaction.lockTime, '0');
+  assert.equal(transaction.outputs[0].covenant, null);
+  assert.equal(transaction.outputs[0].value, '100000000');
+  assert.match(transaction.inputs[0].signatureScript, /762ffa55$/);
+});
+
 test('refuses terminal transaction preparation when chain state is not eligible', () => {
   assert.throws(() => prepareFallbackClaimTransaction({
     game,

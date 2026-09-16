@@ -566,7 +566,6 @@ export class BackendGameService {
       if (gameRecord.join) throw new ProtocolError('ACTION_UNAVAILABLE', 'Player B already joined this game');
       const creation = deserializePrepared(gameRecord.prepared);
       const open = await this.#openCreationUtxo(id, request, creation);
-      if (open.currentDaaScore < request.deadlineDaa) throw new ProtocolError('ACTION_UNAVAILABLE', 'The game is still open for Player B');
       current = { entry: open.entry, currentDaaScore: open.currentDaaScore, transactionId: id, redeemScript: request.covenantRedeemScript, value: playerLockSompi(request.stakeSompi) };
       covenantEntry = 'refund';
     } else {
@@ -580,7 +579,7 @@ export class BackendGameService {
       action: covenantEntry,
       gameInput: { ...current.entry, transactionId: current.transactionId, index: current.outputIndex ?? 0, amount: current.value, covenantId: gameRecord.join?.covenantId ?? deserializePrepared(gameRecord.prepared).covenantId, redeemScript: current.redeemScript },
       inputSequence: sequence,
-      lockTime: action === 'creator_refund' ? request.deadlineDaa : 0n,
+      lockTime: 0n,
       args: preparedArgs,
       payoutValue: preparedPayout,
       recipientScriptPublicKey: playerScriptPublicKey(publicKey),
@@ -662,7 +661,7 @@ export class BackendGameService {
     const status = deriveGameStatus({ record: refreshed, confirmation, safetyStatus, automaticBroadcast, confirmedReveals, pendingReveals, pendingSafety });
     if (status !== refreshed.status) await this.#saveGame({ ...refreshed, status, confirmation, updatedAt: new Date().toISOString() });
     const actions = deriveAvailableActions({ status, firstRevealer: confirmedReveals.find((reveal) => !reveal.winner)?.playerAddress });
-    const { safetyAction, automaticAction } = actions;
+    const { safetyAction, automaticAction, canCancel } = actions;
     const readiness = await this.#safetyReadiness(refreshed, request, automaticAction ?? safetyAction);
     return {
       gameId: id,
@@ -674,6 +673,7 @@ export class BackendGameService {
       joiner: refreshed.join ? { address: refreshed.join.joinerAddress } : null,
       deadlineDaa: String(request.deadlineDaa),
        canJoin: status === 'waiting_for_player_b' && !(automaticAction === 'refund_open' && readiness?.ready),
+      canCancel,
       joinTransactionId: refreshed.join?.transactionId,
       revealCount: confirmedReveals.length,
        firstRevealer: actions.firstRevealer,
@@ -886,8 +886,9 @@ export class BackendGameService {
 
   async #safetyReadiness(record, request, safetyAction) {
     if (!safetyAction) return null;
+    if (safetyAction === 'creator_refund') return { ready: true, remainingSeconds: 0 };
     const currentDaa = await this.#currentDaaScore();
-    if (safetyAction === 'creator_refund' || safetyAction === 'refund_open') return safetyReadiness(currentDaa, request.deadlineDaa);
+    if (safetyAction === 'refund_open') return safetyReadiness(currentDaa, request.deadlineDaa);
     if (safetyAction === 'fallback_claim') {
       const reveal = (record.reveals ?? []).find((item) => item.status === 'confirmed');
       if (!reveal?.confirmedDaaScore) return { ready: false, remainingSeconds: null };
@@ -1090,7 +1091,7 @@ export class BackendGameService {
 }
 
 function operationKey(action, preparedHash) {
-  return `EO/v9\u0000submission\u0000${action}\u0000${preparedHash}`;
+  return `${PROTOCOL_VERSION}\u0000submission\u0000${action}\u0000${preparedHash}`;
 }
 
 function transactionIdFromSafeJson(txJson) {

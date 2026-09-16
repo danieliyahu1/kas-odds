@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { BackendGameService } from '../src/backend-game-service.js';
 import { BackendGameStore } from '../src/backend-game-store.js';
 import { Metrics } from '../src/metrics.js';
+import { prepareCreateGame } from '../src/create-game.js';
 
 const NO_UTXO_RPC = {
   getBlockDagInfo: async () => ({ virtualDaaScore: '100' }),
@@ -208,6 +209,109 @@ test('refreshTelemetry publishes the matchmaking backlog gauge and no game-state
   const text = metrics.render();
   assert.match(text, /kaspa_matchmaking_waiting 1/);
   assert.doesNotMatch(text, /kaspa_games_total/);
+});
+
+test('creator cancel is available immediately for an unmatched open game', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-cancel-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameId = 'ff'.repeat(32);
+  const creatorAddress = 'kaspatest:creator';
+  const creatorPublicKey = 'aa'.repeat(32);
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress,
+    creatorPublicKey,
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const serializedRequest = Object.fromEntries(Object.entries(request).map(([key, value]) => [key, typeof value === 'bigint' ? String(value) : value]));
+  const openRecord = {
+    gameId,
+    protocolVersion: 'EO/v10',
+    status: 'waiting_for_player_b',
+    request: serializedRequest,
+    prepared: {
+      network: 'testnet-10',
+      creatorAddress,
+      txJson: '{}',
+      preparedHash: '07'.repeat(32),
+      policy: {},
+      feeSompi: '1000',
+      covenantId: '03'.repeat(32),
+      scriptPublicKey: request.covenantScriptPublicKey,
+    },
+    createdAt: new Date().toISOString(),
+  };
+  const covenantUtxo = {
+    outpoint: { transactionId: gameId, index: 0 },
+    amount: '100000000',
+    scriptPublicKey: request.covenantScriptPublicKey,
+    blockDaaScore: 50,
+    isCoinbase: false,
+  };
+  const rpc = {
+    getBlockDagInfo: async () => ({ virtualDaaScore: '100' }),
+    getFeeEstimate: async () => ({ estimate: { priorityBucket: [{ feerate: 1 }] } }),
+    getUtxosByAddresses: async (addresses) => {
+      const [address] = addresses;
+      if (address === request.covenantAddress) return { entries: [covenantUtxo] };
+      return { entries: [] };
+    },
+  };
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame(openRecord);
+  const service = new BackendGameService({ rpc, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  // The open game is cancellable before its 5-minute deadline and the automatic
+  // refund is not ready yet.
+  const game = await service.readGame(gameId);
+  assert.equal(game.status, 'waiting_for_player_b');
+  assert.equal(game.canCancel, true);
+  assert.equal(game.canJoin, true);
+  assert.equal(game.automaticAction, 'refund_open');
+  assert.equal(game.automaticReady, false);
+  assert.equal(game.confirmationStatus, 'confirmed');
+
+  // The creator's cancel is no longer blocked by the deadline: preparation
+  // proceeds past the open-covenant check and fails only on wallet funding.
+  await assert.rejects(
+    service.prepareSafetyAction(gameId, 'creator_refund', { playerAddress: creatorAddress, playerPublicKey: creatorPublicKey }),
+    { code: 'NO_UTXOS' },
+  );
+
+  // Only the creator may cancel an unmatched game.
+  await assert.rejects(
+    service.prepareSafetyAction(gameId, 'creator_refund', { playerAddress: 'kaspatest:joiner', playerPublicKey: 'bb'.repeat(32) }),
+    { code: 'NOT_A_PLAYER' },
+  );
+
+  // Once Player B joins, cancel is unavailable.
+  const joinedRecord = {
+    ...openRecord,
+    gameId: 'ee'.repeat(32),
+    status: 'joined',
+    join: {
+      transactionId: 'dd'.repeat(32),
+      preparedHash: '01'.repeat(32),
+      joinerAddress: 'kaspatest:joiner',
+      joinerPublicKey: 'bb'.repeat(32),
+      joinerCommitment: 'ee'.repeat(32),
+      joinedAddress: 'kaspatest:joined',
+      joinedScriptPublicKey: '0000aa20' + '02'.repeat(32) + '87',
+      joinedRedeemScript: 'ab'.repeat(32),
+      covenantId: '03'.repeat(32),
+      submittedAt: new Date().toISOString(),
+    },
+  };
+  await store.saveGame(joinedRecord);
+  await assert.rejects(
+    service.prepareSafetyAction('ee'.repeat(32), 'creator_refund', { playerAddress: creatorAddress, playerPublicKey: creatorPublicKey }),
+    { code: 'ACTION_UNAVAILABLE' },
+  );
 });
 
 async function matchRoles(service, matchId) {
