@@ -14,28 +14,16 @@ data:
       "tags": ["kaspa-even-odd"],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 8,
+      "version": 9,
       "refresh": "30s",
       "time": { "from": "now-24h", "to": "now" },
-      "templating": {
-        "list": [
-          {
-            "name": "datasource",
-            "label": "Data source",
-            "type": "datasource",
-            "query": "prometheus",
-            "current": {},
-            "hide": 0
-          }
-        ]
-      },
       "panels": [
         {
           "id": 1,
           "title": "Homepage entered",
           "type": "stat",
           "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
           "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
           "targets": [
             { "refId": "A", "expr": "sum(increase(kaspa_page_visits_total[$__range]))", "legendFormat": "homepage visits" }
@@ -46,7 +34,7 @@ data:
           "title": "Find a rival",
           "type": "stat",
           "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
           "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
           "targets": [
             { "refId": "A", "expr": "sum(increase(kaspa_http_requests_total{route=\"/api/matchmaking/join\"}[$__range]))", "legendFormat": "find a rival clicks" }
@@ -57,7 +45,7 @@ data:
           "title": "Play a friend",
           "type": "stat",
           "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
           "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
           "targets": [
             { "refId": "A", "expr": "sum(increase(kaspa_http_requests_total{route=\"/api/games/prepare\"}[$__range]))", "legendFormat": "play a friend clicks" }
@@ -68,12 +56,12 @@ data:
           "title": "Visitors per API",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
           "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
           "targets": [
-            { "refId": "A", "expr": "rate(kaspa_page_visits_total[$__rate_interval])", "legendFormat": "homepage" },
-            { "refId": "B", "expr": "rate(kaspa_http_requests_total{route=\"/api/matchmaking/join\"}[$__rate_interval])", "legendFormat": "find a rival" },
-            { "refId": "C", "expr": "rate(kaspa_http_requests_total{route=\"/api/games/prepare\"}[$__rate_interval])", "legendFormat": "play a friend" }
+            { "refId": "A", "expr": "sum(rate(kaspa_page_visits_total[$__rate_interval]))", "legendFormat": "homepage" },
+            { "refId": "B", "expr": "sum(rate(kaspa_http_requests_total{route=\"/api/matchmaking/join\"}[$__rate_interval]))", "legendFormat": "find a rival" },
+            { "refId": "C", "expr": "sum(rate(kaspa_http_requests_total{route=\"/api/games/prepare\"}[$__rate_interval]))", "legendFormat": "play a friend" }
           ]
         }
       ]
