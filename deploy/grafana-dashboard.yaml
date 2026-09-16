@@ -14,7 +14,7 @@ data:
       "tags": ["kaspa-even-odd"],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 3,
+      "version": 4,
       "refresh": "30s",
       "time": { "from": "now-6h", "to": "now" },
       "templating": {
@@ -61,6 +61,17 @@ data:
           "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
           "targets": [
             { "refId": "A", "expr": "sum(increase(kaspa_http_requests_total{route=\"/api/games/prepare\"}[$__range]))", "legendFormat": "play a friend clicks" }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Visitors per API",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
+          "targets": [
+            { "refId": "A", "expr": "sum by (route) (rate(kaspa_http_requests_total{route=~\"/api/.*\"}[$__rate_interval]))", "legendFormat": "{{route}}" }
           ]
         }
       ]
