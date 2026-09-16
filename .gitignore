@@ -7,8 +7,9 @@ node_modules/
 .opencode/
 opencode.json
 
-# Testnet wallet (contains a testnet seed phrase) — never commit
+# Local agent wallets (contain seed phrases) — never commit
 wallet-testnet.json
+agent-kasap-wallets.json
 
 # Rust build artifacts (standalone oracle at oracle/, and silverscript submodule)
 target/
