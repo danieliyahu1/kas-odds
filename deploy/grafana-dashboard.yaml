@@ -14,9 +14,9 @@ data:
       "tags": ["kaspa-even-odd"],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 7,
+      "version": 8,
       "refresh": "30s",
-      "time": { "from": "now-6h", "to": "now" },
+      "time": { "from": "now-24h", "to": "now" },
       "templating": {
         "list": [
           {
