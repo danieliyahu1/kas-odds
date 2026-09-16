@@ -314,6 +314,79 @@ test('creator cancel is available immediately for an unmatched open game', async
   );
 });
 
+test('automatic settlement retries a rejected refund instead of abandoning it', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-retry-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameId = 'ab'.repeat(32);
+  const deadlineDaa = 10_000n;
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'aa'.repeat(32),
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const serializedRequest = Object.fromEntries(Object.entries(request).map(([key, value]) => [key, typeof value === 'bigint' ? String(value) : value]));
+  const openRecord = {
+    gameId,
+    protocolVersion: 'EO/v10',
+    status: 'waiting_for_player_b',
+    request: serializedRequest,
+    prepared: {
+      network: 'testnet-10',
+      creatorAddress: 'kaspatest:creator',
+      txJson: '{}',
+      preparedHash: '07'.repeat(32),
+      policy: {},
+      feeSompi: '1000',
+      covenantId: '03'.repeat(32),
+      scriptPublicKey: request.covenantScriptPublicKey,
+    },
+    createdAt: new Date().toISOString(),
+  };
+  const covenantUtxo = {
+    outpoint: { transactionId: gameId, index: 0 },
+    amount: '100000000',
+    scriptPublicKey: request.covenantScriptPublicKey,
+    blockDaaScore: Number(deadlineDaa - 29n),
+    isCoinbase: false,
+  };
+  // The node rejects the first broadcast as a transient condition does; the
+  // keeper must try again on its next pass rather than abandon the refund.
+  let broadcasts = 0;
+  const rpc = {
+    getBlockDagInfo: async () => ({ virtualDaaScore: String(deadlineDaa + 5n) }),
+    getFeeEstimate: async () => ({ estimate: { priorityBucket: [{ feerate: 1 }] } }),
+    getUtxosByAddresses: async (addresses) => {
+      const [address] = addresses;
+      return address === request.covenantAddress ? { entries: [covenantUtxo] } : { entries: [] };
+    },
+    submitSafeJson: async () => {
+      broadcasts += 1;
+      if (broadcasts === 1) throw new Error('temporarily unavailable');
+      return 'cd'.repeat(32);
+    },
+  };
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame(openRecord);
+  const service = new BackendGameService({ rpc, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  await service.settleAutomaticGames();
+  assert.equal(broadcasts, 1);
+  assert.equal((await store.loadGame(gameId)).status, 'waiting_for_player_b', 'a rejected broadcast must not be recorded as settled');
+
+  await service.settleAutomaticGames();
+  const settled = await store.loadGame(gameId);
+  assert.equal(broadcasts, 2, 'the keeper must retry a rejection rather than give up');
+  assert.equal(settled.status, 'refund_open_broadcast');
+  assert.equal(settled.automaticSettlement?.action, 'refund_open');
+  assert.equal(settled.automaticSettlement?.status, 'broadcast');
+});
+
 async function matchRoles(service, matchId) {
   const firstView = await service.matchmakingStatus(matchId, 'kaspatest:first');
   const creatorAddress = firstView.role === 'creator' ? 'kaspatest:first' : 'kaspatest:second';

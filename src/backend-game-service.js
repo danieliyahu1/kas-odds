@@ -1037,7 +1037,9 @@ export class BackendGameService {
   async #submitOperation({ operationId, action, gameId, preparedHash, transactionId, metadata = {}, submit }) {
     const existing = await this.store.loadOperation(operationId);
     if (existing?.status === 'broadcast') return existing.transactionId;
-    if (existing?.status === 'submitting' || existing?.status === 'failed') throw new ProtocolError('ACTION_PENDING', 'A previous submission is still being reconciled');
+    // A rejection is retryable: the record stays `failed` until an attempt is
+    // accepted, so a transient node error must not wedge the operation forever.
+    if (existing?.status === 'submitting') throw new ProtocolError('ACTION_PENDING', 'A previous submission is still being reconciled');
     const startedAt = new Date().toISOString();
     const base = { operationId, action, gameId, preparedHash, transactionId, metadata, createdAt: existing?.createdAt ?? startedAt };
     await this.store.saveOperation({ ...base, status: 'submitting', updatedAt: startedAt });
