@@ -4,7 +4,8 @@ Live: <https://kaspa-even-odd.danieliyahu.com/>
 
 Initial protocol implementation for the non-custodial Even/Odd MVP on Kaspa.
 The same image serves either Kaspa `mainnet` or `testnet-10`; the network is
-selected at runtime with the `KASPA_NETWORK` environment variable.
+selected at runtime with the single `KASPA_NETWORK` environment variable, and
+the store file, wRPC node, and fee wallet all follow from it.
 
 Both ways to play begin with an off-chain lobby. "Play someone new" queues the
 wallet for matchmaking; "Play with a friend" opens a private room and the host
@@ -171,21 +172,33 @@ Runtime details:
   readable and writable and the store parses as valid JSON)
 - Liveness endpoint: `/healthz` (process liveness only)
 - Required runtime secrets: none beyond the fee wallet identity. The app holds
-  no private key — `GAME_FEE_ADDRESS` is a public wallet address — so it is
-  never a literal in this repository. In the cluster the Deployment reads it
-  from the `kaspa-even-odd-fee-address` Secret (`address` key) via
-  `valueFrom.secretKeyRef`; locally it is set with `--env-file=.env` (the
-  `.env` file is gitignored). Wallet private keys never leave the browser.
-- Required network: `KASPA_NETWORK` selects the profile and must be `mainnet`
+  no private key — the fee wallet is a public address — so it is never a literal
+  in this repository. In the cluster the Deployment reads it from the
+  `kaspa-even-odd-game-fee-address` Secret (keys `mainnet` and `testnet-10`,
+  filled from the OCI Vault entries `kaspa-even-odd-game-fee-address-mainnet`
+  and `kaspa-even-odd-game-fee-address-testnet-10`) via `valueFrom.secretKeyRef`;
+  locally the same values are set with `--env-file=.env` (the `.env` file is
+  gitignored). Wallet private keys never leave the browser.
+- Required network: `KASPA_NETWORK` is the single switch and must be `mainnet`
   or `testnet-10` — the process fails closed when it is unset or unknown. Each
   profile fixes the address prefix (`kaspa` / `kaspatest`) and the KasWare
-  network name (`kaspa_mainnet` / `kaspa_testnet_10`). `KASPA_WRPC_URL` pins the
-  matching wRPC node (the SDK resolver is the fallback). The browser never talks
+  network name (`kaspa_mainnet` / `kaspa_testnet_10`), and the SDK resolver
+  picks the matching wRPC node. `KASPA_WRPC_URL` is an optional override that
+  pins a specific node. Every other network-specific value (the store file and
+  the fee wallet, below) follows from `KASPA_NETWORK`, so switching networks
+  changes exactly one variable. The browser never talks
   to a node directly; all chain reads, fee estimation, transaction preparation,
   and broadcast happen server-side.
-- The conditional on-chain game fee: `GAME_FEE_ADDRESS` is the wallet address
-  (with the selected network's prefix) of the game wallet that receives 1% of
-  the total locked pot
+- The conditional on-chain game fee: each network has its own recipient wallet,
+  supplied as `GAME_FEE_ADDRESS_MAINNET` and `GAME_FEE_ADDRESS_TESTNET_10` (a
+  shared `GAME_FEE_ADDRESS` is still the fallback when the qualified name is
+  absent), so `KASPA_NETWORK` alone decides which wallet is used. Both live in
+  the `kaspa-even-odd-game-fee-address` Secret — keys `mainnet` and
+  `testnet-10` — which the ExternalSecret fills from the OCI Vault entries
+  `kaspa-even-odd-game-fee-address-mainnet` and
+  `kaspa-even-odd-game-fee-address-testnet-10` by name, so no value is ever in
+  Git. The wallet receives 1% of the total
+  locked pot
   when the pot is at least 100 KAS and the game settles with a winner (second
   reveal or fallback claim). Smaller pots have no platform fee. Kaspa
   version-0 (PubKey) addresses embed the recipient's x-only public key
@@ -193,20 +206,21 @@ directly, so the server decodes the address at startup and bakes that key
   into every game's covenant state. Each player locks exactly the displayed
   stake; automatic timeout refunds reserve 0.016 KAS from the locked amount for
   the network fee, while winner settlement pays the game fee from the total pot.
-  The fee recipient is runtime-only
-  configuration: the process boots without it, reports
+  The fee recipient is runtime configuration: the process boots without one,
+  reports
   `gameFeePublicKey: null` from `/api/config`, and rejects game creation with
   `INVALID_GAME_FEE` until it is configured — so a misconfigured pod never
-  serves a game without a fee recipient. Create the cluster Secret out-of-band
-  (its value never lives in Git):
-  `kubectl create secret generic kaspa-even-odd-fee-address --from-literal=address=kaspa:...`
-  The Deployment references it with `valueFrom.secretKeyRef`, so the pod also
-  fails to be created when the Secret is missing. The address prefix must match
-  `KASPA_NETWORK`; a mismatched prefix is rejected at startup.
+  serves a game without a fee recipient. The Deployment reads the keys with
+  `valueFrom.secretKeyRef`, so the pod is not created when the Secret is
+  missing, and each address prefix must match `KASPA_NETWORK` (a mismatched
+  prefix is rejected at startup).
 - Required persistent storage: the `kaspa-even-odd-state` PVC mounted at
-  `/var/lib/kaspa-even-odd` stores non-secret backend game metadata. It is
-  `ReadWriteOnce` and only ever mounted by a single replica; the Deployment uses
-  `strategy: Recreate` for that reason.
+  `/var/lib/kaspa-even-odd` stores non-secret backend game metadata. The store
+  file is derived from the network — `GAME_STORE_DIR` plus
+  `games-<network>-v10.json` — so a network switch never points two networks at
+  one file; `GAME_STORE_PATH` remains an explicit override, and locally it
+  defaults under `.data/`. The volume is `ReadWriteOnce` and only ever mounted by
+  a single replica; the Deployment uses `strategy: Recreate` for that reason.
 - Request controls: `MAX_REQUEST_BYTES` (default 1,000,000) caps request bodies,
   and `RATE_LIMIT_PER_MINUTE` (default 300) caps mutating API calls per client.
   Set `TRUST_PROXY=true` only behind a trusted proxy that rewrites
@@ -228,7 +242,9 @@ directly, so the server decodes the address at startup and bakes that key
   Telegram chat via `sendMessage` (`parse_mode` off, web preview disabled). The
   bot token (`TELEGRAM_FEEDBACK_BOT_TOKEN`) and chat id
   (`TELEGRAM_FEEDBACK_CHAT_ID`) are runtime-only configuration read from the
-  `kaspa-even-odd-telegram` Secret. Feedback is just the message the user wrote
+  `kaspa-even-odd-telegram` Secret (keys `bot-token` and `chat-id`, filled from
+  the OCI Vault entries `kaspa-even-odd-telegram-bot-token` and
+  `kaspa-even-odd-telegram-chat-id`). Feedback is just the message the user wrote
   — no wallet address, game id, transaction, page, or query string is attached,
   and the text is never logged. When Telegram is not configured the feedback is
   still stored in the queue — never discarded — records a

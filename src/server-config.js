@@ -16,10 +16,22 @@ export function readServerConfig(env = process.env) {
   return {
     port, metricsPort, network: profile,
     gameFeePublicKey: resolveGameFeePublicKey(env, profile.id), maxRequestBytes, rateLimitPerMinute,
-    trustedProxy: env.TRUST_PROXY === 'true', storePath: env.GAME_STORE_PATH ?? `.data/games-${profile.id}.json`,
+    trustedProxy: env.TRUST_PROXY === 'true', storePath: resolveStorePath(env, profile),
     feedbackSpillPath: env.FEEDBACK_SPILL_PATH ?? join('.data', 'feedback-spill.json'),
     paths: { publicRoot: fileURLToPath(new URL('../public/', import.meta.url)), sourceRoot: fileURLToPath(new URL('./', import.meta.url)), covenantRoot: fileURLToPath(new URL('../covenant/', import.meta.url)), vendorRoot: fileURLToPath(new URL('../vendor/', import.meta.url)) },
   };
 }
 
 function isPort(value) { return Number.isInteger(value); }
+
+// The store is one JSON file on a mounted volume. In the cluster only the
+// directory is configured and the file name is derived from the network, so a
+// single KASPA_NETWORK switch can never point two networks at one file.
+// GAME_STORE_PATH stays available as an explicit override; locally, with no
+// directory set, it defaults under .data.
+function resolveStorePath(env, profile) {
+  if (env.GAME_STORE_PATH) return env.GAME_STORE_PATH;
+  const fileName = `games-${profile.id}-v10.json`;
+  if (env.GAME_STORE_DIR) return `${String(env.GAME_STORE_DIR).replace(/\/+$/, '')}/${fileName}`;
+  return `.data/games-${profile.id}.json`;
+}
