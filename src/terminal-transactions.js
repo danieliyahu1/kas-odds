@@ -69,7 +69,10 @@ export function prepareOpenRefundTransaction({ gameInput, stakeSompi, settleFeeS
   return prepareCovenantOnlyTransaction({
     action: TERMINAL_ENTRIES.refundOpen,
     gameInput,
-    inputSequence: NO_REVEAL_REFUND_DAA_OFFSET,
+    // The deadline is the only gate. A non-zero sequence would add a second,
+    // relative wait measured from the deposit's own DAA, so the node would
+    // reject the refund for a while after the deadline had already passed.
+    inputSequence: 0n,
     lockTime: BigInt(deadlineDaa),
     args: [creatorPublicKey],
     outputs: [{ value: stake - fee, scriptPublicKey: playerScriptPublicKey(creatorPublicKey) }],

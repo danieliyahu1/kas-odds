@@ -99,19 +99,31 @@ test('prepares a permissionless refund for both escrow holders', () => {
   assert.match(transaction.inputs[0].signatureScript, /0e2b436c$/);
 });
 
-test('prepares an automatic refund for an unmatched creator', () => {
+test('automatic refund for an unmatched creator is includable once the deadline passes', () => {
+  const deadlineDaa = 5_000n;
+  // The covenant deposit confirms a few DAA after creation, so it sits just
+  // below the deadline (the deadline is creation + 3000 DAA). A relative input
+  // lock would keep the node from including the refund well past that block.
+  const deposit = { ...gameInput, amount: 100_000_000n, blockDaaScore: deadlineDaa - 29n };
   const prepared = prepareOpenRefundTransaction({
-    gameInput: { ...gameInput, amount: 100_000_000n },
+    gameInput: deposit,
     stakeSompi: 100_000_000n,
-     settleFeeSompi: 1_600_000n,
-    deadlineDaa: 5_000n,
+    settleFeeSompi: 1_600_000n,
+    deadlineDaa,
     creatorPublicKey: '07'.repeat(32),
   });
   const transaction = JSON.parse(serializeTerminalTransaction(prepared));
+
+  // The absolute deadline alone gates the refund: it can be relayed the moment
+  // the deadline is reached, with no extra wait measured from the deposit.
   assert.equal(transaction.lockTime, '5000');
+  assert.ok(
+    BigInt(deposit.blockDaaScore) + BigInt(transaction.inputs[0].sequence) <= deadlineDaa,
+    'the refund must not carry a relative lock that outlives the deadline',
+  );
   assert.equal(transaction.inputs.length, 1);
   assert.equal(transaction.outputs.length, 1);
-   assert.equal(transaction.outputs[0].value, '98400000');
+  assert.equal(transaction.outputs[0].value, '98400000');
   assert.match(transaction.inputs[0].signatureScript, /3a658a5b$/);
 });
 
