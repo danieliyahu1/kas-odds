@@ -14,7 +14,7 @@ data:
       "tags": ["kaspa-even-odd"],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 4,
+      "version": 5,
       "refresh": "30s",
       "time": { "from": "now-6h", "to": "now" },
       "templating": {
@@ -71,7 +71,9 @@ data:
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
           "targets": [
-            { "refId": "A", "expr": "sum by (route) (rate(kaspa_http_requests_total{route=~\"/api/.*\"}[$__rate_interval]))", "legendFormat": "{{route}}" }
+            { "refId": "A", "expr": "rate(kaspa_page_visits_total[$__rate_interval])", "legendFormat": "homepage" },
+            { "refId": "B", "expr": "rate(kaspa_http_requests_total{route=\"/api/matchmaking/join\"}[$__rate_interval])", "legendFormat": "find a rival" },
+            { "refId": "C", "expr": "rate(kaspa_http_requests_total{route=\"/api/games/prepare\"}[$__rate_interval])", "legendFormat": "play a friend" }
           ]
         }
       ]
