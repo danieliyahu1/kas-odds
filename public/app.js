@@ -11,7 +11,7 @@ import { loadCovenantTemplate, verifyCreation, verifyPreparedTransaction } from 
 import { logDebug, logInfo, logWarn, logError } from '/log.js';
 import { signWithKasware as kaswareSignPskt } from '/kasware-signing.js';
 import { connectKaswareAccount } from '/kasware-connect.js';
-import { actionErrorCopy, createLatestRequestGate, createPollController, isTerminalGameStatus } from '/app-controller.js';
+import { GAME_STAGE, actionErrorCopy, createLatestRequestGate, createPollController, gameStage, isTerminalGameStatus, lobbyStage } from '/app-controller.js';
 import { LOBBY_MODE, LOBBY_PHASE, createLobbyController } from './lobby-controller.js';
 import { loadRuntimeConfig, runtimeConfig } from '/runtime-config.js';
 
@@ -112,6 +112,8 @@ function renderLobby({ mode, roomId = null }) {
 function paintLobby(snapshot, actions) {
   const { mode, phase, match, number, draft, busy, note, error } = snapshot;
   const label = mode === LOBBY_MODE.PUBLIC ? 'Play someone new' : 'Play with a friend';
+  const progress = lobbyStage({ phase, mode, match });
+  const stageTitle = progress ? progress.title : '';
   const notice = `<div id="lobby-notice">${lobbyNoticeHtml(note)}</div>`;
   const startButton = `<div class="actions"><button type="button" class="primary" id="lobby-start"${busy ? ' disabled' : ''}>`;
   const cancelButton = '<div class="actions"><button type="button" class="outline" id="lobby-leave">Cancel</button></div>';
@@ -119,7 +121,7 @@ function paintLobby(snapshot, actions) {
     app.innerHTML = `
       <a class="back" href="/">Back</a>
       <section class="panel" aria-label="${label}">
-        <div class="panel-head"><h2>${escapeHtml(title)}</h2></div>
+        <div class="panel-head"><h2>${escapeHtml(title)}</h2>${stageRailHtml(progress?.rail)}</div>
         ${body}
       </section>`;
   };
@@ -159,7 +161,7 @@ function paintLobby(snapshot, actions) {
   }
 
   if (phase === LOBBY_PHASE.GUEST_ENTRY) {
-    paint('Join your friend', `
+    paint('Joining your friend', `
       <p class="lead">Connect your wallet to take the second seat.</p>
       ${notice}
       ${startButton}Connect wallet</button></div>`);
@@ -178,7 +180,7 @@ function paintLobby(snapshot, actions) {
 
   if (phase === LOBBY_PHASE.WAITING) {
     if (mode === LOBBY_MODE.PUBLIC) {
-      paint('Looking for a player', `
+      paint('Searching a player', `
         <div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Your limit: up to ${escapeHtml(match.myLimitKas)} KAS.</span></div>
         <p class="muted-note">You'll pick your number when we match.</p>
         ${cancelButton}`);
@@ -200,7 +202,7 @@ function paintLobby(snapshot, actions) {
 
   if (phase === LOBBY_PHASE.PICK) {
     const selected = (value) => number === value;
-    paint("You're matched", `
+    paint(stageTitle, `
       <p class="lead">You're <strong class="side-strong">${escapeHtml(capitalize(match.side))}</strong>. <strong>${escapeHtml(match.stakeKas)} KAS</strong> each.</p>
       <p class="fate">${winnerSummary(match.stakeKas)}</p>
       <fieldset class="choice-group">
@@ -218,13 +220,14 @@ function paintLobby(snapshot, actions) {
   }
 
   if (phase === LOBBY_PHASE.PREPARING) {
-    paint('Getting your game ready', `
-      <div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">This only takes a moment.</span></div>`);
+    const waitingOnOpponent = progress.stage === GAME_STAGE.VOTE_WAIT;
+    paint(stageTitle, `
+      <div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">${waitingOnOpponent ? "They haven't voted yet." : 'Preparing your transaction.'}</span></div>`);
     return;
   }
 
   if (phase === LOBBY_PHASE.WALLET) {
-    paint('Confirm in your wallet', `
+    paint(stageTitle, `
       <p class="lead">Approve <strong>${escapeHtml(lockKas(match.stakeKas))} KAS</strong>.</p>
       <p class="muted-note">Your stake stays locked until the game ends.</p>`);
     return;
@@ -275,17 +278,18 @@ async function renderGame(gameId) {
   }
 }
 
-function paintGameHeader(status, role, game, revealMine) {
-  if (status === 'settled') {
-    if (role === 'creator' || role === 'joiner') return { title: winnerIsYou(game, role) ? 'You won.' : 'You lost.', loading: false };
-    return { title: `${capitalize(winnerSideName(game))} took the pot.`, loading: false };
+function paintGameHeader(game, role, progress) {
+  if (game.status === 'settled') {
+    if (role === 'creator' || role === 'joiner') return { rail: null, title: winnerIsYou(game, role) ? 'You won.' : 'You lost.', loading: false };
+    return { rail: null, title: `${capitalize(winnerSideName(game))} took the pot.`, loading: false };
   }
-  if (role === 'viewer') return { title: 'You are watching this game.', loading: false };
-  if (role === 'creator' && game.status === 'waiting_for_player_b') return { title: 'Your game is ready.', loading: false };
-  if (game.status === 'joined' || game.status === 'first_revealed' || game.status === 'reveal_broadcast' || game.status === 'settlement_broadcast') {
-    return { title: revealMine ? 'Your turn to reveal.' : `Waiting for your ${game.matchmaking ? 'opponent' : 'friend'}.`, loading: false };
-  }
-  return { title: 'Getting your game ready.', loading: true };
+  if (role === 'viewer') return { rail: null, title: 'You are watching this game.', loading: false };
+  if (isGameOver(game.status)) return { rail: null, title: 'Game over.', loading: false };
+  return { rail: progress?.rail ?? null, title: progress?.title ?? 'Game over.', loading: progress?.loading ?? false };
+}
+
+function isGameOver(status) {
+  return isTerminalGameStatus(status) || status === 'refund_partial';
 }
 
 async function paintGame(gameId, game) {
@@ -295,19 +299,18 @@ async function paintGame(gameId, game) {
   const myPendingReveal = (game.pendingReveals ?? []).find((item) => item.role === role) ?? null;
   const myPendingSafety = (game.pendingSafety ?? []).find((item) => item.role === role) ?? null;
   const revealMine = (game.canReveal || Boolean(myPendingReveal)) && (role === 'creator' || role === 'joiner') && !isMyReveal(game, role);
-  const header = paintGameHeader(game.status, role, game, revealMine);
-  const isPlayer = role === 'creator' || role === 'joiner';
-  const waiting = active && isPlayer && !revealMine;
+  const header = paintGameHeader(game, role, gameStage(game, role));
 
   app.innerHTML = `
     <a class="back" href="/" data-action="exit">Exit</a>
     <section class="panel" aria-label="Game">
       <div class="panel-head">
         ${header.loading ? `<div class="header-loading"><span class="spinner large confirm" aria-hidden="true"></span><h2>${escapeHtml(header.title)}</h2></div>` : `<h2>${escapeHtml(header.title)}</h2>`}
+        ${stageRailHtml(header.rail)}
       </div>
       <div class="game-body">
         ${gameDetails(game)}
-        ${active ? inviteBox(game, waiting) + (revealMine ? revealSection(game, myPendingReveal) : '') : ''}
+        ${active ? inviteBox(game) + (revealMine ? revealSection(game, myPendingReveal) : '') : ''}
         ${resultOverlay(game, role)}
         ${safetySection(game, myPendingSafety)}
         ${terminalSection(game)}
@@ -323,20 +326,25 @@ async function paintGame(gameId, game) {
   if (!active || isTerminalGameStatus(game.status)) stopGameRefresh();
 }
 
+function stageRailHtml(rail) {
+  if (!rail || rail.length === 0) return '';
+  const nodes = rail.map((node) => {
+    const current = node.state === 'current';
+    return `<li class="stage-node ${node.state}"${current ? ' aria-current="step"' : ''}><span class="sr-only">${escapeHtml(node.label)}</span></li>`;
+  }).join('');
+  return `<ol class="stage-rail" aria-label="Game progress">${nodes}</ol>`;
+}
+
 function recoveryFromGame(game) {
   if (!game.safetyAction && !game.automaticAction) return null;
   return { ready: game.automaticAction ? game.automaticReady : game.safetyReady, remainingSeconds: game.automaticAction ? game.automaticRemainingSeconds : game.safetyRemainingSeconds };
 }
 
-function inviteBox(game, waiting) {
+function inviteBox(game) {
   if (['settled', 'fallback_claimed', 'refunded', 'creator_refunded'].includes(game.status)) return '';
-  const waitingRow = waiting
-    ? `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for your ${game.matchmaking ? 'opponent' : 'friend'}</span></div>`
-    : '';
-  if (game.matchmaking) return `<div class="invite-box" id="invite-box">${waitingRow}</div>`;
+  if (game.matchmaking) return '';
   return `
     <div class="invite-box" id="invite-box">
-      ${waitingRow}
       <button class="share-button" data-action="copy-link">Copy link</button>
     </div>`;
 }
@@ -476,9 +484,10 @@ function safetySection(game, pending) {
 }
 
 function terminalSection(game) {
-  if (game.status === 'fallback_claimed') return `<div class="notice"><strong>Pot claimed.</strong>Your ${game.matchmaking ? 'opponent' : 'friend'} never revealed, so you took the pot.</div>`;
-  if (game.status === 'refunded' || game.status === 'creator_refunded') return '<div class="notice"><strong>Canceled.</strong>Your stake was returned.</div>';
-  if (game.status === 'refund_partial') return '<div class="notice"><strong>Partial refund.</strong>One stake was returned. The other player can still refund theirs.</div>';
+  const proof = onChainProofHtml(game);
+  if (game.status === 'fallback_claimed') return `<div class="notice"><strong>Pot claimed.</strong>Your ${game.matchmaking ? 'opponent' : 'friend'} never revealed, so you took the pot.${proof}</div>`;
+  if (game.status === 'refunded' || game.status === 'creator_refunded') return `<div class="notice"><strong>Canceled.</strong>Your stake was returned.${proof}</div>`;
+  if (game.status === 'refund_partial') return `<div class="notice"><strong>Partial refund.</strong>One stake was returned. The other player can still refund theirs.${proof}</div>`;
   return '';
 }
 
@@ -567,8 +576,35 @@ function resultOverlay(game, role) {
         <span class="result-side-name">Joiner &middot; ${capitalize(game.creator?.side === 'even' ? 'odd' : 'even')}</span>
         <span class="result-pick">${joinerPick}</span>
       </div>
+      ${onChainProofHtml(game)}
       ${role === 'creator' || role === 'joiner' ? '<button type="button" class="primary" data-action="play-again">Play again</button>' : ''}
     </div>`;
+}
+
+// The on-chain proof is deliberately quiet: one line per settled transaction, a
+// plain-language label, and a shortened id that opens the network explorer. It
+// answers "can I check this myself?" without competing with the result.
+function onChainProofHtml(game) {
+  const transactions = game.transactions ?? [];
+  if (transactions.length === 0) return '';
+  const explorer = runtimeConfig().explorerUrl;
+  const rows = transactions.map((transaction) => `
+    <div class="proof-row">
+      <span class="proof-label">${escapeHtml(onChainLabel(transaction.action))}</span>
+      ${explorer ? `<a class="proof-tx" href="${escapeHtml(`${explorer}/${transaction.transactionId}`)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(transaction.transactionId)}">${escapeHtml(shortTransactionId(transaction.transactionId))}</a>`
+        : `<span class="proof-tx">${escapeHtml(shortTransactionId(transaction.transactionId))}</span>`}
+    </div>`).join('');
+  return `<div class="proof"><span class="proof-heading">Verify on-chain</span>${rows}</div>`;
+}
+
+function onChainLabel(action) {
+  if (action === 'settlement') return 'Winner payout';
+  if (action === 'fallback_claim') return 'Claim payout';
+  return 'Refund';
+}
+
+function shortTransactionId(transactionId) {
+  return transactionId.length > 18 ? `${transactionId.slice(0, 8)}\u2026${transactionId.slice(-6)}` : transactionId;
 }
 
 function displayPick(choice) {

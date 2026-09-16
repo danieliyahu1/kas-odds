@@ -70,6 +70,7 @@ test('server serves the browser application and health probe', async (t) => {
     kaswareNetwork: 'kaspa_testnet_10',
     protocolVersion: 'EO/v10',
     gameFeePublicKey: feePublicKey,
+    explorerUrl: 'https://tn10.kaspa.stream/transactions',
   });
   assert.equal(missing.status, 404);
   assert.equal(demoApi.status, 404);
@@ -110,6 +111,11 @@ test('server serves the browser application and health probe', async (t) => {
   assert.doesNotMatch(browserSource, /api\/matchmaking\/\$\{match\.matchId\}\/confirm/);
   // A matched pair shares one screen; only the joiner's creation wait differs.
   assert.doesNotMatch(browserSource, /Waiting for your rival to create the game/);
+  // The stage rail replaced the old opaque "getting your game ready" headings.
+  assert.doesNotMatch(browserSource, /Getting your game ready/);
+  assert.match(browserSource, /GAME_STAGE\.VOTE_WAIT/);
+  assert.match(browserSource, /gameStage\(game, role\)/);
+  assert.match(browserSource, /class="stage-rail"/);
   // app.js keeps the DOM view and the game page; the lobby orchestration lives
   // in the headless controller.
   assert.match(browserSource, /function renderLobby/);
@@ -400,6 +406,7 @@ test('starts without a fee recipient configured and reports the game fee as not 
     kaswareNetwork: 'kaspa_testnet_10',
     protocolVersion: 'EO/v10',
     gameFeePublicKey: null,
+    explorerUrl: 'https://tn10.kaspa.stream/transactions',
   });
 });
 

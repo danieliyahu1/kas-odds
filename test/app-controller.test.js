@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { actionErrorCopy, createLatestRequestGate, createPollController, isTerminalGameStatus, MATCH_GAME_WAIT, MATCH_VIEW, matchGameWaitState, resolveMatchView, shouldRerenderMatch } from '../public/app-controller.js';
+import { actionErrorCopy, createLatestRequestGate, createPollController, GAME_STAGE, gameStage, isTerminalGameStatus, lobbyStage, MATCH_GAME_WAIT, MATCH_VIEW, matchGameWaitState, resolveMatchView, shouldRerenderMatch } from '../public/app-controller.js';
 
 test('latest request gate rejects responses from older requests', () => {
   const gate = createLatestRequestGate();
@@ -75,4 +75,51 @@ test('action error copy maps known codes and falls back for anything unknown', (
   assert.deepEqual(actionErrorCopy({ code: 'MATCH_TIMEOUT' }), { title: 'Still waiting for your opponent', message: 'They did not create the game in time. Try again in a moment.' });
   assert.equal(actionErrorCopy({ code: 'SOMETHING_NEW' }).title, 'Please try again');
   assert.equal(actionErrorCopy(undefined).title, 'Please try again');
+});
+
+test('the rail begins at the match, not while waiting for an opponent', () => {
+  assert.equal(lobbyStage({ phase: 'waiting', mode: 'public', match: {} }), null);
+  assert.equal(lobbyStage({ phase: 'waiting', mode: 'host', match: {} }), null);
+  assert.equal(lobbyStage({ phase: 'guest-entry', mode: 'guest', match: null }), null);
+  assert.equal(lobbyStage({ phase: 'limit', mode: 'public', match: null }), null);
+  assert.equal(lobbyStage({ phase: 'abandoned', mode: 'public', match: matched() }), null);
+});
+
+test('the lobby names the stage the player is on once matched', () => {
+  assert.equal(lobbyStage({ phase: 'pick', mode: 'public', match: matched() }).title, 'Your turn to vote');
+  assert.equal(lobbyStage({ phase: 'wallet', mode: 'host', match: matched() }).title, 'Your turn to vote');
+  assert.equal(lobbyStage({ phase: 'preparing', mode: 'host', match: matched() }).title, 'Waiting for your friend to vote');
+});
+
+test('only the waiting joiner is parked on the opponent', () => {
+  assert.equal(lobbyStage({ phase: 'preparing', mode: 'public', match: matched({ role: 'creator', gameId: null }) }).stage, GAME_STAGE.VOTE);
+  assert.equal(lobbyStage({ phase: 'preparing', mode: 'public', match: matched({ role: 'joiner', gameId: null }) }).stage, GAME_STAGE.VOTE_WAIT);
+  assert.equal(lobbyStage({ phase: 'preparing', mode: 'public', match: matched({ role: 'joiner', gameId: 'a'.repeat(64) }) }).stage, GAME_STAGE.VOTE);
+});
+
+test('the rail shows the two moves and never a wait', () => {
+  const voting = lobbyStage({ phase: 'pick', mode: 'public', match: matched() }).rail;
+  assert.deepEqual(voting.map((node) => [node.label, node.state]), [['Vote', 'current'], ['Reveal', 'ahead']]);
+  const waiting = lobbyStage({ phase: 'preparing', mode: 'public', match: matched({ role: 'joiner', gameId: null }) }).rail;
+  assert.deepEqual(waiting.map((node) => node.state), ['current', 'ahead']);
+  const revealing = gameStage({ matchmaking: true, status: 'joined', canReveal: true }, 'creator').rail;
+  assert.deepEqual(revealing.map((node) => [node.label, node.state]), [['Vote', 'done'], ['Reveal', 'current']]);
+});
+
+test('the game page names the stage and whose move it is', () => {
+  assert.equal(gameStage({ matchmaking: true, status: 'waiting_for_player_b' }, 'creator').title, 'Waiting for the other person to vote');
+  assert.equal(gameStage({ matchmaking: false, status: 'waiting_for_player_b' }, 'creator').title, 'Waiting for your friend to vote');
+  assert.equal(gameStage({ matchmaking: false, status: 'joined', canReveal: true }, 'joiner').title, 'Your turn to reveal');
+  const revealed = { matchmaking: false, status: 'first_revealed', canReveal: true, revealedPicks: { creator: 1 } };
+  assert.equal(gameStage(revealed, 'creator').title, 'Waiting for your friend to reveal');
+  assert.equal(gameStage(revealed, 'joiner').title, 'Your turn to reveal');
+  assert.equal(gameStage({ matchmaking: true, status: 'reveal_broadcast', pendingReveals: [{ role: 'joiner' }] }, 'joiner').title, 'Waiting for confirmation.');
+  assert.equal(gameStage({ matchmaking: true, status: 'waiting_for_player_b' }, 'creator').loading, true);
+  assert.equal(gameStage({ matchmaking: false, status: 'joined', canReveal: true }, 'creator').loading, false);
+});
+
+test('a finished game and a viewer get no rail', () => {
+  assert.equal(gameStage({ status: 'settled' }, 'creator'), null);
+  assert.equal(gameStage({ status: 'refunded' }, 'creator'), null);
+  assert.equal(gameStage({ status: 'joined', canReveal: true }, 'viewer'), null);
 });

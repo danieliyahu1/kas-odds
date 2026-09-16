@@ -45,6 +45,11 @@ main { width: min(100% - 36px, 460px); margin: 0 auto; padding: 44px 0 72px; fle
 .home-button { display: block; text-decoration: none; }
 .home-button.primary, .home-button.outline { width: 100%; }
 .panel-head { margin-bottom: 22px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.stage-rail { display: flex; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
+.stage-node { flex: 1; height: 3px; border-radius: 999px; background: var(--line); }
+.stage-node.done { background: var(--teal); }
+.stage-node.current { background: var(--teal-bright); }
 h1 { margin: 0 0 8px; font-size: 40px; line-height: 1; letter-spacing: -.06em; font-weight: 800; }
 h2 { margin: 0 0 10px; font-size: 32px; line-height: 1.05; letter-spacing: -.05em; font-weight: 800; }
 .lead { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.55; }
@@ -124,6 +129,16 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .result .primary { margin-top: 20px; }
 .result.winner .primary { background: var(--teal-deep); color: var(--teal); }
 .result.winner .primary:hover { background: #0a302b; color: var(--teal-bright); }
+
+.proof { display: grid; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.proof-heading { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.proof-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.proof-label { color: var(--muted); font-size: 13px; }
+.proof-tx { color: var(--teal); font-size: 13px; font-weight: 700; text-decoration: none; }
+a.proof-tx:hover { text-decoration: underline; }
+.result.winner .proof { border-top-color: rgba(6,32,29,.22); }
+.result.winner .proof-heading, .result.winner .proof-label { color: rgba(6,32,29,.72); }
+.result.winner .proof-tx { color: var(--teal-deep); }
 
 .feedback-button, .telegram-button, .github-button { display: inline-flex; align-items: center; padding: 7px 14px; border: 1px solid rgba(112,199,186,.5); border-radius: 999px; background: rgba(112,199,186,.14); color: var(--teal); font-size: 12px; font-weight: 800; letter-spacing: .01em; transition: background .15s ease, border-color .15s ease, color .15s ease; }
 .feedback-button:hover, .telegram-button:hover, .github-button:hover { border-color: var(--teal-bright); background: rgba(112,199,186,.24); color: var(--teal-bright); }
