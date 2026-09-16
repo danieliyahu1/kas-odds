@@ -6,9 +6,12 @@ Initial protocol implementation for the non-custodial Even/Odd MVP on Kaspa.
 The same image serves either Kaspa `mainnet` or `testnet-10`; the network is
 selected at runtime with the `KASPA_NETWORK` environment variable.
 
-The join flow is invite-only. A creator shares a URL containing only the
-protocol version and confirmed game identifier. The URL never contains a
-secret, commitment preimage, wallet key, or transaction template.
+Both ways to play begin with an off-chain lobby. "Play someone new" queues the
+wallet for matchmaking; "Play with a friend" opens a private room and the host
+shares a `/join?room=<sessionId>` link. Funds are locked only after the two
+players are matched: the creator signs the creation transaction first, then the
+matched opponent signs the join. The invite carries no secret, commitment
+preimage, wallet key, or transaction template.
 
 ## Current boundary
 
@@ -20,10 +23,12 @@ secret, commitment preimage, wallet key, or transaction template.
   environment.
 - `src/protocol.js` validates sides, stake, sompi arithmetic, network, and
   fee separation.
-- `src/invite.js` parses and serializes the URL invite.
+- `src/invite.js` parses and serializes the game-id invite; a friend room link
+  is a `/join?room=<sessionId>` matchmaking session id instead.
 - `src/backend-game-service.js` is the production game use-case boundary. It
-  owns creation, joining, reveal, refund, claim, matchmaking, persistence, and
-  recovery orchestration behind the HTTP application.
+  owns creation, joining, reveal, refund, claim, matchmaking (the public queue
+  and invite-only friend rooms), persistence, and recovery orchestration behind
+  the HTTP application.
 - `src/create-game.js`, `src/join-game.js`, and `src/terminal-lifecycle.js` are
   exported protocol/lifecycle building blocks used by focused tests and library
   consumers; they are not the server's production request path.
@@ -55,8 +60,9 @@ secret, commitment preimage, wallet key, or transaction template.
 - `public/app.js` is the browser composition root. `public/app-controller.js`
   owns cancellable polling and stale-response protection; browser secrets and
   IndexedDB remain behind `public/secrets.js`.
-- `src/backend-game-store.js` persists game records, matchmaking sessions, and
-  non-secret transaction preparations atomically on disk. Reveal preimages are
+- `src/backend-game-store.js` persists game records, matchmaking sessions
+  (including invite-only friend rooms), and non-secret transaction preparations
+  atomically on disk. Reveal preimages are
   never stored here; they live only in the short-lived in-memory
   `src/ephemeral-preparations.js`.
 - `src/wasm-transaction.js` loads the pinned WASM SDK (`Transaction`,
@@ -274,15 +280,15 @@ when it prepares the reveal transaction — after both commitments are confirmed
 on-chain and the number is public by design — so a server that also plays as a
 player cannot change its committed number after seeing an opponent's.
 
-The friend invite URL (`/join?v=…&game=<gameId>`) carries only the protocol
-version and confirmed game identifier; the server holds the rest of the public
-creation state. A rival game works the same way, except the server introduces
-the two players and attaches the creator's on-chain game to the matchmaking
-session. Matchmaking is "play up to": each player sets the most they are
-comfortable playing, the server pairs any two waiters, and the game is the
-lower of the two limits. Acceptance is on-chain, not off-chain: the assigned
-creator signs the creation transaction to lock their escrow, and the matched
-  rival signs the join transaction to take the other side. Until a join confirms,
+Both paths use the same off-chain lobby. A public game is "play up to": each
+player sets the most they are comfortable playing, the server pairs any two
+waiters, and the stake is the lower of the two limits. A friend game is a
+private room: the host fixes the stake and shares a `/join?room=<sessionId>`
+link, and only the wallet holding that link can take the second seat. In both
+cases the server assigns each player a side at match time, and no funds move
+until both players pick a number and lock: the assigned creator signs the
+creation transaction to escrow their stake, and the matched opponent signs the
+join to take the other side. Until a join confirms,
   the creator can reclaim their full stake at any time by signing the `refund`
   spend (the server builds and relays it), and after the deadline the
   permissionless `refund_open` entry can reclaim the creator's stake with no
