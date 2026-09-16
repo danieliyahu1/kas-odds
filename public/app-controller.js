@@ -64,3 +64,22 @@ export function matchGameWaitState(match, { elapsedMs = 0, timeoutMs = 0 } = {})
   if (elapsedMs >= timeoutMs) return MATCH_GAME_WAIT.TIMEOUT;
   return MATCH_GAME_WAIT.PENDING;
 }
+
+// Maps a protocol error code to the title and message shown to the player. Pure:
+// the same code always yields the same copy, so callers (the lobby controller
+// and the game page) share one source of truth.
+export function actionErrorCopy(error) {
+  const copy = {
+    STORAGE_MASS_EXCEEDED: ['Transaction not ready', 'Your wallet needs a smaller available coin. Receive a small separate payment, then try again. Your game funds remain safe.'],
+    NO_UTXOS: ['Network fee unavailable', 'This wallet needs a small separate balance to pay the network fee.'],
+    NO_ORDINARY_UTXOS: ['Network fee unavailable', 'This wallet needs a small separate balance to pay the network fee.'],
+    INSUFFICIENT_UTXOS: ['Not enough KAS for the network fee', 'Add a small amount of KAS to this wallet, then try again.'],
+    FEE_REPRICING_FAILED: ['Network fee changed', 'The network fee changed while preparing this action. Please try again.'],
+    TRANSACTION_REJECTED: ['Transaction not accepted', 'The network did not accept this action. Wait a few seconds, then try again. Your game funds remain safe.'],
+    MATCH_TIMEOUT: ['Still waiting for your opponent', 'They did not create the game in time. Try again in a moment.'],
+    CREATION_PENDING: ['Almost there', "Your opponent's game is still reaching the network. Try again in a moment."],
+    CREATION_FAILED: ['The game did not start', "Your opponent's game did not reach the network. No KAS was locked."],
+    GAME_EXPIRED: ['This game expired', 'The joining window closed. No KAS was locked.'],
+  }[error?.code] ?? ['Please try again', 'Something went wrong. Please try again in a few seconds. Your game funds remain safe.'];
+  return { title: copy[0], message: copy[1] };
+}

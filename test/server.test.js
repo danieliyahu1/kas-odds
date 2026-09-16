@@ -34,7 +34,7 @@ test('server serves the browser application and health probe', async (t) => {
   t.after(() => rm(directory, { recursive: true, force: true }));
 
   await waitForServer(`http://127.0.0.1:${port}/readyz`);
-  const [page, host, rival, health, missing, demoApi, appScript, mainScript, secretsScript, verifyScript, coreScript, genesisScript, artifact, pins, wasmJs, icon] = await Promise.all([
+  const [page, host, rival, health, missing, demoApi, appScript, lobbyScript, mainScript, secretsScript, verifyScript, coreScript, genesisScript, artifact, pins, wasmJs, icon] = await Promise.all([
     fetch(`http://127.0.0.1:${port}/`),
     fetch(`http://127.0.0.1:${port}/host`),
     fetch(`http://127.0.0.1:${port}/rival`),
@@ -42,6 +42,7 @@ test('server serves the browser application and health probe', async (t) => {
     fetch(`http://127.0.0.1:${port}/public-game-list`),
     fetch(`http://127.0.0.1:${port}/api/demo/games`),
     fetch(`http://127.0.0.1:${port}/app.js`),
+    fetch(`http://127.0.0.1:${port}/lobby-controller.js`),
     fetch(`http://127.0.0.1:${port}/main.js`),
     fetch(`http://127.0.0.1:${port}/secrets.js`),
     fetch(`http://127.0.0.1:${port}/verify.js`),
@@ -81,6 +82,8 @@ test('server serves the browser application and health probe', async (t) => {
   assert.doesNotMatch(csp, /wss:|ws:/);
   assert.equal(page.headers.get('x-frame-options'), 'DENY');
   const browserSource = await appScript.text();
+  const lobbySource = await lobbyScript.text();
+  assert.equal(lobbyScript.status, 200);
   const secretsSource = await secretsScript.text();
   assert.equal(verifyScript.status, 200);
   assert.equal(mainScript.status, 200);
@@ -103,23 +106,17 @@ test('server serves the browser application and health probe', async (t) => {
   // The thin client talks only to this server; it never constructs or verifies
   // chain transactions itself beyond checking the prepared creation.
   assert.doesNotMatch(browserSource, /api\/demo|eo-demo-player|Simulate timeout/);
-  assert.match(browserSource, /api\/games\/prepare/);
-  assert.match(browserSource, /api\/games\/submit/);
-  assert.match(browserSource, /api\/games\/\$\{gameId\}\/join\/prepare/);
   assert.match(browserSource, /api\/games\/\$\{gameId\}\/reveal\/prepare/);
-  assert.match(browserSource, /api\/matchmaking\/join/);
-  assert.match(browserSource, /api\/matchmaking\/room/);
-  assert.match(browserSource, /api\/matchmaking\/\$\{roomId\}\/join/);
-  assert.match(browserSource, /api\/matchmaking\/\$\{match\.matchId\}\/leave/);
   assert.doesNotMatch(browserSource, /api\/matchmaking\/\$\{match\.matchId\}\/confirm/);
   // A matched pair shares one screen; only the joiner's creation wait differs.
   assert.doesNotMatch(browserSource, /Waiting for your rival to create the game/);
+  // app.js keeps the DOM view and the game page; the lobby orchestration lives
+  // in the headless controller.
+  assert.match(browserSource, /function renderLobby/);
+  assert.match(browserSource, /function paintLobby/);
   assert.match(browserSource, /Play for \$\{escapeHtml\(match\.stakeKas\)\} KAS/);
   assert.match(browserSource, /data-action="reveal"/);
   assert.match(browserSource, /data-match-number/);
-  assert.match(browserSource, /function renderLobby/);
-  assert.match(browserSource, /createRevealSecret\(number/);
-  assert.match(browserSource, /verifyCreation\(/);
   assert.match(browserSource, /loadSecretForGame/);
   assert.match(browserSource, /bindSecretToGame/);
   assert.match(browserSource, /deleteSecretForGame/);
@@ -131,6 +128,23 @@ test('server serves the browser application and health probe', async (t) => {
   assert.doesNotMatch(browserSource, /DEFAULT_WRPC_URL|WrpcClient|readRecoveryReadiness|game-client|client-actions/);
   assert.doesNotMatch(browserSource, /data-reveal-number|FIXED_NONCE|fill\(1\)|transientCommitment/);
   assert.doesNotMatch(browserSource, /Guess even|Joining unavailable|data-action="create"/);
+
+  // The lobby controller is headless: it owns the matchmaking endpoints, the
+  // polling lifecycle, and the parallel creation/join flow, and never touches
+  // the DOM.
+  assert.match(lobbySource, /\/api\/matchmaking\/join/);
+  assert.match(lobbySource, /\/api\/matchmaking\/room/);
+  assert.match(lobbySource, /\/api\/matchmaking\/\$\{roomId\}\/join/);
+  assert.match(lobbySource, /\/api\/matchmaking\/\$\{match\.matchId\}\/leave/);
+  assert.match(lobbySource, /\/api\/games\/prepare/);
+  assert.match(lobbySource, /\/api\/games\/submit/);
+  assert.match(lobbySource, /\/api\/games\/\$\{gameId\}\/join\/prepare/);
+  assert.match(lobbySource, /createSecret\(number/);
+  assert.match(lobbySource, /verifyCreation/);
+  assert.match(lobbySource, /resolveMatchView/);
+  assert.match(lobbySource, /shouldRerenderMatch/);
+  assert.match(lobbySource, /matchGameWaitState/);
+  assert.doesNotMatch(lobbySource, /document\.|window\.|localStorage/);
 
   // Regression: the repaint-dedup signature must not track the countdown, or
   // every tick rebuilds the join form and clears the joiner's number selection.
@@ -159,6 +173,8 @@ test('server serves the browser application and health probe', async (t) => {
 
   const modulePaths = [
     '/app.js',
+    '/app-controller.js',
+    '/lobby-controller.js',
     '/secrets.js',
     '/verify.js',
     '/kasware-signing.js',

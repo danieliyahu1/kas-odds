@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLatestRequestGate, createPollController, isTerminalGameStatus, MATCH_GAME_WAIT, MATCH_VIEW, matchGameWaitState, resolveMatchView, shouldRerenderMatch } from '../public/app-controller.js';
+import { actionErrorCopy, createLatestRequestGate, createPollController, isTerminalGameStatus, MATCH_GAME_WAIT, MATCH_VIEW, matchGameWaitState, resolveMatchView, shouldRerenderMatch } from '../public/app-controller.js';
 
 test('latest request gate rejects responses from older requests', () => {
   const gate = createLatestRequestGate();
@@ -68,4 +68,11 @@ test('game wait resolves to ready, cancelled, timeout, or pending', () => {
   assert.equal(matchGameWaitState(null), MATCH_GAME_WAIT.CANCELLED);
   assert.equal(matchGameWaitState(matched(), { elapsedMs: 60_000, timeoutMs: 60_000 }), MATCH_GAME_WAIT.TIMEOUT);
   assert.equal(matchGameWaitState(matched(), { elapsedMs: 1_000, timeoutMs: 60_000 }), MATCH_GAME_WAIT.PENDING);
+});
+
+test('action error copy maps known codes and falls back for anything unknown', () => {
+  assert.deepEqual(actionErrorCopy({ code: 'NO_UTXOS' }), { title: 'Network fee unavailable', message: 'This wallet needs a small separate balance to pay the network fee.' });
+  assert.deepEqual(actionErrorCopy({ code: 'MATCH_TIMEOUT' }), { title: 'Still waiting for your opponent', message: 'They did not create the game in time. Try again in a moment.' });
+  assert.equal(actionErrorCopy({ code: 'SOMETHING_NEW' }).title, 'Please try again');
+  assert.equal(actionErrorCopy(undefined).title, 'Please try again');
 });

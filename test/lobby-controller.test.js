@@ -1,0 +1,282 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { LOBBY_MODE, LOBBY_PHASE, createLobbyController, matchWaitError } from '../public/lobby-controller.js';
+
+const ACCOUNT = { address: 'kaspatest:me', publicKey: 'a'.repeat(64) };
+const GAME_ID = 'g'.repeat(64);
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+const creatorMatch = (overrides = {}) => ({ matchId: 'r1', status: 'matched', role: 'creator', side: 'even', stakeKas: 6, opponentConnected: true, gameId: null, ...overrides });
+const joinerMatch = (overrides = {}) => ({ matchId: 'r1', status: 'matched', role: 'joiner', side: 'odd', stakeKas: 6, opponentConnected: true, gameId: null, ...overrides });
+const waitingMatch = () => ({ matchId: 'm1', status: 'waiting', myLimitKas: 5, opponentConnected: false, gameId: null });
+
+function harness(options = {}) {
+  const renders = [];
+  const navigations = [];
+  const roomUrls = [];
+  const apiCalls = [];
+  const timers = [];
+  const cleared = [];
+  let connected = 0;
+
+  const api = options.api ?? (async () => ({}));
+  const connect = options.connect ?? (async () => { connected += 1; return { provider: { id: 'kasware' }, account: ACCOUNT }; });
+
+  const controller = createLobbyController({
+    mode: options.mode ?? LOBBY_MODE.PUBLIC,
+    roomId: options.roomId ?? null,
+    api: async (url, request) => { apiCalls.push({ url, request }); return api(url, request); },
+    connect,
+    sign: options.sign ?? (async () => 'signed-tx'),
+    createSecret: options.createSecret ?? (async (number) => ({ secretId: 'secret-1', commitment: 'c'.repeat(64), choice: number })),
+    verifyCreation: options.verifyCreation ?? (async () => ({ signInputs: [{ index: 0 }] })),
+    verifyPrepared: options.verifyPrepared ?? (() => ({ signInputs: [{ index: 0 }] })),
+    bindSecret: options.bindSecret ?? (async () => {}),
+    gameFeePublicKey: async () => 'f'.repeat(64),
+    addressPrefix: () => 'kaspatest',
+    navigate: (path) => navigations.push(path),
+    replaceUrl: (path) => roomUrls.push(path),
+    render: (snapshot) => renders.push(snapshot),
+    waitTimeoutMs: options.waitTimeoutMs ?? 60_000,
+    pollIntervalMs: options.pollIntervalMs ?? 5,
+    now: options.now ?? (() => Date.now()),
+    sleep: options.sleep ?? (async () => {}),
+    setIntervalFn: (callback) => { timers.push(callback); return timers.length; },
+    clearIntervalFn: (id) => { cleared.push(id); },
+  });
+
+  return {
+    controller,
+    actions: controller.actions,
+    renders,
+    navigations,
+    roomUrls,
+    apiCalls,
+    timers,
+    cleared,
+    connectedCount: () => connected,
+    last: () => renders[renders.length - 1],
+    phases: () => renders.map((snapshot) => snapshot.phase),
+    urls: () => apiCalls.map((call) => call.url),
+  };
+}
+
+function startWith(mode, roomId) {
+  const harnessed = harness({ mode, roomId });
+  harnessed.controller.start();
+  return harnessed;
+}
+
+test('the lobby opens on the phase that matches how the player arrived', () => {
+  assert.equal(startWith(LOBBY_MODE.PUBLIC).last().phase, LOBBY_PHASE.LIMIT);
+  assert.equal(startWith(LOBBY_MODE.HOST).last().phase, LOBBY_PHASE.HOST_FORM);
+  assert.equal(startWith(LOBBY_MODE.HOST, 'r1').last().phase, LOBBY_PHASE.RESUME);
+  assert.equal(startWith(LOBBY_MODE.GUEST, 'r1').last().phase, LOBBY_PHASE.GUEST_ENTRY);
+});
+
+test('an invalid stake is rejected before the wallet is touched, keeping the typed value', () => {
+  const harnessed = harness();
+  harnessed.controller.start();
+  harnessed.actions.connectLimit('0');
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.LIMIT);
+  assert.equal(harnessed.last().note.kind, 'error');
+  assert.equal(harnessed.last().draft, '0');
+  assert.equal(harnessed.connectedCount(), 0);
+  assert.deepEqual(harnessed.urls(), []);
+});
+
+test('a public match waits, then flips to the pick screen once paired', async () => {
+  let paired = false;
+  const harnessed = harness({
+    api: async (url) => {
+      if (url === '/api/matchmaking/join') return waitingMatch();
+      if (url.startsWith('/api/matchmaking/m1?')) return paired ? { ...waitingMatch(), status: 'matched', role: 'joiner', side: 'odd', stakeKas: 5, opponentConnected: true } : waitingMatch();
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectLimit('5');
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.WAITING);
+  assert.equal(harnessed.timers.length, 1);
+  // Let the in-flight polls from entering the wait settle before the timer fires.
+  await flush();
+  await flush();
+
+  paired = true;
+  harnessed.timers[0]();
+  await flush();
+  await flush();
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.PICK);
+});
+
+test('a friend room publishes its invite url and waits for the second seat', async () => {
+  const harnessed = harness({
+    mode: LOBBY_MODE.HOST,
+    api: async () => ({ matchId: 'r1', status: 'waiting', stakeKas: 6, opponentConnected: false, gameId: null }),
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectHost('6');
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.WAITING);
+  assert.deepEqual(harnessed.roomUrls, ['/host?room=r1']);
+});
+
+test('a dead friend invite is a terminal, non-retryable error', async () => {
+  const expired = harness({ mode: LOBBY_MODE.GUEST, roomId: 'r1', api: async () => { throw Object.assign(new Error('gone'), { code: 'MATCH_NOT_FOUND' }); } });
+  expired.controller.start();
+  await expired.actions.connectGuest();
+  assert.equal(expired.last().phase, LOBBY_PHASE.ERROR);
+  assert.equal(expired.last().error.action, null);
+  assert.equal(expired.last().error.title, 'This invite has expired');
+
+  const used = harness({ mode: LOBBY_MODE.GUEST, roomId: 'r1', api: async () => { throw Object.assign(new Error('full'), { code: 'MATCH_FULL' }); } });
+  used.controller.start();
+  await used.actions.connectGuest();
+  assert.equal(used.last().error.title, 'This invite was already used');
+});
+
+test('the creator locks only after the pick, then publishes the game', async () => {
+  const binds = [];
+  const harnessed = harness({
+    mode: LOBBY_MODE.HOST,
+    bindSecret: async (...args) => binds.push(args),
+    api: async (url) => {
+      if (url === '/api/matchmaking/room') return creatorMatch();
+      if (url === '/api/games/prepare') return { txJson: '{}', preparedHash: 'p'.repeat(64), feeSompi: '0', deadlineDaa: '1', changeScriptPublicKey: '00' };
+      if (url === '/api/games/submit') return { gameId: GAME_ID };
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectHost('6');
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.PICK);
+  assert.equal(harnessed.last().number, null);
+
+  harnessed.actions.selectNumber(1);
+  assert.equal(harnessed.last().number, 1);
+  await harnessed.actions.play();
+
+  assert.equal(harnessed.phases().includes(LOBBY_PHASE.WALLET), true);
+  assert.deepEqual(harnessed.navigations, [`/game?id=${GAME_ID}`]);
+  assert.equal(harnessed.urls().includes('/api/games/submit'), true);
+  assert.deepEqual(binds, [[GAME_ID, 'secret-1']]);
+});
+
+test('a creation failure maps to a retryable start error through the shared copy', async () => {
+  const harnessed = harness({
+    mode: LOBBY_MODE.HOST,
+    api: async (url) => {
+      if (url === '/api/matchmaking/room') return creatorMatch();
+      if (url === '/api/games/prepare') throw Object.assign(new Error('no coins'), { code: 'NO_UTXOS' });
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectHost('6');
+  harnessed.actions.selectNumber(1);
+  await harnessed.actions.play();
+
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.ERROR);
+  assert.equal(harnessed.last().error.action, 'start');
+  assert.equal(harnessed.last().error.title, 'Network fee unavailable');
+});
+
+test('the joiner waits for the game id before preparing the join', async () => {
+  let polls = 0;
+  const harnessed = harness({
+    mode: LOBBY_MODE.GUEST,
+    roomId: 'r1',
+    api: async (url) => {
+      if (url === '/api/matchmaking/r1/join') return joinerMatch({ gameId: null });
+      if (url.startsWith('/api/matchmaking/r1?')) { polls += 1; return joinerMatch({ gameId: GAME_ID }); }
+      if (url === `/api/games/${GAME_ID}/join/prepare`) return { txJson: '{}', preparedHash: 'p'.repeat(64), feeSompi: '0', verification: { action: 'join' } };
+      if (url === `/api/games/${GAME_ID}/join/submit`) return {};
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectGuest();
+  harnessed.actions.selectNumber(0);
+  await harnessed.actions.play();
+
+  assert.equal(polls >= 1, true);
+  assert.deepEqual(harnessed.navigations, [`/game?id=${GAME_ID}`]);
+});
+
+test('an opponent who leaves before the game is created cancels the start', async () => {
+  const harnessed = harness({
+    mode: LOBBY_MODE.GUEST,
+    roomId: 'r1',
+    api: async (url) => {
+      if (url === '/api/matchmaking/r1/join') return joinerMatch({ gameId: null });
+      if (url.startsWith('/api/matchmaking/r1?')) return { ...joinerMatch(), status: 'cancelled', opponentConnected: false };
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectGuest();
+  harnessed.actions.selectNumber(0);
+  await harnessed.actions.play();
+
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.ABANDONED);
+});
+
+test('a match that is abandoned cancels polling and stops the wait', async () => {
+  let abandoned = false;
+  const harnessed = harness({
+    api: async (url) => {
+      if (url === '/api/matchmaking/join') return waitingMatch();
+      if (url.startsWith('/api/matchmaking/m1?')) return abandoned ? { ...waitingMatch(), status: 'cancelled', opponentConnected: false } : waitingMatch();
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectLimit('5');
+  await flush();
+  await flush();
+
+  abandoned = true;
+  harnessed.timers[0]();
+  await flush();
+  await flush();
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.ABANDONED);
+  assert.equal(harnessed.cleared.length >= 1, true);
+});
+
+test('leaving the wait screen cancels polling and returns home', async () => {
+  const harnessed = harness({ api: async () => waitingMatch() });
+  harnessed.controller.start();
+  await harnessed.actions.connectLimit('5');
+  assert.equal(harnessed.timers.length, 1);
+
+  await harnessed.actions.leave();
+  assert.equal(harnessed.cleared.length >= 1, true);
+  assert.deepEqual(harnessed.navigations, ['/']);
+});
+
+test('a poll that arrives after the pick cannot repaint the screen', async () => {
+  const harnessed = harness({
+    mode: LOBBY_MODE.HOST,
+    api: async (url) => {
+      if (url === '/api/matchmaking/room') return creatorMatch();
+      if (url === '/api/games/prepare') return { txJson: '{}', preparedHash: 'p'.repeat(64), feeSompi: '0', deadlineDaa: '1', changeScriptPublicKey: '00' };
+      if (url === '/api/games/submit') return { gameId: GAME_ID };
+      return creatorMatch();
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectHost('6');
+  harnessed.actions.selectNumber(1);
+  await harnessed.actions.play();
+
+  const settled = harnessed.renders.length;
+  harnessed.timers[0]();
+  await flush();
+  await flush();
+  assert.equal(harnessed.renders.length, settled);
+});
+
+test('matchWaitError carries the protocol code it was raised with', () => {
+  const error = matchWaitError('MATCH_TIMEOUT', 'too slow');
+  assert.equal(error.code, 'MATCH_TIMEOUT');
+  assert.equal(error.message, 'too slow');
+});
