@@ -68,6 +68,14 @@ export class BackendGameService {
     return this.matchmaking.join(input);
   }
 
+  async createRoom(input) {
+    return this.matchmaking.createRoom(input);
+  }
+
+  async joinRoom(matchId, input) {
+    return this.matchmaking.joinRoom(matchId, input);
+  }
+
   async matchmakingStatus(matchId, address) {
     return this.matchmaking.status(matchId, address);
   }

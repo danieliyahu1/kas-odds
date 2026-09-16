@@ -52,6 +52,58 @@ test('pairs any two waiters and stakes the lower limit', async (t) => {
   assert.equal(solo.stakeKas, null);
 });
 
+test('a private room holds a fixed stake and only the invited wallet may take the second seat', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-'));
+  const filePath = join(directory, 'games.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(filePath);
+
+  const room = await store.createPrivateMatch({ matchId: 'room', address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 7 });
+  assert.equal(room.status, 'waiting');
+  assert.equal(room.private, true);
+  assert.equal(room.stakeKas, 7);
+  assert.equal(room.players[0].limitKas, 7);
+  // The room is never part of the public backlog.
+  assert.equal(await store.countWaitingMatches(), 0);
+
+  const joined = await store.joinPrivateMatch('room', { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) });
+  assert.equal(joined.status, 'matched');
+  assert.equal(joined.creatorIndex, 0);
+  assert.equal(joined.stakeKas, 7);
+  assert.deepEqual(joined.players.map((player) => player.address), ['kaspatest:host', 'kaspatest:friend']);
+
+  // Reconnecting the invited wallet is idempotent; a third wallet is refused.
+  const reconnect = await store.joinPrivateMatch('room', { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) });
+  assert.equal(reconnect.players.length, 2);
+  await assert.rejects(store.joinPrivateMatch('room', { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_FULL' });
+  await assert.rejects(store.joinPrivateMatch('missing', { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_NOT_FOUND' });
+});
+
+test('a public waiter never fills a private room seat', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-queue-'));
+  const filePath = join(directory, 'games.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(filePath);
+
+  await store.createPrivateMatch({ matchId: 'room', address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 7 });
+  const waiter = await store.joinMatchmaking({ matchId: 'waiter', address: 'kaspatest:waiter', publicKey: 'b'.repeat(64), limitKas: 9 });
+  assert.equal(waiter.matchId, 'waiter');
+  assert.equal(waiter.status, 'waiting');
+  assert.equal((await store.loadMatch('room')).status, 'waiting');
+});
+
+test('an idle private room expires like a public session', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-idle-'));
+  const filePath = join(directory, 'games.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(filePath);
+
+  await store.createPrivateMatch({ matchId: 'idle', address: 'kaspatest:idle', publicKey: 'a'.repeat(64), stakeKas: 2 });
+  await store.updateMatch('idle', (match) => { match.players[0].lastSeenAt = new Date(Date.now() - 60_000).toISOString(); });
+  await store.createPrivateMatch({ matchId: 'fresh', address: 'kaspatest:fresh', publicKey: 'b'.repeat(64), stakeKas: 2 });
+  assert.equal((await store.loadMatch('idle')).status, 'cancelled');
+});
+
 test('persists games and transaction preparations', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-store-'));
   const filePath = join(directory, 'games.json');

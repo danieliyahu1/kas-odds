@@ -80,6 +80,37 @@ test('stake acceptance requires an active pair and the agreed lower limit', asyn
   await assert.rejects(service.joinMatchmaking({ address: 'kaspatest:huge', publicKey: 'd'.repeat(64), limitKas: 1_000_001 }), { code: 'INVALID_STAKE' });
 });
 
+test('a friend room pairs the invited wallets at the host stake and assigned sides', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-service-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const service = new BackendGameService({ rpc: NO_UTXO_RPC, store: new BackendGameStore(join(directory, 'games.json')), gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  const host = await service.createRoom({ address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 6 });
+  assert.equal(host.status, 'waiting');
+  assert.equal(host.role, null);
+  assert.equal(host.stakeKas, 6);
+
+  const friend = await service.joinRoom(host.matchId, { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) });
+  assert.equal(friend.status, 'matched');
+  assert.equal(friend.opponentConnected, true);
+  assert.equal(friend.stakeKas, 6);
+  assert.equal(friend.role, 'joiner');
+
+  // Reconnecting is idempotent, and the seat is single-use.
+  assert.equal((await service.joinRoom(host.matchId, { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) })).matchId, host.matchId);
+  await assert.rejects(service.joinRoom(host.matchId, { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_FULL' });
+  await assert.rejects(service.createRoom({ address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 0 }), { code: 'INVALID_STAKE' });
+
+  // Only the host creates, using the room's fixed stake and assigned side.
+  const hostView = await service.matchmakingStatus(host.matchId, 'kaspatest:host');
+  assert.equal(hostView.role, 'creator');
+  assert.notEqual(hostView.side, friend.side);
+  const base = { matchId: host.matchId, creatorAddress: 'kaspatest:host', creatorPublicKey: 'a'.repeat(64), creatorCommitment: 'e'.repeat(64), side: hostView.side, stakeKas: 6 };
+  await assert.rejects(service.prepareCreation({ ...base, stakeKas: 7 }), { code: 'MATCH_NOT_READY' });
+  await assert.rejects(service.prepareCreation({ ...base, creatorAddress: 'kaspatest:friend' }), { code: 'MATCH_NOT_READY' });
+  await assert.rejects(service.prepareCreation(base), { code: 'NO_UTXOS' });
+});
+
 test('preparing a game without a configured fee recipient fails cleanly', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

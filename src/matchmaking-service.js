@@ -26,6 +26,30 @@ export class MatchmakingService {
     return matchResponse(match, address);
   }
 
+  // A friend game is a private session: the host fixes the stake and shares the
+  // invite id, and neither player can lock funds until the room is matched.
+  async createRoom(input) {
+    const address = matchmakingAddress(input.address, this.addressPrefix);
+    const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
+    const stakeKas = Number(input.stakeKas);
+    stakeToSompi(stakeKas);
+    const match = await this.store.createPrivateMatch({ matchId: randomUUID(), address, publicKey, stakeKas });
+    this.logPlayer('matchmaking_room_created', address, { matchId: match.matchId, stakeKas });
+    this.metrics.recordGameEvent('matchmaking_room_created');
+    await this.recordBacklog();
+    return matchResponse(match, address);
+  }
+
+  async joinRoom(matchId, input) {
+    const address = matchmakingAddress(input.address, this.addressPrefix);
+    const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
+    const match = await this.store.joinPrivateMatch(matchId, { address, publicKey });
+    this.logPlayer('matchmaking_room_joined', address, { matchId: match.matchId, stakeKas: match.stakeKas });
+    this.metrics.recordGameEvent('matchmaking_room_joined');
+    await this.recordBacklog();
+    return matchResponse(match, address);
+  }
+
   async status(matchId, address) {
     const playerAddress = matchmakingAddress(address, this.addressPrefix);
     const match = await this.store.loadMatch(matchId);
