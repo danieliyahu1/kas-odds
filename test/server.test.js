@@ -108,14 +108,16 @@ test('server serves the browser application and health probe', async (t) => {
   assert.match(browserSource, /api\/games\/\$\{gameId\}\/join\/prepare/);
   assert.match(browserSource, /api\/games\/\$\{gameId\}\/reveal\/prepare/);
   assert.match(browserSource, /api\/matchmaking\/join/);
+  assert.match(browserSource, /api\/matchmaking\/room/);
+  assert.match(browserSource, /api\/matchmaking\/\$\{roomId\}\/join/);
   assert.match(browserSource, /api\/matchmaking\/\$\{match\.matchId\}\/leave/);
   assert.doesNotMatch(browserSource, /api\/matchmaking\/\$\{match\.matchId\}\/confirm/);
   // A matched pair shares one screen; only the joiner's creation wait differs.
   assert.doesNotMatch(browserSource, /Waiting for your rival to create the game/);
   assert.match(browserSource, /Play for \$\{escapeHtml\(match\.stakeKas\)\} KAS/);
   assert.match(browserSource, /data-action="reveal"/);
-  assert.match(browserSource, /data-commit-number/);
-  assert.match(browserSource, /data-join-number/);
+  assert.match(browserSource, /data-match-number/);
+  assert.match(browserSource, /function renderLobby/);
   assert.match(browserSource, /createRevealSecret\(number/);
   assert.match(browserSource, /verifyCreation\(/);
   assert.match(browserSource, /loadSecretForGame/);
@@ -314,6 +316,52 @@ test('matchmaking joins and pairs when the lower limit sets the stake', async (t
   assert.equal(secondStatus.opponentConnected, true);
   assert.equal(resolveMatchView(firstStatus), MATCH_VIEW.PLAY);
   assert.equal(resolveMatchView(secondStatus), MATCH_VIEW.PLAY);
+});
+
+test('a friend room pairs the invited wallet at the host stake', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-http-room-'));
+  const port = 3700 + Math.floor(Math.random() * 300);
+  const metricsPort = port + 600;
+  const child = spawn(process.execPath, ['src/server.js'], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      METRICS_PORT: String(metricsPort),
+      KASPA_NETWORK: 'testnet-10',
+      GAME_STORE_PATH: join(directory, 'games.json'),
+      RATE_LIMIT_PER_MINUTE: '60',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => child.kill());
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await waitForServer(`http://127.0.0.1:${port}/readyz`);
+
+  const origin = `http://127.0.0.1:${port}`;
+  const post = (path, body) => fetch(`${origin}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const host = await post('/api/matchmaking/room', { address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 6 }).then((response) => response.json());
+  assert.equal(host.status, 'waiting');
+  assert.equal(host.stakeKas, 6);
+
+  const friend = await post(`/api/matchmaking/${host.matchId}/join`, { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) }).then((response) => response.json());
+  assert.equal(friend.status, 'matched');
+  assert.equal(friend.stakeKas, 6);
+  assert.equal(friend.role, 'joiner');
+
+  const hostStatus = await fetch(`${origin}/api/matchmaking/${host.matchId}?address=kaspatest:host`).then((response) => response.json());
+  assert.equal(hostStatus.role, 'creator');
+  assert.notEqual(hostStatus.side, friend.side);
+  assert.equal(resolveMatchView(hostStatus), MATCH_VIEW.PLAY);
+
+  // The single second seat is already taken.
+  const rejected = await post(`/api/matchmaking/${host.matchId}/join`, { address: 'kaspatest:third', publicKey: 'c'.repeat(64) });
+  assert.equal(rejected.status, 400);
+  assert.equal((await rejected.json()).error, 'MATCH_FULL');
 });
 
 test('starts without a fee recipient configured and reports the game fee as not configured', async (t) => {
