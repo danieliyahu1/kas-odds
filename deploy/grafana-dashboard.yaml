@@ -14,7 +14,7 @@ data:
       "tags": ["kaspa-even-odd"],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 2,
+      "version": 3,
       "refresh": "30s",
       "time": { "from": "now-6h", "to": "now" },
       "templating": {
@@ -32,98 +32,9 @@ data:
       "panels": [
         {
           "id": 1,
-          "title": "HTTP request rate by route",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
-          "targets": [
-            { "refId": "A", "expr": "sum by (route) (rate(kaspa_http_requests_total[$__rate_interval]))", "legendFormat": "{{route}}" }
-          ]
-        },
-        {
-          "id": 2,
-          "title": "HTTP error rate by status",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
-          "targets": [
-            { "refId": "A", "expr": "sum by (status) (rate(kaspa_http_errors_total[$__rate_interval]))", "legendFormat": "{{status}}" }
-          ]
-        },
-        {
-          "id": 3,
-          "title": "HTTP request p95 latency",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
-          "targets": [
-            { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(kaspa_http_request_duration_seconds_bucket[$__rate_interval])))", "legendFormat": "p95" }
-          ]
-        },
-        {
-          "id": 4,
-          "title": "Kaspa wRPC calls by outcome",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
-          "targets": [
-            { "refId": "A", "expr": "sum by (operation, outcome) (rate(kaspa_rpc_requests_total[$__rate_interval]))", "legendFormat": "{{operation}} {{outcome}}" }
-          ]
-        },
-        {
-          "id": 5,
-          "title": "Backend store operations by outcome",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
-          "targets": [
-            { "refId": "A", "expr": "sum by (operation, outcome) (rate(kaspa_storage_operations_total[$__rate_interval]))", "legendFormat": "{{operation}} {{outcome}}" }
-          ]
-        },
-        {
-          "id": 6,
-          "title": "Matchmaking backlog and relay entries",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "fieldConfig": { "defaults": {}, "overrides": [] },
-          "targets": [
-            { "refId": "A", "expr": "kaspa_matchmaking_waiting", "legendFormat": "waiting matches" },
-            { "refId": "B", "expr": "kaspa_relay_entries", "legendFormat": "relay entries" }
-          ]
-        },
-        {
-          "id": 7,
-          "title": "Resident memory",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
-          "targets": [
-            { "refId": "A", "expr": "kaspa_process_resident_memory_bytes", "legendFormat": "rss" }
-          ]
-        },
-        {
-          "id": 8,
-          "title": "Game lifecycle events",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "fieldConfig": { "defaults": {}, "overrides": [] },
-          "targets": [
-            { "refId": "A", "expr": "sum by (event) (increase(kaspa_game_events_total[$__rate_interval]))", "legendFormat": "{{event}}" }
-          ]
-        },
-        {
-          "id": 9,
-          "title": "Homepage visits (24h)",
+          "title": "Homepage entered",
           "type": "stat",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
           "targets": [
@@ -131,14 +42,25 @@ data:
           ]
         },
         {
-          "id": 10,
-          "title": "Homepage visit rate",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "id": 2,
+          "title": "Find a rival",
+          "type": "stat",
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+          "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
           "targets": [
-            { "refId": "A", "expr": "sum(rate(kaspa_page_visits_total[$__rate_interval]))", "legendFormat": "visits/s" }
+            { "refId": "A", "expr": "sum(increase(kaspa_http_requests_total{route=\"/api/matchmaking/join\"}[$__range]))", "legendFormat": "find a rival clicks" }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Play a friend",
+          "type": "stat",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
+          "targets": [
+            { "refId": "A", "expr": "sum(increase(kaspa_http_requests_total{route=\"/api/games/prepare\"}[$__range]))", "legendFormat": "play a friend clicks" }
           ]
         }
       ]
