@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { actionErrorCopy, covenantClock, createLatestRequestGate, createPollController, formatWait, GAME_STAGE, gameSignature, gameStage, isTerminalGameStatus, lobbyStage, MATCH_GAME_WAIT, MATCH_VIEW, matchGameWaitState, resolveMatchView, shouldRerenderMatch } from '../public/app-controller.js';
+import { actionErrorCopy, covenantClock, createLatestRequestGate, createPollController, formatWait, GAME_STAGE, gameSignature, gameStage, isTerminalGameStatus, lobbyStage, MATCH_GAME_WAIT, MATCH_VIEW, matchGameWaitState, resolveMatchView, shouldRerenderMatch, terminalNotice } from '../public/app-controller.js';
 
 test('latest request gate rejects responses from older requests', () => {
   const gate = createLatestRequestGate();
@@ -123,6 +123,19 @@ test('a finished game and a viewer get no rail', () => {
   assert.equal(gameStage({ status: 'settled' }, 'creator'), null);
   assert.equal(gameStage({ status: 'refunded' }, 'creator'), null);
   assert.equal(gameStage({ status: 'joined', canReveal: true }, 'viewer'), null);
+});
+
+test('terminal copy is shared for refunds and per person for a fallback claim', () => {
+  const ref = { matchmaking: true, status: 'refunded' };
+  assert.deepEqual(terminalNotice(ref, 'creator'), terminalNotice(ref, 'joiner'));
+  assert.equal(terminalNotice(ref, 'viewer').message, 'The stake was returned.');
+  assert.equal(terminalNotice({ matchmaking: true, status: 'refund_partial' }, 'creator').message, terminalNotice({ matchmaking: true, status: 'refund_partial' }, 'joiner').message);
+  assert.equal(terminalNotice({ matchmaking: true, status: 'settled' }, 'creator'), null);
+  const claim = { matchmaking: true, status: 'fallback_claimed', firstRevealer: 'kaspatest:creator', creator: { address: 'kaspatest:creator' }, joiner: { address: 'kaspatest:joiner' } };
+  assert.equal(terminalNotice(claim, 'creator').message, 'Your opponent never revealed, so you took the pot.');
+  assert.equal(terminalNotice(claim, 'joiner').message, 'You never revealed, so your opponent took the pot.');
+  assert.notEqual(terminalNotice(claim, 'creator').message, terminalNotice(claim, 'joiner').message);
+  assert.equal(terminalNotice(claim, 'viewer').message, 'The first revealer took the pot.');
 });
 
 test('formatWait renders the clock as m:ss', () => {

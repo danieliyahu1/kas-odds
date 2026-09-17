@@ -249,6 +249,41 @@ export function covenantClock(game, { isFirstRevealer = false } = {}) {
   };
 }
 
+// The closing notice on a finished game. The shape is shared, but the copy is per
+// person wherever the payout is: a fallback claim is the one terminal outcome that
+// pays a single player, so only the first revealer "took the pot". Refunds return
+// each stake to its holder, so both players read the same sentence.
+export function terminalNotice(game, role) {
+  if (game.status === 'fallback_claimed') return fallbackClaimNotice(game, role);
+  if (game.status === 'refunded' || game.status === 'creator_refunded') {
+    return { title: 'Canceled.', message: isPlayer(role) ? 'Your stake was returned.' : 'The stake was returned.' };
+  }
+  if (game.status === 'refund_partial') return { title: 'Partial refund.', message: 'One stake was returned. The other player can still refund theirs.' };
+  return null;
+}
+
+// The fallback pot pays one of the two seats, so this is the only terminal notice
+// that must speak to who the caller is.
+function fallbackClaimNotice(game, role) {
+  if (!isPlayer(role)) return { title: 'Pot claimed.', message: 'The first revealer took the pot.' };
+  const friend = game.matchmaking ? 'opponent' : 'friend';
+  return firstRevealerIs(game, role)
+    ? { title: 'Pot claimed.', message: `Your ${friend} never revealed, so you took the pot.` }
+    : { title: 'Pot claimed.', message: `You never revealed, so your ${friend} took the pot.` };
+}
+
+function isPlayer(role) {
+  return role === 'creator' || role === 'joiner';
+}
+
+// The fallback pot pays the first revealer, so "who took the pot" is that person;
+// the caller's role decides whether the copy says "you" or "they".
+function firstRevealerIs(game, role) {
+  if (role === 'creator') return game.firstRevealer === game.creator?.address;
+  if (role === 'joiner') return game.firstRevealer === game.joiner?.address;
+  return false;
+}
+
 // Maps a protocol error code to the title and message shown to the player. Pure:
 // the same code always yields the same copy, so callers (the lobby controller
 // and the game page) share one source of truth.

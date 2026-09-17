@@ -11,7 +11,7 @@ import { loadCovenantTemplate, verifyCreation, verifyPreparedTransaction } from 
 import { logDebug, logInfo, logWarn, logError } from '/log.js';
 import { signWithKasware as kaswareSignPskt } from '/kasware-signing.js';
 import { connectKaswareAccount } from '/kasware-connect.js';
-import { GAME_STAGE, actionErrorCopy, covenantClock, createLatestRequestGate, createPollController, formatWait, gameSignature, gameStage, isTerminalGameStatus, lobbyStage } from '/app-controller.js';
+import { GAME_STAGE, actionErrorCopy, covenantClock, createLatestRequestGate, createPollController, formatWait, gameSignature, gameStage, isTerminalGameStatus, lobbyStage, terminalNotice } from '/app-controller.js';
 import { LOBBY_MODE, LOBBY_PHASE, createLobbyController } from './lobby-controller.js';
 import { loadRuntimeConfig, runtimeConfig } from '/runtime-config.js';
 
@@ -336,7 +336,7 @@ async function paintGame(gameId, game) {
         ${active ? inviteBox(game) + (revealMine ? revealSection(game, myPendingReveal) : '') : ''}
         ${resultOverlay(game, role)}
         ${safetySection(game, myPendingSafety)}
-        ${terminalSection(game)}
+        ${terminalSection(game, role)}
       </div>
     </section>`;
 
@@ -539,12 +539,11 @@ function safetySection(game, pending) {
   return '';
 }
 
-function terminalSection(game) {
+function terminalSection(game, role) {
+  const notice = terminalNotice(game, role);
+  if (!notice) return '';
   const proof = onChainProofHtml(game);
-  if (game.status === 'fallback_claimed') return `<div class="notice"><strong>Pot claimed.</strong>Your ${game.matchmaking ? 'opponent' : 'friend'} never revealed, so you took the pot.${proof}</div>`;
-  if (game.status === 'refunded' || game.status === 'creator_refunded') return `<div class="notice"><strong>Canceled.</strong>Your stake was returned.${proof}</div>`;
-  if (game.status === 'refund_partial') return `<div class="notice"><strong>Partial refund.</strong>One stake was returned. The other player can still refund theirs.${proof}</div>`;
-  return '';
+  return `<div class="notice"><strong>${escapeHtml(notice.title)}</strong>${escapeHtml(notice.message)}${proof}</div>`;
 }
 
 async function runSafetyAction(gameId, action) {
