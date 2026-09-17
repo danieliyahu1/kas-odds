@@ -17,7 +17,7 @@ import { isMinedDaaScore } from './kaspa-adapter.js';
 import { logger } from './logger.js';
 import { assertSignedTransactionFee, signedTransactionFeeDiagnostics } from './transaction-mass.js';
 import { TerminalFundingSelector } from './terminal-funding.js';
-import { deriveAvailableActions, deriveGameStatus } from './game-projection.js';
+import { deriveAvailableActions, deriveGameStatus, projectTerminalTransactions } from './game-projection.js';
 import { assignedSide as matchmakingAssignedSide, findMatchPlayer, MatchmakingService } from './matchmaking-service.js';
 
 // A broadcast transaction that has not been observed on-chain yet keeps the
@@ -59,7 +59,7 @@ export class BackendGameService {
   // Static config only: deliberately does not touch the node, so booting the
   // client never blocks on a wRPC round-trip.
   networkStatus() {
-    return { network: this.network.id, addressPrefix: this.network.addressPrefix, kaswareNetwork: this.network.kaswareNetwork, protocolVersion: PROTOCOL_VERSION, gameFeePublicKey: this.gameFeePublicKey };
+    return { network: this.network.id, addressPrefix: this.network.addressPrefix, kaswareNetwork: this.network.kaswareNetwork, protocolVersion: PROTOCOL_VERSION, gameFeePublicKey: this.gameFeePublicKey, explorerUrl: this.network.explorerUrl };
   }
 
   // --- Matchmaking ---------------------------------------------------------
@@ -705,6 +705,7 @@ export class BackendGameService {
       winnerAddress: refreshed.winner === 'creator' ? request.creatorAddress : refreshed.winner === 'joiner' ? refreshed.join?.joinerAddress : null,
       matchmaking: Boolean(refreshed.matchId),
       revealedPicks: Object.fromEntries(confirmedReveals.map((reveal) => [reveal.role, reveal.choice])),
+      transactions: projectTerminalTransactions({ record: refreshed, confirmedReveals, status }),
        canReveal: actions.canReveal,
       pendingReveals: pendingReveals.map((reveal) => ({ role: reveal.role, stage: reveal.winner ? 'settlement' : 'first', retryable: isPendingRetryable(reveal) })),
       pendingSafety: pendingSafety.map((item) => ({ action: item.action, role: item.role, retryable: isPendingRetryable(item) })),

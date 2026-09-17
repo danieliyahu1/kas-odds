@@ -8,8 +8,8 @@ import { bech32Encode } from '../src/hashes/bech32.mjs';
 
 test('network profiles map each supported network to its prefix and wallet name', () => {
   assert.deepEqual(Object.keys(NETWORK_PROFILES), ['testnet-10', 'mainnet']);
-  assert.deepEqual(resolveNetworkProfile('testnet-10'), { id: 'testnet-10', addressPrefix: 'kaspatest', kaswareNetwork: 'kaspa_testnet_10' });
-  assert.deepEqual(resolveNetworkProfile('mainnet'), { id: 'mainnet', addressPrefix: 'kaspa', kaswareNetwork: 'kaspa_mainnet' });
+  assert.deepEqual(resolveNetworkProfile('testnet-10'), { id: 'testnet-10', addressPrefix: 'kaspatest', kaswareNetwork: 'kaspa_testnet_10', explorerUrl: 'https://tn10.kaspa.stream/transactions' });
+  assert.deepEqual(resolveNetworkProfile('mainnet'), { id: 'mainnet', addressPrefix: 'kaspa', kaswareNetwork: 'kaspa_mainnet', explorerUrl: 'https://kaspa.stream/transactions' });
   assert.equal(DEFAULT_NETWORK_PROFILE.id, 'testnet-10');
 });
 
@@ -46,6 +46,6 @@ test('the game service reports the injected network profile', () => {
   const gameFeePublicKey = '11'.repeat(32);
   const testnet = new BackendGameService({ rpc: {}, store: {}, gameFeePublicKey, network: resolveNetworkProfile('testnet-10') });
   const mainnet = new BackendGameService({ rpc: {}, store: {}, gameFeePublicKey, network: resolveNetworkProfile('mainnet') });
-  assert.deepEqual(testnet.networkStatus(), { network: 'testnet-10', addressPrefix: 'kaspatest', kaswareNetwork: 'kaspa_testnet_10', protocolVersion: 'EO/v10', gameFeePublicKey });
-  assert.deepEqual(mainnet.networkStatus(), { network: 'mainnet', addressPrefix: 'kaspa', kaswareNetwork: 'kaspa_mainnet', protocolVersion: 'EO/v10', gameFeePublicKey });
+  assert.deepEqual(testnet.networkStatus(), { network: 'testnet-10', addressPrefix: 'kaspatest', kaswareNetwork: 'kaspa_testnet_10', protocolVersion: 'EO/v10', gameFeePublicKey, explorerUrl: 'https://tn10.kaspa.stream/transactions' });
+  assert.deepEqual(mainnet.networkStatus(), { network: 'mainnet', addressPrefix: 'kaspa', kaswareNetwork: 'kaspa_mainnet', protocolVersion: 'EO/v10', gameFeePublicKey, explorerUrl: 'https://kaspa.stream/transactions' });
 });

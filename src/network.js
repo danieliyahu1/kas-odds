@@ -3,11 +3,13 @@ export const NETWORK_PROFILES = Object.freeze({
     id: 'testnet-10',
     addressPrefix: 'kaspatest',
     kaswareNetwork: 'kaspa_testnet_10',
+    explorerUrl: 'https://tn10.kaspa.stream/transactions',
   }),
   mainnet: Object.freeze({
     id: 'mainnet',
     addressPrefix: 'kaspa',
     kaswareNetwork: 'kaspa_mainnet',
+    explorerUrl: 'https://kaspa.stream/transactions',
   }),
 });
 
