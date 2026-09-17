@@ -11,7 +11,7 @@ import { loadCovenantTemplate, verifyCreation, verifyPreparedTransaction } from 
 import { logDebug, logInfo, logWarn, logError } from '/log.js';
 import { signWithKasware as kaswareSignPskt } from '/kasware-signing.js';
 import { connectKaswareAccount } from '/kasware-connect.js';
-import { GAME_STAGE, actionErrorCopy, createLatestRequestGate, createPollController, gameStage, isTerminalGameStatus, lobbyStage } from '/app-controller.js';
+import { GAME_STAGE, actionErrorCopy, covenantClock, createLatestRequestGate, createPollController, formatWait, gameSignature, gameStage, isTerminalGameStatus, lobbyStage } from '/app-controller.js';
 import { LOBBY_MODE, LOBBY_PHASE, createLobbyController } from './lobby-controller.js';
 import { loadRuntimeConfig, runtimeConfig } from '/runtime-config.js';
 
@@ -203,10 +203,9 @@ function paintLobby(snapshot, actions) {
   if (phase === LOBBY_PHASE.PICK) {
     const selected = (value) => number === value;
     paint(stageTitle, `
-      <p class="lead">You're <strong class="side-strong">${escapeHtml(capitalize(match.side))}</strong>. <strong>${escapeHtml(match.stakeKas)} KAS</strong> each.</p>
-      <p class="fate">${winnerSummary(match.stakeKas)}</p>
+      ${matchSummaryHtml(match.side, match.stakeKas)}
       <fieldset class="choice-group">
-        <legend>Your number</legend>
+        <legend>Pick your number</legend>
         <div class="choice-row">
           <button type="button" class="choice num${selected(1) ? ' selected' : ''}" data-match-number="1" aria-pressed="${selected(1)}"><span class="num-big">1</span></button>
           <button type="button" class="choice num${selected(0) ? ' selected' : ''}" data-match-number="0" aria-pressed="${selected(0)}"><span class="num-big">2</span></button>
@@ -309,7 +308,7 @@ async function paintGame(gameId, game) {
         ${stageRailHtml(header.rail)}
       </div>
       <div class="game-body">
-        ${gameDetails(game)}
+        ${gameSummary(game, role)}
         ${active ? inviteBox(game) + (revealMine ? revealSection(game, myPendingReveal) : '') : ''}
         ${resultOverlay(game, role)}
         ${safetySection(game, myPendingSafety)}
@@ -321,7 +320,7 @@ async function paintGame(gameId, game) {
   bindShare();
   bindSafety(gameId, game, myPendingSafety);
   bindExit(gameId, game, role, myPendingSafety);
-  bindRecoveryCountdown(recoveryFromGame(game), () => refreshGame(gameId));
+  bindGameClock(gameId);
   bindPlayAgain();
   if (!active || isTerminalGameStatus(game.status)) stopGameRefresh();
 }
@@ -335,11 +334,6 @@ function stageRailHtml(rail) {
   return `<ol class="stage-rail" aria-label="Game progress">${nodes}</ol>`;
 }
 
-function recoveryFromGame(game) {
-  if (!game.safetyAction && !game.automaticAction) return null;
-  return { ready: game.automaticAction ? game.automaticReady : game.safetyReady, remainingSeconds: game.automaticAction ? game.automaticRemainingSeconds : game.safetyRemainingSeconds };
-}
-
 function inviteBox(game) {
   if (['settled', 'fallback_claimed', 'refunded', 'creator_refunded'].includes(game.status)) return '';
   if (game.matchmaking) return '';
@@ -349,14 +343,29 @@ function inviteBox(game) {
     </div>`;
 }
 
-function gameDetails(game) {
-  const amount = game.stakeKas;
-  const pot = game.stakeKas * 2;
+function gameSummary(game, role) {
+  return matchSummaryHtml(playerSide(game, role), game.stakeKas);
+}
+
+// One sentence for who the player is, the stake, and a highlighted take. Shared
+// by the pick screen and the game screen so the two never drift.
+function matchSummaryHtml(side, stakeKas) {
+  const sideLine = side ? `You're <strong>${escapeHtml(capitalize(side))}</strong>` : 'Even vs Odd';
+  const fee = platformFeeKas(stakeKas);
+  const feeNote = fee === 0 ? '' : '<p class="muted-note">After the 1% fee.</p>';
   return `
-    <div class="summary">
-      <div class="sum-item"><small>Stake</small><strong>${escapeHtml(amount)} KAS</strong></div>
-      <div class="sum-item"><small>Pot</small><strong>${escapeHtml(pot)} KAS</strong></div>
+    <div class="game-summary">
+      <p class="game-side">${sideLine}</p>
+      <p class="game-stake"><strong>${escapeHtml(stakeKas)} KAS</strong> each</p>
+      <p class="game-prize"><span>Winner takes</span> <strong>${escapeHtml(winnerKas(stakeKas))} KAS</strong></p>
+      ${feeNote}
     </div>`;
+}
+
+function playerSide(game, role) {
+  if (role === 'creator') return game.creator?.side ?? null;
+  if (role === 'joiner') return game.creator?.side === 'even' ? 'odd' : 'even';
+  return null;
 }
 
 function revealSection(game, pending) {
@@ -452,10 +461,23 @@ function flashCopy(button) {
 }
 
 function automaticNoticeHtml(game) {
-  if (!game.automaticAction || !['waiting_for_player_b', 'refund_open_broadcast', 'joined', 'first_revealed'].includes(game.status)) return '';
-  const label = game.automaticAction === 'fallback_claim' ? 'Automatic fallback claim' : 'Automatic refund';
-  const remaining = game.automaticRemainingSeconds == null ? 'checking the timeout' : game.automaticReady ? 'ready; the backend will relay it' : `in about ${game.automaticRemainingSeconds}s`;
-  return `<p class="lead">${label}</p><p class="muted-note">${escapeHtml(remaining)}. No wallet signature is required.</p>`;
+  const clock = covenantClock(game, { isFirstRevealer: isFirstRevealer(game) });
+  if (!clock) return '';
+  const note = clock.remainingSeconds == null && !clock.ready ? `Checking the timeout. ${clock.note}` : clock.note;
+  return `<p class="lead">${clockLeadHtml(clock)}</p><p class="muted-note">${escapeHtml(note)}</p>`;
+}
+
+// The clock element carries only the time; the lead carries the covenant entry.
+function clockLeadHtml(clock) {
+  if (clock.ready) return `${escapeHtml(clock.label)} now`;
+  if (clock.remainingSeconds == null) return escapeHtml(clock.label);
+  const time = escapeHtml(formatWait(clock.remainingSeconds));
+  return `${escapeHtml(clock.label)} in <span class="clock" data-game-clock data-remaining="${clock.remainingSeconds}">${time}</span>`;
+}
+
+function isFirstRevealer(game) {
+  const address = connectedAddress();
+  return Boolean(address) && address === game.firstRevealer;
 }
 
 function safetySection(game, pending) {
@@ -469,16 +491,6 @@ function safetySection(game, pending) {
       ? `<div class="actions"><button type="button" class="outline" data-action="safety" data-safety-action="${escapeHtml(pending.action)}">Try again</button></div>`
       : '<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for confirmation</span></div>';
     return `<div id="game-safety" class="safety">${pendingControl}</div>`;
-  }
-  const control = (label) => recoveryControlHtml(recoveryFromGame(game), label, 'safety');
-  if (game.safetyAction === 'fallback_claim' && game.status === 'first_revealed') {
-    if (connectedAddress() !== game.firstRevealer) return '';
-    return `
-      <div id="game-safety" class="safety">
-        <p class="lead">If your ${game.matchmaking ? 'opponent' : 'friend'} never reveals</p>
-        <p class="muted-note">You can claim the pot after the wait. ${feeSummary(game.stakeKas)}</p>
-        ${control('Claim pot')}
-      </div>`;
   }
   return '';
 }
@@ -628,49 +640,37 @@ function detectRole(game) {
   return 'viewer';
 }
 
-// Tri-state readiness: `true` = available, `false` + countdown = wait, `null` =
-// unknown (chain unreachable; keep the button disabled with a note until the
-// next refresh can confirm readiness).
-function recoveryControlState(recovery) {
-  if (!recovery || recovery.ready === true) return { disabled: false, wait: null, unknown: false };
-  if (recovery.ready === false && recovery.remainingSeconds != null) {
-    return { disabled: true, wait: Number(recovery.remainingSeconds), unknown: false };
-  }
-  return { disabled: true, wait: null, unknown: true };
-}
-
-function recoveryControlHtml(recovery, label, action) {
-  const state = recoveryControlState(recovery);
-  const note = state.wait != null
-    ? `<p class="muted-note" data-recovery-wait data-remaining="${state.wait}">Available in ${formatWait(state.wait)}</p>`
-    : state.unknown
-      ? '<p class="muted-note">Can\'t reach the chain right now; the covenant still enforces the wait.</p>'
-      : '';
-  return `<div class="actions"><button type="button" class="outline" data-action="${action}" data-recovery-button ${state.disabled ? 'disabled' : ''}>${label}</button></div>${note}`;
-}
-
-function bindRecoveryCountdown(recovery, refresh) {
-  clearInterval(window.__recoveryTicker);
-  const element = document.querySelector('[data-recovery-wait]');
-  const button = document.querySelector('[data-recovery-button]');
-  if (!element || !button || !recovery || recovery.ready) return;
-  let remaining = Number(element.dataset.remaining ?? '0');
-  if (!Number.isFinite(remaining) || remaining <= 0) return;
-  window.__recoveryTicker = setInterval(() => {
-    remaining -= 1;
-    if (remaining <= 0) {
-      clearInterval(window.__recoveryTicker);
-      element.textContent = 'Available now';
-      void refresh();
+// The clock reads its remaining time from the element it writes to, so a poll
+// can re-anchor it without restarting the ticker.
+function bindGameClock(gameId) {
+  clearInterval(window.__gameClockTicker);
+  if (!document.querySelector('[data-game-clock]')) return;
+  window.__gameClockTicker = setInterval(() => {
+    const element = document.querySelector('[data-game-clock]');
+    if (!element) {
+      clearInterval(window.__gameClockTicker);
       return;
     }
-    element.textContent = `Available in ${formatWait(remaining)}`;
+    const remaining = Math.max(0, (Number(element.dataset.remaining) || 0) - 1);
+    element.dataset.remaining = String(remaining);
+    element.textContent = formatWait(remaining);
+    if (remaining === 0) {
+      clearInterval(window.__gameClockTicker);
+      void refreshGame(gameId);
+    }
   }, 1000);
 }
 
-function formatWait(seconds) {
-  const total = Math.max(0, Math.ceil(seconds));
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+// The poll is authoritative: when nothing else changed, re-anchor the running
+// clock to the server's fresh covenant-derived remaining time.
+function syncGameClock(game) {
+  const element = document.querySelector('[data-game-clock]');
+  if (!element || game.automaticRemainingSeconds == null) return;
+  const remaining = Number(game.automaticRemainingSeconds);
+  const shown = Number(element.dataset.remaining);
+  if (Number.isFinite(shown) && Math.abs(shown - remaining) < 2) return;
+  element.dataset.remaining = String(remaining);
+  element.textContent = formatWait(remaining);
 }
 
 function signWithKasware(provider, txJson) {
@@ -816,7 +816,10 @@ async function refreshGame(gameId, options = {}) {
     const game = await api(`/api/games/${gameId}`);
     if (!gameRequestGate.isCurrent(requestRevision)) return;
     const signature = gameSignature(game);
-    if (window.__gameStatus === signature) return;
+    if (window.__gameStatus === signature) {
+      syncGameClock(game);
+      return;
+    }
     window.__gameStatus = signature;
     await paintGame(gameId, game);
   } catch (error) {
@@ -830,17 +833,6 @@ async function refreshGame(gameId, options = {}) {
     // A transient refresh may race a broadcast; the next tick retries.
     if (options.reportErrors) throw error;
   }
-}
-
-function gameSignature(game) {
-  // `safetyRemainingSeconds` is intentionally excluded: it decrements every
-  // second, and re-painting on each tick would rebuild the in-progress forms
-  // (wiping the joiner's number selection). The countdown note updates itself
-  // locally via `bindRecoveryCountdown`, and the flip of `safetyReady` is the
-  // authoritative signal that forces a re-paint.
-  return [game.status, game.safetyAction, game.safetyReady, game.firstRevealer, game.winner,
-    (game.pendingReveals ?? []).map((item) => `${item.role}:${item.retryable}`).join(','),
-    (game.pendingSafety ?? []).map((item) => `${item.action}:${item.role}:${item.retryable}`).join(',')].join('|');
 }
 
 // Wallet connection with no DOM side effects, for the lobby controller.
@@ -963,17 +955,10 @@ function formatKas(sompi) { return (Number(sompi) / 100_000_000).toFixed(8).repl
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]); }
 function lockKas(stakeKas) { return Number(stakeKas); }
 function winnerKas(stakeKas) { const pot = Number(stakeKas) * 2; return pot - platformFeeKas(stakeKas); }
-function platformFeeKas(stakeKas) { const pot = Number(stakeKas) * 2; return pot >= 100 ? pot / 100 : 0; }
-function feeSummary(stakeKas) {
-  const fee = platformFeeKas(stakeKas);
-  return fee === 0 ? 'There is no platform fee below a 100 KAS pot.' : `A 1% platform fee (${formatKas(String(Math.round(fee * 100_000_000)))} KAS) applies to this pot.`;
-}
-function winnerSummary(stakeKas) {
-  const fee = platformFeeKas(stakeKas);
-  return fee === 0
-    ? `The winner receives the full ${escapeHtml(Number(stakeKas) * 2)} KAS pot with no platform fee.`
-    : `The winner receives about ${escapeHtml(winnerKas(stakeKas))} KAS after the 1% total-pot fee.`;
-}
+// The covenant charges `gross_pot / 100` with integer division, so the fee is a
+// floored percent of the pot; the app must floor too or it will promise more
+// than the winner actually receives.
+function platformFeeKas(stakeKas) { const pot = Number(stakeKas) * 2; return pot >= 100 ? Math.floor(pot / 100) : 0; }
 let cachedConfig = null;
 async function gameFeePublicKey() {
   if (!cachedConfig) cachedConfig = await api('/api/config');

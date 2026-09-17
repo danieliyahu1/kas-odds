@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { actionErrorCopy, createLatestRequestGate, createPollController, GAME_STAGE, gameStage, isTerminalGameStatus, lobbyStage, MATCH_GAME_WAIT, MATCH_VIEW, matchGameWaitState, resolveMatchView, shouldRerenderMatch } from '../public/app-controller.js';
+import { actionErrorCopy, covenantClock, createLatestRequestGate, createPollController, formatWait, GAME_STAGE, gameSignature, gameStage, isTerminalGameStatus, lobbyStage, MATCH_GAME_WAIT, MATCH_VIEW, matchGameWaitState, resolveMatchView, shouldRerenderMatch } from '../public/app-controller.js';
 
 test('latest request gate rejects responses from older requests', () => {
   const gate = createLatestRequestGate();
@@ -122,4 +122,40 @@ test('a finished game and a viewer get no rail', () => {
   assert.equal(gameStage({ status: 'settled' }, 'creator'), null);
   assert.equal(gameStage({ status: 'refunded' }, 'creator'), null);
   assert.equal(gameStage({ status: 'joined', canReveal: true }, 'viewer'), null);
+});
+
+test('formatWait renders the clock as m:ss', () => {
+  assert.equal(formatWait(272), '4:32');
+  assert.equal(formatWait(300), '5:00');
+  assert.equal(formatWait(5), '0:05');
+  assert.equal(formatWait(0), '0:00');
+  assert.equal(formatWait(-3), '0:00');
+  assert.equal(formatWait(undefined), '0:00');
+});
+
+test('the repaint signature tracks the readiness flip, not the ticking seconds', () => {
+  const base = { status: 'joined', safetyAction: null, safetyReady: null, automaticAction: 'refund_all', automaticReady: false, automaticRemainingSeconds: 300, firstRevealer: null, winner: undefined };
+  assert.notEqual(gameSignature({ ...base, automaticReady: true }), gameSignature(base));
+  assert.equal(gameSignature({ ...base, automaticRemainingSeconds: 299 }), gameSignature(base));
+});
+
+test('the covenant clock names the entry and explains the rule that phase enforces', () => {
+  const game = (overrides = {}) => ({ automaticAction: 'refund_all', automaticReady: false, automaticRemainingSeconds: 300, ...overrides });
+  assert.equal(covenantClock(game()).label, 'Refund');
+  assert.match(covenantClock(game()).note, /contract returns both stakes/);
+  assert.match(covenantClock(game({ automaticAction: 'refund_open' })).note, /join deadline passes/);
+  assert.match(covenantClock(game({ automaticAction: 'fallback_claim' }), { isFirstRevealer: true }).note, /first revealer/);
+});
+
+test('the claim clock is hidden from everyone but the first revealer', () => {
+  const claim = { automaticAction: 'fallback_claim', automaticReady: false, automaticRemainingSeconds: 120 };
+  assert.equal(covenantClock(claim, { isFirstRevealer: false }), null);
+  assert.equal(covenantClock(claim, { isFirstRevealer: true }).label, 'Claim');
+});
+
+test('a ready covenant clock reports zero remaining, and no entry means no clock', () => {
+  const ready = covenantClock({ automaticAction: 'refund_open', automaticReady: true, automaticRemainingSeconds: 7 });
+  assert.equal(ready.ready, true);
+  assert.equal(ready.remainingSeconds, 0);
+  assert.equal(covenantClock({ automaticAction: null }), null);
 });

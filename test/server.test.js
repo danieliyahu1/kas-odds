@@ -116,13 +116,24 @@ test('server serves the browser application and health probe', async (t) => {
   assert.match(browserSource, /GAME_STAGE\.VOTE_WAIT/);
   assert.match(browserSource, /gameStage\(game, role\)/);
   assert.match(browserSource, /class="stage-rail"/);
+  // The covenant timeout is a live clock that re-anchors to the server's
+  // covenant-derived remaining time; the view never re-derives the rule.
+  assert.match(browserSource, /covenantClock\(game/);
+  assert.match(browserSource, /data-game-clock/);
   // app.js keeps the DOM view and the game page; the lobby orchestration lives
   // in the headless controller.
   assert.match(browserSource, /function renderLobby/);
   assert.match(browserSource, /function paintLobby/);
   assert.match(browserSource, /Play for \$\{escapeHtml\(match\.stakeKas\)\} KAS/);
+  // The pick and game screens state the player's side, stake, and take in one
+  // shared, highlighted summary, not a Stake/Pot ledger table.
+  assert.match(browserSource, /function matchSummaryHtml\(side, stakeKas\)/);
+  assert.match(browserSource, /matchSummaryHtml\(match\.side, match\.stakeKas\)/);
+  assert.match(browserSource, /Winner takes/);
+  assert.doesNotMatch(browserSource, /function gameDetails\(|class="summary"/);
   assert.match(browserSource, /data-action="reveal"/);
   assert.match(browserSource, /data-match-number/);
+  assert.match(browserSource, /Pick your number/);
   assert.match(browserSource, /loadSecretForGame/);
   assert.match(browserSource, /bindSecretToGame/);
   assert.match(browserSource, /deleteSecretForGame/);
@@ -154,9 +165,9 @@ test('server serves the browser application and health probe', async (t) => {
 
   // Regression: the repaint-dedup signature must not track the countdown, or
   // every tick rebuilds the join form and clears the joiner's number selection.
-  const gameSignatureFn = browserSource.match(/function gameSignature\(game\)\s*\{([\s\S]*?)\n\}/);
-  assert.ok(gameSignatureFn, 'gameSignature should be defined');
-  assert.doesNotMatch(gameSignatureFn[1], /return \[[^\]]*safetyRemainingSeconds/);
+  // It is pure and unit-tested in app-controller.js, so it must not drift back
+  // into the view.
+  assert.doesNotMatch(browserSource, /function gameSignature\(/);
 
   // Regression: safety actions are role-scoped. The creator cancels an open
   // game through the Exit link while the game is still unmatched, and the
@@ -167,7 +178,8 @@ test('server serves the browser application and health probe', async (t) => {
   assert.match(browserSource, /data-action="exit"/);
   assert.match(browserSource, /function bindExit\(gameId, game, role, pending\)/);
   assert.match(browserSource, /game\.status === 'waiting_for_player_b' && game\.canCancel && role === 'creator'/);
-  assert.match(browserSource, /connectedAddress\(\) !== game\.firstRevealer/);
+  assert.match(browserSource, /function isFirstRevealer\(game\)/);
+  assert.match(browserSource, /address === game\.firstRevealer/);
 
   assert.match(secretsSource, /getRandomValues/);
   assert.match(secretsSource, /indexedDB/);

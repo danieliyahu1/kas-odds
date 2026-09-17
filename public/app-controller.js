@@ -198,6 +198,54 @@ export function gameStage(game, role) {
   };
 }
 
+// The fields whose change makes the game panel worth re-painting. Per-second
+// values are excluded on purpose: the clock ticks locally, and only the
+// readiness flip should force a repaint (a repaint would rebuild the reveal
+// control and wipe anything in progress).
+export function gameSignature(game) {
+  return [game.status, game.safetyAction, game.safetyReady, game.automaticAction, game.automaticReady, game.firstRevealer, game.winner,
+    (game.pendingReveals ?? []).map((item) => `${item.role}:${item.retryable}`).join(','),
+    (game.pendingSafety ?? []).map((item) => `${item.action}:${item.role}:${item.retryable}`).join(',')].join('|');
+}
+
+export function formatWait(seconds) {
+  const total = Math.max(0, Math.ceil(Number(seconds) || 0));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+// The timeout the covenant enforces right now, named for the player and paired
+// with one sentence explaining the on-chain rule it comes from. The countdown
+// number is the server's covenant-derived remaining time; the browser never
+// re-derives the rule (it lives once, in the chain's SilverScript and in
+// src/terminal-actions.js).
+const COVENANT_CLOCK = Object.freeze({
+  refund_open: Object.freeze({
+    label: 'Refund',
+    note: 'When the join deadline passes, the contract returns the stake, minus the relay network fee. Anyone can relay it.',
+  }),
+  refund_all: Object.freeze({
+    label: 'Refund',
+    note: 'If neither player reveals by the timeout, the contract returns both stakes, minus the relay network fee. Anyone can relay it.',
+  }),
+  fallback_claim: Object.freeze({
+    label: 'Claim',
+    note: 'If the other player never reveals, the contract pays the pot to the first revealer, minus the network and game fees.',
+    firstRevealerOnly: true,
+  }),
+});
+
+export function covenantClock(game, { isFirstRevealer = false } = {}) {
+  const entry = COVENANT_CLOCK[game.automaticAction];
+  if (!entry || (entry.firstRevealerOnly && !isFirstRevealer)) return null;
+  const ready = game.automaticReady === true;
+  return {
+    label: entry.label,
+    note: entry.note,
+    ready,
+    remainingSeconds: ready ? 0 : game.automaticRemainingSeconds ?? null,
+  };
+}
+
 // Maps a protocol error code to the title and message shown to the player. Pure:
 // the same code always yields the same copy, so callers (the lobby controller
 // and the game page) share one source of truth.
