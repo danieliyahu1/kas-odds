@@ -39,6 +39,29 @@ async function timedStep(step, run) {
 const gamePoller = createPollController({ onPoll: (gameId) => refreshGame(gameId), intervalMs: 3500 });
 const gameRequestGate = createLatestRequestGate();
 
+// A reveal preparation can wait on the other player's lead reveal to confirm
+// before it can settle. The client retries quietly for a while; the player only
+// ever sees that their own reveal is in progress.
+const REVEAL_WAITING_RETRY_MS = 1500;
+const REVEAL_WAITING_TIMEOUT_MS = 60_000;
+let revealInFlight = false;
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function prepareRevealWithRetry(gameId, body) {
+  const deadline = nowMs() + REVEAL_WAITING_TIMEOUT_MS;
+  for (;;) {
+    try {
+      return await api(`/api/games/${gameId}/reveal/prepare`, { method: 'POST', body });
+    } catch (error) {
+      if (error.code !== 'REVEAL_WAITING' || nowMs() >= deadline) throw error;
+      await delay(REVEAL_WAITING_RETRY_MS);
+    }
+  }
+}
+
 export async function boot() {
   try {
     // Warm the covenant artifact now so the first lock never waits on it.
@@ -371,14 +394,42 @@ function playerSide(game, role) {
 function revealSection(game, pending) {
   const waiting = pending && !pending.retryable;
   const control = waiting
-    ? '<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for confirmation</span></div>'
+    ? revealWaitingHtml('Revealing...')
     : `<div class="actions"><button type="button" class="primary" data-action="reveal">${pending ? 'Try again' : 'Reveal number'}</button></div>`;
+  return revealBlockHtml(control);
+}
+
+function revealBlockHtml(control) {
   return `
     <div id="game-action" class="reveal-block">
       <p class="lead">Reveal your number</p>
       <div id="reveal-notice"></div>
       ${control}
     </div>`;
+}
+
+function revealWaitingHtml(label) {
+  return `<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">${label}</span></div>`;
+}
+
+// The reveal control while a preparation retries or a signature is pending. It
+// replaces the button so a second reveal cannot fire, and survives poll repaints
+// (see refreshGame) until the reveal resolves or fails.
+function showRevealInFlight() {
+  const block = document.querySelector('#game-action');
+  if (!block) return;
+  block.outerHTML = revealBlockHtml(revealWaitingHtml('Revealing...'));
+}
+
+// The in-flight control replaced the button, so repaint the live state to restore
+// a fresh control before explaining the failure in place.
+async function renderRevealFailure(gameId, error) {
+  window.__gameStatus = undefined;
+  await refreshGame(gameId);
+  if (error.code === 'KASWARE_UNAVAILABLE') return renderKaswareShortfall('#reveal-notice');
+  if (error.code === 'REVEAL_SECRET_MISSING') return showNotice('#reveal-notice', 'Reveal unavailable', 'This browser does not have your unrevealed number for this game. Play the game in the browser you used to start it, and keep this site\'s data.', 'error');
+  if (error.code === 'INVALID_REVEAL') return showNotice('#reveal-notice', 'Reveal did not match', 'The saved number no longer matches the locked commitment. You may have started this game in another browser.', 'error');
+  return showActionError('#reveal-notice', error);
 }
 
 function isMyReveal(game, role) {
@@ -403,37 +454,34 @@ function bindReveal(gameId) {
   if (!reveal) return;
   reveal.addEventListener('click', async () => {
     reveal.disabled = true;
+    revealInFlight = true;
+    showRevealInFlight();
     try {
       const { provider, account } = await connectKasware('#reveal-notice');
       rememberAddress(account.address);
       const secret = await loadSecretForGame(gameId);
       if (!secret) {
-        showNotice('#reveal-notice', 'Reveal unavailable', 'This browser does not have your unrevealed number for this game. Play the game in the browser you used to start it, and keep this site\'s data.', 'error');
-        reveal.disabled = false;
-        return;
+        const error = new Error('This browser does not have the unrevealed number for this game');
+        error.code = 'REVEAL_SECRET_MISSING';
+        throw error;
       }
-      const prepared = await timedStep('prepare_reveal', () => api(`/api/games/${gameId}/reveal/prepare`, { method: 'POST', body: {
+      const prepared = await timedStep('prepare_reveal', () => prepareRevealWithRetry(gameId, {
         playerAddress: account.address,
         playerPublicKey: account.publicKey,
         choice: secret.choice,
         nonceHex: secret.nonceHex,
-      } }));
+      }));
       const verified = await timedStep('verify_reveal', () => Promise.resolve(verifyPreparedTransaction(prepared, 'reveal')));
       showNotice('#reveal-notice', 'Confirm in KasWare', `Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
       const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
       if (!signedTxJson) throw new Error('KasWare did not return a signed transaction');
       await api(`/api/games/${gameId}/reveal/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
+      revealInFlight = false;
       await refreshGame(gameId);
     } catch (error) {
-      reveal.disabled = false;
+      revealInFlight = false;
       logError('reveal_failed', { code: error.code, message: error.message });
-      if (error.code === 'KASWARE_UNAVAILABLE') {
-        renderKaswareShortfall('#reveal-notice');
-      } else if (error.code === 'INVALID_REVEAL') {
-        showNotice('#reveal-notice', 'Reveal did not match', 'The saved number no longer matches the locked commitment. You may have started this game in another browser.', 'error');
-      } else {
-        showActionError('#reveal-notice', error);
-      }
+      await renderRevealFailure(gameId, error);
     }
   });
 }
@@ -815,6 +863,13 @@ async function refreshGame(gameId, options = {}) {
     if ((params.get('id') ?? params.get('game')) !== gameId) return;
     const game = await api(`/api/games/${gameId}`);
     if (!gameRequestGate.isCurrent(requestRevision)) return;
+    // A reveal in flight owns the reveal control; a status flip caused by the
+    // other player's reveal must not repaint it away. The reveal resolves itself
+    // with its own repaint once it settles or fails.
+    if (revealInFlight && !isTerminalGameStatus(game.status)) {
+      syncGameClock(game);
+      return;
+    }
     const signature = gameSignature(game);
     if (window.__gameStatus === signature) {
       syncGameClock(game);

@@ -96,7 +96,9 @@ const STAGE_COPY = Object.freeze({
   [GAME_STAGE.VOTE]: { public: 'Your turn to vote', friend: 'Your turn to vote', guest: 'Your turn to vote' },
   [GAME_STAGE.VOTE_WAIT]: { public: 'Waiting for the other person to vote', friend: 'Waiting for your friend to vote', guest: 'Waiting for your friend to vote' },
   [GAME_STAGE.REVEAL]: { public: 'Your turn to reveal', friend: 'Your turn to reveal', guest: 'Your turn to reveal' },
-  [GAME_STAGE.REVEAL_WAIT]: { public: 'Waiting for the other player to reveal', friend: 'Waiting for your friend to reveal', guest: 'Waiting for your friend to reveal' },
+  // Revealing is one shared move, so the wait is never framed as the opponent's
+  // turn: both players see the same in-progress state until the result lands.
+  [GAME_STAGE.REVEAL_WAIT]: { public: 'Revealing...', friend: 'Revealing...', guest: 'Revealing...' },
 });
 
 // Lobby phases mirror LOBBY_PHASE by value; the literals keep this module a leaf
@@ -181,7 +183,7 @@ function stageOfGame(game, role) {
 
 function gameStageTitle(game, role, stage, audience) {
   if (game.status === 'join_broadcast') return 'Confirming your vote.';
-  if (hasRevealPending(game, role)) return 'Waiting for confirmation.';
+  if (hasRevealPending(game, role)) return 'Revealing...';
   return stageLabel(stage, audience);
 }
 
@@ -257,6 +259,7 @@ export function actionErrorCopy(error) {
     INSUFFICIENT_UTXOS: ['Not enough KAS for the network fee', 'Add a small amount of KAS to this wallet, then try again.'],
     FEE_REPRICING_FAILED: ['Network fee changed', 'The network fee changed while preparing this action. Please try again.'],
     TRANSACTION_REJECTED: ['Transaction not accepted', 'The network did not accept this action. Wait a few seconds, then try again. Your game funds remain safe.'],
+    REVEAL_WAITING: ['Revealing...', 'Still revealing. This can take a moment. Try again if it does not finish.'],
     MATCH_TIMEOUT: ['Still waiting for your opponent', 'They did not create the game in time. Try again in a moment.'],
     CREATION_PENDING: ['Almost there', "Your opponent's game is still reaching the network. Try again in a moment."],
     CREATION_FAILED: ['The game did not start', "Your opponent's game did not reach the network. No KAS was locked."],
