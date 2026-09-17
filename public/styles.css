@@ -65,6 +65,8 @@ legend { display: block; margin-bottom: 12px; color: var(--muted); font-size: 13
 .choice.selected:hover { background: var(--teal-bright); transform: none; }
 .choice.num { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 96px; text-transform: none; }
 .num-big { font-size: 40px; line-height: 1; font-weight: 700; letter-spacing: -.08em; }
+.locked-number { display: grid; place-items: center; margin: 0 0 18px; }
+.locked-number .choice { width: 96px; min-height: 96px; pointer-events: none; }
 
 .stake-block { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 4px; }
 .stake-label-row label { margin: 0 0 10px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }

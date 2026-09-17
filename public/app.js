@@ -138,6 +138,7 @@ function paintLobby(snapshot, actions) {
   const progress = lobbyStage({ phase, mode, match });
   const stageTitle = progress ? progress.title : '';
   const notice = `<div id="lobby-notice">${lobbyNoticeHtml(note)}</div>`;
+  const lockedNumber = lockedNumberHtml(number);
   const startButton = `<div class="actions"><button type="button" class="primary" id="lobby-start"${busy ? ' disabled' : ''}>`;
   const cancelButton = '<div class="actions"><button type="button" class="outline" id="lobby-leave">Cancel</button></div>';
   const paint = (title, body) => {
@@ -242,14 +243,15 @@ function paintLobby(snapshot, actions) {
   }
 
   if (phase === LOBBY_PHASE.PREPARING) {
-    const waitingOnOpponent = progress.stage === GAME_STAGE.VOTE_WAIT;
     paint(stageTitle, `
-      <div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">${waitingOnOpponent ? "They haven't voted yet." : 'Preparing your transaction.'}</span></div>`);
+      ${lockedNumber}
+      <div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">This can take a moment.</span></div>`);
     return;
   }
 
   if (phase === LOBBY_PHASE.WALLET) {
     paint(stageTitle, `
+      ${lockedNumber}
       <p class="lead">Approve <strong>${escapeHtml(lockKas(match.stakeKas))} KAS</strong>.</p>
       <p class="muted-note">Your stake stays locked until the game ends.</p>`);
     return;
@@ -275,6 +277,14 @@ function paintLobby(snapshot, actions) {
       ? '<div class="actions"><button type="button" class="primary" id="lobby-retry">Try again</button></div>'
       : '<div class="actions"><a class="primary home-button" href="/">Back to start</a></div>'}`);
   if (retry) document.querySelector('#lobby-retry').addEventListener('click', () => void retry());
+}
+
+// After Play the number is the player's committed move: keep that same tile on
+// screen, frozen, so the lock reads as their choice moving forward rather than a
+// new step that replaces it.
+function lockedNumberHtml(choice) {
+  if (choice !== 0 && choice !== 1) return '';
+  return `<div class="locked-number"><div class="choice num selected"><span class="num-big">${displayPick(choice)}</span></div></div>`;
 }
 
 function lobbyNoticeHtml(note) {

@@ -87,14 +87,16 @@ test('the rail begins at the match, not while waiting for an opponent', () => {
 
 test('the lobby names the stage the player is on once matched', () => {
   assert.equal(lobbyStage({ phase: 'pick', mode: 'public', match: matched() }).title, 'Your turn to vote');
-  assert.equal(lobbyStage({ phase: 'wallet', mode: 'host', match: matched() }).title, 'Your turn to vote');
-  assert.equal(lobbyStage({ phase: 'preparing', mode: 'host', match: matched() }).title, 'Waiting for your friend to vote');
+  assert.equal(lobbyStage({ phase: 'wallet', mode: 'host', match: matched() }).title, 'Locking your number');
+  assert.equal(lobbyStage({ phase: 'preparing', mode: 'host', match: matched() }).title, 'Locking your number');
 });
 
-test('only the waiting joiner is parked on the opponent', () => {
-  assert.equal(lobbyStage({ phase: 'preparing', mode: 'public', match: matched({ role: 'creator', gameId: null }) }).stage, GAME_STAGE.VOTE);
-  assert.equal(lobbyStage({ phase: 'preparing', mode: 'public', match: matched({ role: 'joiner', gameId: null }) }).stage, GAME_STAGE.VOTE_WAIT);
-  assert.equal(lobbyStage({ phase: 'preparing', mode: 'public', match: matched({ role: 'joiner', gameId: 'a'.repeat(64) }) }).stage, GAME_STAGE.VOTE);
+test('after Play both roles share one lock and neither is parked on the other', () => {
+  const stage = (match) => lobbyStage({ phase: 'preparing', mode: 'public', match });
+  assert.equal(stage(matched({ role: 'creator', gameId: null })).stage, GAME_STAGE.LOCKING);
+  assert.equal(stage(matched({ role: 'joiner', gameId: null })).stage, GAME_STAGE.LOCKING);
+  assert.equal(stage(matched({ role: 'joiner', gameId: null })).title, stage(matched({ role: 'creator', gameId: null })).title);
+  assert.equal(stage(matched({ role: 'joiner', gameId: 'a'.repeat(64) })).title, 'Locking your number');
 });
 
 test('the rail shows the two moves and never a wait', () => {

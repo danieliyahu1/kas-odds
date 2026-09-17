@@ -72,6 +72,7 @@ export function matchGameWaitState(match, { elapsedMs = 0, timeoutMs = 0 } = {})
 export const GAME_STAGE = Object.freeze({
   VOTE: 'vote',
   VOTE_WAIT: 'vote-wait',
+  LOCKING: 'locking',
   REVEAL: 'reveal',
   REVEAL_WAIT: 'reveal-wait',
 });
@@ -86,6 +87,7 @@ const RAIL = Object.freeze([
 const PHASE_OF_STAGE = Object.freeze({
   [GAME_STAGE.VOTE]: 'vote',
   [GAME_STAGE.VOTE_WAIT]: 'vote',
+  [GAME_STAGE.LOCKING]: 'vote',
   [GAME_STAGE.REVEAL]: 'reveal',
   [GAME_STAGE.REVEAL_WAIT]: 'reveal',
 });
@@ -94,6 +96,10 @@ export const STAGE_AUDIENCE = Object.freeze({ PUBLIC: 'public', FRIEND: 'friend'
 
 const STAGE_COPY = Object.freeze({
   [GAME_STAGE.VOTE]: { public: 'Your turn to vote', friend: 'Your turn to vote', guest: 'Your turn to vote' },
+  // Once Play is pressed the choice is made. Preparing, signing, and the creator's
+  // transaction landing are one mechanical lock, never another turn and never a
+  // wait on the opponent, so both players read the same line.
+  [GAME_STAGE.LOCKING]: { public: 'Locking your number', friend: 'Locking your number', guest: 'Locking your number' },
   [GAME_STAGE.VOTE_WAIT]: { public: 'Waiting for the other person to vote', friend: 'Waiting for your friend to vote', guest: 'Waiting for your friend to vote' },
   [GAME_STAGE.REVEAL]: { public: 'Your turn to reveal', friend: 'Your turn to reveal', guest: 'Your turn to reveal' },
   // Revealing is one shared move, so the wait is never framed as the opponent's
@@ -106,7 +112,6 @@ const STAGE_COPY = Object.freeze({
 // opponent to appear is not a stage: the rail begins once they are matched.
 const LOBBY_STAGE = Object.freeze({
   pick: GAME_STAGE.VOTE,
-  wallet: GAME_STAGE.VOTE,
 });
 
 function audienceForMode(mode) {
@@ -135,12 +140,11 @@ function stageRail(stage) {
   }));
 }
 
-function stageOfLobby({ phase, mode, match }) {
-  if (phase === 'preparing') {
-    // Both players press Play; only the joiner waits, and only until the
-    // creator's creation transaction publishes the game id.
-    return match?.role === 'joiner' && !match?.gameId ? GAME_STAGE.VOTE_WAIT : GAME_STAGE.VOTE;
-  }
+function stageOfLobby({ phase }) {
+  // Pick is the only decision a player makes in the lobby. Everything after Play
+  // is the same lock for both players, whatever the chain is doing in the
+  // background, so neither role is ever parked on the other.
+  if (phase === 'preparing' || phase === 'wallet') return GAME_STAGE.LOCKING;
   return LOBBY_STAGE[phase] ?? null;
 }
 

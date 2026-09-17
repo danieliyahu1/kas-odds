@@ -113,7 +113,8 @@ test('server serves the browser application and health probe', async (t) => {
   assert.doesNotMatch(browserSource, /Waiting for your rival to create the game/);
   // The stage rail replaced the old opaque "getting your game ready" headings.
   assert.doesNotMatch(browserSource, /Getting your game ready/);
-  assert.match(browserSource, /GAME_STAGE\.VOTE_WAIT/);
+  assert.match(browserSource, /GAME_STAGE\.REVEAL/);
+  assert.match(browserSource, /function lockedNumberHtml/);
   assert.match(browserSource, /gameStage\(game, role\)/);
   assert.match(browserSource, /class="stage-rail"/);
   // The covenant timeout is a live clock that re-anchors to the server's
