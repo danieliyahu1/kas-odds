@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { BackendGameService } from '../src/backend-game-service.js';
 import { BackendGameStore } from '../src/backend-game-store.js';
 import { Metrics } from '../src/metrics.js';
-import { prepareCreateGame } from '../src/create-game.js';
+import { normalizePublicKey, prepareCreateGame } from '../src/create-game.js';
+import { createRevealSecret } from '../src/reveal.js';
 import { PROTOCOL_VERSION, UNCONFIRMED_INPUT_DAA_SCORE } from '../src/protocol.js';
 
 const NO_UTXO_RPC = {
@@ -662,3 +663,135 @@ async function matchRoles(service, matchId) {
   const creatorView = await service.matchmakingStatus(matchId, creatorAddress);
   return { creatorAddress, joinerAddress, creatorPublicKey, creatorView };
 }
+
+// --- Serialized reveal ordering -------------------------------------------
+
+const REVEAL_GAME_ID = 'ff'.repeat(32);
+const REVEAL_CREATOR_ADDRESS = 'kaspatest:creator';
+const REVEAL_JOINER_ADDRESS = 'kaspatest:joiner';
+const REVEAL_CREATOR_PUBLIC_KEY = 'aa'.repeat(32);
+const REVEAL_JOINER_PUBLIC_KEY = 'bb'.repeat(32);
+const REVEAL_JOIN_TXID = 'dd'.repeat(32);
+const REVEAL_LEAD_TXID = 'ee'.repeat(32);
+const REVEAL_JOINED_ADDRESS = 'kaspatest:joined';
+const REVEAL_JOINED_SPK = '0000aa20' + '02'.repeat(32) + '87';
+const REVEAL_CONTINUATION_ADDRESS = 'kaspatest:continuation';
+const REVEAL_CONTINUATION_SPK = '0000aa20' + '05'.repeat(32) + '87';
+const REVEAL_GROSS_POT = '200000000';
+const creatorRevealSecret = createRevealSecret({ gameId: REVEAL_GAME_ID, player: 'creator', choice: 1, nonce: new Uint8Array(32).fill(7) });
+const joinerRevealSecret = createRevealSecret({ gameId: REVEAL_GAME_ID, player: 'joiner', choice: 0, nonce: new Uint8Array(32).fill(8) });
+
+function revealGameRecord(reveals = []) {
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: REVEAL_CREATOR_ADDRESS,
+    creatorPublicKey: REVEAL_CREATOR_PUBLIC_KEY,
+    creatorCommitment: creatorRevealSecret.commitment,
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  return {
+    gameId: REVEAL_GAME_ID,
+    protocolVersion: PROTOCOL_VERSION,
+    status: 'joined',
+    request: serializedRequest(request),
+    join: {
+      transactionId: REVEAL_JOIN_TXID,
+      joinerAddress: REVEAL_JOINER_ADDRESS,
+      joinerPublicKey: REVEAL_JOINER_PUBLIC_KEY,
+      joinerCommitment: joinerRevealSecret.commitment,
+      joinedAddress: REVEAL_JOINED_ADDRESS,
+      joinedScriptPublicKey: REVEAL_JOINED_SPK,
+      joinedRedeemScript: 'ab'.repeat(32),
+      covenantId: '03'.repeat(32),
+      submittedAt: new Date().toISOString(),
+    },
+    ...(reveals.length > 0 ? { reveals } : {}),
+  };
+}
+
+function leadReveal(overrides = {}) {
+  return {
+    transactionId: REVEAL_LEAD_TXID,
+    preparedHash: '04'.repeat(32),
+    playerAddress: REVEAL_CREATOR_ADDRESS,
+    role: 'creator',
+    choice: creatorRevealSecret.choice,
+    status: 'broadcast',
+    continuationAddress: REVEAL_CONTINUATION_ADDRESS,
+    continuationScriptPublicKey: REVEAL_CONTINUATION_SPK,
+    continuationRedeemScript: '06'.repeat(32),
+    winner: null,
+    submittedAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+function revealFunding() {
+  return { outpoint: { transactionId: '77'.repeat(32), index: 0 }, amount: '2535839900', scriptPublicKey: `000020${'88'.repeat(32)}ac`, blockDaaScore: 100, isCoinbase: false };
+}
+
+function revealRpc({ escrow = true, continuation = null, funding = [] } = {}) {
+  return {
+    getBlockDagInfo: async () => ({ virtualDaaScore: '3000' }),
+    getFeeEstimate: async () => ({ estimate: { priorityBucket: [{ feerate: 1 }] } }),
+    getUtxosByAddresses: async (addresses) => {
+      const [address] = addresses;
+      if (address === REVEAL_JOINED_ADDRESS && escrow) {
+        return { entries: [{ outpoint: { transactionId: REVEAL_JOIN_TXID, index: 0 }, amount: REVEAL_GROSS_POT, scriptPublicKey: REVEAL_JOINED_SPK, blockDaaScore: 100, isCoinbase: false }] };
+      }
+      if (address === REVEAL_CONTINUATION_ADDRESS && continuation) return { entries: [continuation] };
+      return { entries: funding };
+    },
+  };
+}
+
+async function revealService(t, { reveals = [], rpcOptions } = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-reveal-order-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame(revealGameRecord(reveals));
+  return new BackendGameService({ rpc: revealRpc(rpcOptions), store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+}
+
+function joinerReveal(service) {
+  return service.prepareReveal(REVEAL_GAME_ID, {
+    playerAddress: REVEAL_JOINER_ADDRESS,
+    playerPublicKey: normalizePublicKey(REVEAL_JOINER_PUBLIC_KEY),
+    choice: joinerRevealSecret.choice,
+    nonceHex: joinerRevealSecret.nonceHex,
+  });
+}
+
+// The exact regression from the field: the second player pressed Reveal while the
+// first reveal was already broadcast. It must wait for that lead; it must never
+// look for the joined escrow the lead already spent.
+test('a second reveal waits while the rival lead is unconfirmed', async (t) => {
+  const service = await revealService(t, { reveals: [leadReveal()], rpcOptions: { escrow: false } });
+  await assert.rejects(joinerReveal(service), { code: 'REVEAL_WAITING' });
+});
+
+test('two lead preparations at once let only the first player lead', async (t) => {
+  const service = await revealService(t, { rpcOptions: { funding: [revealFunding()] } });
+  const prepared = await service.prepareReveal(REVEAL_GAME_ID, {
+    playerAddress: REVEAL_CREATOR_ADDRESS,
+    playerPublicKey: normalizePublicKey(REVEAL_CREATOR_PUBLIC_KEY),
+    choice: creatorRevealSecret.choice,
+    nonceHex: creatorRevealSecret.nonceHex,
+  });
+  assert.equal(prepared.stage, 'first_reveal');
+  await assert.rejects(joinerReveal(service), { code: 'REVEAL_WAITING' });
+});
+
+test('the second player settles once the lead reveal confirms', async (t) => {
+  const continuation = { outpoint: { transactionId: REVEAL_LEAD_TXID, index: 0 }, amount: REVEAL_GROSS_POT, scriptPublicKey: REVEAL_CONTINUATION_SPK, blockDaaScore: 1999, isCoinbase: false };
+  const service = await revealService(t, {
+    reveals: [leadReveal({ status: 'confirmed', confirmedDaaScore: '2000' })],
+    rpcOptions: { escrow: false, continuation, funding: [revealFunding()] },
+  });
+  const prepared = await joinerReveal(service);
+  assert.equal(prepared.stage, 'settlement');
+});

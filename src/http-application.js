@@ -124,6 +124,8 @@ function sendError(res, error, context, logger) {
   res.kaspaError = { code, message: error?.message ?? 'Operation failed' };
   const fields = { requestId: context.requestId, route: context.route, code, message: error?.message };
   if (error?.cause) logger.error('rpc_transaction_rejected', { ...fields, nodeMessage: error.cause?.message ?? String(error.cause), ...error.transactionDiagnostics });
+  // A waiting reveal is the client polling for its turn, not a rejected request.
+  else if (code === 'REVEAL_WAITING') logger.debug('client_request_retrying', fields);
   else if (clientError) logger.warn('client_request_rejected', fields);
   else logger.error('server_error', { ...fields, stack: error?.stack });
   sendJson(res, responseStatus(code, clientError, notFound), { error: code, message: clientError ? error.message : 'Kaspa backend is unavailable', requestId: context.requestId });

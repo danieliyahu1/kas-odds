@@ -25,6 +25,11 @@ import { assignedSide as matchmakingAssignedSide, findMatchPlayer, MatchmakingSe
 // keeping the original attempt: the first answer the chain gives wins.
 const PENDING_RETRY_MS = 60_000;
 
+// A first-reveal preparation reserves the lead slot while the player is at their
+// wallet. If the preparation is never broadcast, the slot returns to the pair so
+// the other player can still lead the reveal.
+const REVEAL_CLAIM_TTL_MS = 120_000;
+
 // A chained transaction can be rejected for a few seconds until its parent is
 // anchored, or right after a reorg. Those rejections are transient, so the same
 // signed transaction is retried with backoff before the error reaches the player.
@@ -54,6 +59,11 @@ export class BackendGameService {
     this.store = store;
     this.metrics = metrics;
     this.ephemeral = ephemeral;
+    // Reveal is two ordered on-chain steps that players trigger independently, so
+    // the pair is serialised per game: `revealClaims` reserves the lead slot while
+    // a player is preparing, and `gameLocks` makes the ordering decision atomic.
+    this.revealClaims = new Map();
+    this.gameLocks = new Map();
     this.gameFeePublicKey = gameFeePublicKey ? validateGameFeePublicKey(gameFeePublicKey) : null;
   }
 
@@ -275,8 +285,17 @@ export class BackendGameService {
     return { gameId: id, transactionId, status: 'join_broadcast' };
   }
 
+  // Reveal is two ordered on-chain steps: the first spends the joined escrow and
+  // continues the covenant, the second spends that continuation and settles. A
+  // player triggers either step on their own, so the pair is serialised here: one
+  // caller leads and the other waits for the lead to confirm. The waiting caller
+  // never touches the escrow the lead already spent, and never sees the wait.
   async prepareReveal(gameId, input) {
     const id = validateGameId(gameId);
+    return this.#withGameLock(id, () => this.#prepareRevealLocked(id, input));
+  }
+
+  async #prepareRevealLocked(id, input) {
     let gameRecord = await this.store.loadGame(id);
     if (!gameRecord?.join) throw new ProtocolError('GAME_NOT_JOINED', 'Player B has not joined this game');
     gameRecord = await this.#refreshActionState(gameRecord);
@@ -290,13 +309,15 @@ export class BackendGameService {
     if (!Number.isInteger(choice) || (choice !== 0 && choice !== 1)) throw new ProtocolError('INVALID_REVEAL', 'Choice must be zero or one');
     if (!verifyRevealPreimage({ commitment: player.commitment, choice, nonceHex })) throw new ProtocolError('INVALID_REVEAL', 'Reveal does not match the saved commitment');
 
-    const confirmedReveals = (gameRecord.reveals ?? []).filter((reveal) => reveal.status === 'confirmed');
+    const reveals = gameRecord.reveals ?? [];
+    const confirmedReveals = reveals.filter((reveal) => reveal.status === 'confirmed');
     if (confirmedReveals.some((reveal) => reveal.playerAddress === player.address)) throw new ProtocolError('ALREADY_REVEALED', 'This player already revealed');
-    const pendingMine = (gameRecord.reveals ?? []).some((reveal) => reveal.status !== 'confirmed'
+    const pendingMine = reveals.some((reveal) => reveal.status !== 'confirmed'
       && reveal.playerAddress === player.address && !isPendingRetryable(reveal));
     if (pendingMine) throw new ProtocolError('ACTION_PENDING', 'The previous reveal is still confirming');
-    const current = await this.#currentGameUtxo(gameRecord, request, confirmedReveals);
-    const first = confirmedReveals[0];
+    const first = confirmedReveals[0] ?? null;
+    if (!first) this.#assertMayLeadReveal(id, reveals, player);
+    const current = await this.#currentGameUtxo(gameRecord, request, first);
     if (first) logger.info('settlement_reveal_parent', { gameId: id, transactionId: current.transactionId, parentBlockDaaScore: String(current.entry.blockDaaScore ?? 0), currentDaaScore: String(current.currentDaaScore) });
     const state = this.#revealGameState(id, gameRecord, request, current, confirmedReveals);
 
@@ -341,6 +362,9 @@ export class BackendGameService {
       payoutAddress: winner === 'creator' ? request.creatorAddress : winner ? gameRecord.join.joinerAddress : undefined,
       createdAt: new Date().toISOString(),
     });
+    // Reserve only once a lead reveal is actually built, so a failed preparation
+    // never blocks the rival.
+    if (!first) this.#reserveRevealClaim(id, player);
     this.metrics.recordGameEvent('reveal_prepared');
     return { gameId: id, preparedHash, txJson, feeSompi: String(funding.feeSompi), stage: first ? 'settlement' : 'first_reveal', verification: createTransactionIntent({ action: 'reveal', txJson, feeSompi: funding.feeSompi }) };
   }
@@ -352,36 +376,42 @@ export class BackendGameService {
     const gameRecord = await this.store.loadGame(id);
     if (!gameRecord?.join) throw new ProtocolError('GAME_NOT_JOINED', 'Player B has not joined this game');
     const operationId = operationKey('reveal', preparedHash);
-    const existing = await this.store.loadOperation(operationId);
-    let transactionId;
-    if (existing?.status === 'broadcast') {
-      transactionId = existing.transactionId;
-    } else {
-      verifySignedTerminalTransaction({ prepared: { transaction: prepared.transaction }, signedTxJson });
-      transactionId = await this.#submitOperation({
-        operationId, action: 'reveal', gameId: id, preparedHash,
-        transactionId: transactionIdFromSafeJson(signedTxJson),
-        submit: () => this.#submitSignedTransaction('reveal', signedTxJson, prepared.priorityFeerate),
-      });
+    try {
+      const existing = await this.store.loadOperation(operationId);
+      let transactionId;
+      if (existing?.status === 'broadcast') {
+        transactionId = existing.transactionId;
+      } else {
+        verifySignedTerminalTransaction({ prepared: { transaction: prepared.transaction }, signedTxJson });
+        transactionId = await this.#submitOperation({
+          operationId, action: 'reveal', gameId: id, preparedHash,
+          transactionId: transactionIdFromSafeJson(signedTxJson),
+          submit: () => this.#submitSignedTransaction('reveal', signedTxJson, prepared.priorityFeerate),
+        });
+      }
+      const reveal = {
+        transactionId,
+        preparedHash,
+        playerAddress: prepared.playerAddress,
+        role: prepared.role,
+        choice: prepared.choice,
+        status: 'broadcast',
+        continuationAddress: prepared.continuationAddress,
+        continuationScriptPublicKey: prepared.continuationScriptPublicKey,
+        continuationRedeemScript: prepared.continuationRedeemScript,
+        winner: prepared.winner,
+        payoutAddress: prepared.payoutAddress,
+        submittedAt: new Date().toISOString(),
+      };
+      this.#logPlayer('reveal_submit', prepared.playerAddress, { gameId: id, transactionId, role: prepared.role });
+      await this.#saveGame({ ...gameRecord, status: prepared.winner ? 'settlement_broadcast' : 'reveal_broadcast', reveals: [...(gameRecord.reveals ?? []), reveal] });
+      this.metrics.recordGameEvent('reveal_submitted');
+      return { gameId: id, transactionId, status: prepared.winner ? 'settlement_broadcast' : 'reveal_broadcast' };
+    } finally {
+      // The broadcast reveal now records who leads; a failed attempt releases the
+      // slot so the other player can still lead.
+      this.#releaseRevealClaim(id, prepared.playerAddress);
     }
-    const reveal = {
-      transactionId,
-      preparedHash,
-      playerAddress: prepared.playerAddress,
-      role: prepared.role,
-      choice: prepared.choice,
-      status: 'broadcast',
-      continuationAddress: prepared.continuationAddress,
-      continuationScriptPublicKey: prepared.continuationScriptPublicKey,
-      continuationRedeemScript: prepared.continuationRedeemScript,
-      winner: prepared.winner,
-      payoutAddress: prepared.payoutAddress,
-      submittedAt: new Date().toISOString(),
-    };
-    this.#logPlayer('reveal_submit', prepared.playerAddress, { gameId: id, transactionId, role: prepared.role });
-    await this.#saveGame({ ...gameRecord, status: prepared.winner ? 'settlement_broadcast' : 'reveal_broadcast', reveals: [...(gameRecord.reveals ?? []), reveal] });
-    this.metrics.recordGameEvent('reveal_submitted');
-    return { gameId: id, transactionId, status: prepared.winner ? 'settlement_broadcast' : 'reveal_broadcast' };
   }
 
   // Permissionless timeout keeper. Every decision is re-read from the chain
@@ -431,7 +461,7 @@ export class BackendGameService {
           attempted += 1;
           continue;
         }
-        const covenant = await this.#currentGameUtxo(current, request, reveals);
+        const covenant = await this.#currentGameUtxo(current, request, reveals[0] ?? null);
         const age = covenant.currentDaaScore - BigInt(covenant.entry.blockDaaScore);
         let action;
         let args;
@@ -515,7 +545,7 @@ export class BackendGameService {
       if (reveals.length > 1) continue;
       let active;
       try {
-        active = await this.#currentGameUtxo(record, deserializeRequest(record.request), reveals);
+        active = await this.#currentGameUtxo(record, deserializeRequest(record.request), reveals[0] ?? null);
       } catch (error) {
         if (error?.code === 'ACTION_NOT_CONFIRMED' || error?.code === 'GAME_NOT_FOUND') {
           pollSoon = true;
@@ -779,10 +809,9 @@ export class BackendGameService {
 
   // --- Chain state ---------------------------------------------------------
 
-  async #currentGameUtxo(record, request, confirmedReveals) {
-    const first = confirmedReveals[0];
-    const descriptor = first
-      ? { transactionId: first.transactionId, address: first.continuationAddress, scriptPublicKey: first.continuationScriptPublicKey, redeemScript: first.continuationRedeemScript }
+  async #currentGameUtxo(record, request, firstReveal) {
+    const descriptor = firstReveal
+      ? { transactionId: firstReveal.transactionId, address: firstReveal.continuationAddress, scriptPublicKey: firstReveal.continuationScriptPublicKey, redeemScript: firstReveal.continuationRedeemScript }
       : { transactionId: record.join.transactionId, address: record.join.joinedAddress, scriptPublicKey: record.join.joinedScriptPublicKey, redeemScript: record.join.joinedRedeemScript };
     const { entry, currentDaaScore } = await this.#expectedUtxo(descriptor, grossPotSompi(request.stakeSompi));
     return { entry, currentDaaScore, joinedDaaScore: BigInt(entry.blockDaaScore), transactionId: descriptor.transactionId, redeemScript: descriptor.redeemScript };
@@ -872,6 +901,51 @@ export class BackendGameService {
 
   async #expectedUtxo(descriptor, valueSompi) {
     return this.chain.findExpectedUtxo(descriptor, valueSompi);
+  }
+
+  // Runs game-scoped work one at a time so the reveal ordering decision and the
+  // lead claim are atomic. The service is a single process, so a promise tail per
+  // game is enough; the entry is dropped once the tail settles.
+  #withGameLock(gameId, task) {
+    const previous = this.gameLocks.get(gameId) ?? Promise.resolve();
+    const current = previous.then(task, task);
+    const settled = current.then(() => undefined, () => undefined);
+    this.gameLocks.set(gameId, settled);
+    settled.then(() => {
+      if (this.gameLocks.get(gameId) === settled) this.gameLocks.delete(gameId);
+    });
+    return current;
+  }
+
+  // A caller with no confirmed lead may become the lead revealer, but only one
+  // lead may hold the slot: a rival's preparation or already-broadcast lead means
+  // wait, never build a second spend of the joined escrow.
+  #assertMayLeadReveal(gameId, reveals, player) {
+    const rivalLead = reveals.some((reveal) => reveal.status !== 'confirmed' && !reveal.winner
+      && reveal.transactionId && reveal.playerAddress !== player.address);
+    const claim = this.#activeRevealClaim(gameId);
+    if (rivalLead || (claim && claim.playerAddress !== player.address)) {
+      throw new ProtocolError('REVEAL_WAITING', 'Waiting for the other reveal to confirm');
+    }
+  }
+
+  #reserveRevealClaim(gameId, player) {
+    this.revealClaims.set(gameId, { playerAddress: player.address, role: player.role, expiresAt: Date.now() + REVEAL_CLAIM_TTL_MS });
+  }
+
+  #activeRevealClaim(gameId) {
+    const claim = this.revealClaims.get(gameId);
+    if (!claim) return null;
+    if (claim.expiresAt <= Date.now()) {
+      this.revealClaims.delete(gameId);
+      return null;
+    }
+    return claim;
+  }
+
+  #releaseRevealClaim(gameId, playerAddress) {
+    const claim = this.revealClaims.get(gameId);
+    if (claim?.playerAddress === playerAddress) this.revealClaims.delete(gameId);
   }
 
   // Single description of the creator's covenant output, shared by the on-chain
@@ -1049,6 +1123,7 @@ export class BackendGameService {
       payouts: record.automaticSettlement?.payouts ?? [],
     });
     this.ephemeral.deleteForGame(record.gameId);
+    this.revealClaims.delete(record.gameId);
     this.metrics.recordGameEvent('game_completed');
   }
 
