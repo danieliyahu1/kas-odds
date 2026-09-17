@@ -44,12 +44,13 @@ const CREATION_STATE = Object.freeze({ BROADCAST: 'broadcast', SUBMITTING: 'subm
 // broadcasts to the node. The service therefore never learns a player's number
 // before both commitments are confirmed on-chain and the number is public.
 export class BackendGameService {
-  constructor({ rpc, chain, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey, network = DEFAULT_NETWORK_PROFILE, submissionRetryBaseMs = SUBMISSION_RETRY_BASE_MS }) {
+  constructor({ rpc, chain, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey, network = DEFAULT_NETWORK_PROFILE, submissionRetryBaseMs = SUBMISSION_RETRY_BASE_MS, log = logger }) {
     this.chain = chain ?? new KaspaChainAdapter({ rpc });
     this.funding = null;
     this.network = network;
     this.submissionRetryBaseMs = submissionRetryBaseMs;
-    this.matchmaking = new MatchmakingService({ store, metrics, logPlayer: (event, address, fields) => this.#logPlayer(event, address, fields), addressPrefix: network.addressPrefix });
+    this.log = log;
+    this.matchmaking = new MatchmakingService({ store, metrics, logPlayer: (event, address, fields) => this.#logPlayer(event, address, fields), logger: log, addressPrefix: network.addressPrefix });
     this.store = store;
     this.metrics = metrics;
     this.ephemeral = ephemeral;
@@ -1150,7 +1151,7 @@ export class BackendGameService {
 
   #logPlayer(event, address, fields = {}) {
     if (process.env.LOG_WALLET_ADDRESSES !== '1') return;
-    logger.info(event, { address, ...fields });
+    this.log.info(event, { address, ...fields });
   }
 
   async #submitSignedTransaction(action, signedTxJson, priorityFeerate) {

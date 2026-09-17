@@ -8,6 +8,7 @@ import { noopMetrics } from './metrics.js';
 const MATCH_WAIT_TIMEOUT_MS = 30_000;
 const DEFAULT_LIMIT_KAS = 1;
 const PREPARATION_RETENTION_MS = 900_000;
+const noopLogger = Object.freeze({ info: () => {} });
 // Windows can briefly lock a file being replaced by an atomic rename (antivirus,
 // search indexing, another reader). These are transient, so retry a few times
 // before surfacing a storage error.
@@ -20,10 +21,11 @@ const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 // single JSON file. Reveal preimages are intentionally never stored here; they
 // live only in the ephemeral in-memory store.
 export class BackendGameStore {
-  constructor(filePath, { metrics = noopMetrics } = {}) {
+  constructor(filePath, { metrics = noopMetrics, logger = noopLogger } = {}) {
     if (!filePath) throw new ProtocolError('STORAGE_UNAVAILABLE', 'Backend game store path is required');
     this.filePath = filePath;
     this.metrics = metrics;
+    this.logger = logger;
     this.writeQueue = Promise.resolve();
   }
 
@@ -101,6 +103,7 @@ export class BackendGameStore {
       if (record.matchId) {
         delete data.matches[record.matchId];
         data.queue = data.queue.filter((matchId) => matchId !== record.matchId);
+        this.logger.info('matchmaking_closed', { matchId: record.matchId, reason: 'game_complete' });
       }
       for (const [preparedHash, prepared] of Object.entries(data.prepared)) {
         if (preparedHash === record.creationPreparedHash || prepared.prepared?.txJson === record.prepared?.txJson) {
@@ -150,8 +153,8 @@ export class BackendGameStore {
 
   async joinMatchmaking(player) {
     return this.#updateWithResult((data) => {
-      sweepIdleMatches(data, Date.now());
-      cancelActiveMatchesFor(data, player.address);
+      sweepIdleMatches(data, Date.now(), this.logger);
+      cancelActiveMatchesFor(data, player.address, this.logger);
 
       const waiting = data.queue
         .map((matchId) => data.matches[matchId])
@@ -179,8 +182,8 @@ export class BackendGameStore {
   // player who has the invite id can take the second seat.
   async createPrivateMatch(player) {
     return this.#updateWithResult((data) => {
-      sweepIdleMatches(data, Date.now());
-      cancelActiveMatchesFor(data, player.address);
+      sweepIdleMatches(data, Date.now(), this.logger);
+      cancelActiveMatchesFor(data, player.address, this.logger);
       const participant = participantRecord(player, player.stakeKas);
       const match = {
         matchId: player.matchId,
@@ -198,7 +201,7 @@ export class BackendGameStore {
 
   async joinPrivateMatch(matchId, player) {
     return this.#updateWithResult((data) => {
-      sweepIdleMatches(data, Date.now());
+      sweepIdleMatches(data, Date.now(), this.logger);
       const match = data.matches[matchId];
       if (!match?.private || !isLiveMatch(match)) {
         throw new ProtocolError('MATCH_NOT_FOUND', 'This friend invite is no longer available');
@@ -248,6 +251,7 @@ export class BackendGameStore {
       if (['waiting', 'matched'].includes(match.status)) {
         match.status = 'cancelled';
         data.queue = data.queue.filter((id) => id !== matchId);
+        this.logger.info('matchmaking_cancelled', { matchId, reason: 'leave' });
       }
     });
   }
@@ -354,20 +358,26 @@ function isRecord(value) {
 // A session with no player seen within the wait window is dead: it can never be
 // matched or joined, so it is cancelled and dropped from the public queue. The
 // same rule covers public matches and private friend rooms.
-function sweepIdleMatches(data, now) {
+function sweepIdleMatches(data, now, logger) {
   for (const match of Object.values(data.matches)) {
     if (!isLiveMatch(match)) continue;
     const lastSeen = Math.min(...match.players.map((player) => Date.parse(player.lastSeenAt ?? player.joinedAt ?? '')));
-    if (!Number.isFinite(lastSeen) || now - lastSeen > MATCH_WAIT_TIMEOUT_MS) match.status = 'cancelled';
+    if (!Number.isFinite(lastSeen) || now - lastSeen > MATCH_WAIT_TIMEOUT_MS) {
+      match.status = 'cancelled';
+      logger.info('matchmaking_swept', { matchId: match.matchId, reason: 'idle' });
+    }
   }
   pruneQueue(data);
 }
 
 // A wallet may hold only one live session, so opening a new one retires the old.
-function cancelActiveMatchesFor(data, address) {
+function cancelActiveMatchesFor(data, address, logger) {
   for (const match of Object.values(data.matches)) {
     if (!isLiveMatch(match)) continue;
-    if (match.players.some((item) => item.address === address)) match.status = 'cancelled';
+    if (match.players.some((item) => item.address === address)) {
+      match.status = 'cancelled';
+      logger.info('matchmaking_replaced', { matchId: match.matchId, reason: 'rejoin' });
+    }
   }
   pruneQueue(data);
 }

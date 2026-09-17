@@ -242,3 +242,16 @@ test('persists and reloads non-secret submission operations', async (t) => {
   assert.deepEqual(await store.loadOperation(operation.operationId), operation);
   assert.deepEqual(await store.listOperations(), [operation]);
 });
+
+test('cancelling a live session logs an address-free reason', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-match-log-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const events = [];
+  const store = new BackendGameStore(join(directory, 'games.json'), { logger: { info: (event, fields) => events.push({ event, fields }) } });
+  await store.joinMatchmaking({ matchId: 'first-match', address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 5 });
+  await store.joinMatchmaking({ matchId: 'second-match', address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 5 });
+
+  const replaced = events.filter((entry) => entry.event === 'matchmaking_replaced');
+  assert.deepEqual(replaced, [{ event: 'matchmaking_replaced', fields: { matchId: 'first-match', reason: 'rejoin' } }]);
+  assert.doesNotMatch(JSON.stringify(events), /kaspatest/);
+});

@@ -618,6 +618,24 @@ function serializedRequest(request) {
   return Object.fromEntries(Object.entries(request).map(([key, value]) => [key, typeof value === 'bigint' ? String(value) : value]));
 }
 
+test('matchmaking pairs, waits, and misses are logged without wallet addresses', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'even-odd-mm-log-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const events = [];
+  const log = { info: (event, fields) => events.push({ event, fields }), warn: () => {}, error: () => {}, debug: () => {} };
+  const service = new BackendGameService({ ...serviceOptions(new BackendGameStore(join(directory, 'games.json'))), log });
+
+  const first = await service.joinMatchmaking({ address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 5 });
+  const second = await service.joinMatchmaking({ address: 'kaspatest:second', publicKey: 'b'.repeat(64), limitKas: 5 });
+  assert.equal(first.matchId, second.matchId);
+  assert.deepEqual(events.find((entry) => entry.event === 'matchmaking_waiting'), { event: 'matchmaking_waiting', fields: { matchId: first.matchId, limitKas: 5 } });
+  assert.deepEqual(events.find((entry) => entry.event === 'matchmaking_paired').fields, { matchId: second.matchId, stakeKas: 5 });
+
+  await assert.rejects(service.matchmakingStatus(second.matchId, 'kaspatest:stranger'), { code: 'NOT_A_PLAYER' });
+  assert.deepEqual(events.find((entry) => entry.event === 'matchmaking_status_miss'), { event: 'matchmaking_status_miss', fields: { matchId: second.matchId, reason: 'NOT_A_PLAYER' } });
+  assert.doesNotMatch(JSON.stringify(events), /kaspatest/);
+});
+
 function unconfirmedGameRecord({ gameId, request, preparedHash = '07'.repeat(32), covenantId = '03'.repeat(32), matchId }) {
   return {
     gameId,
