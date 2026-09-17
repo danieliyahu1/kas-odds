@@ -175,10 +175,11 @@ function isGameOver(status) {
 function stageOfGame(game, role) {
   if (role !== 'creator' && role !== 'joiner') return null;
   if (isGameOver(game.status)) return null;
+  // My own reveal decides my wait. The other player's in-flight lead reveal must
+  // not turn my "your turn" into "Revealing..." while I have not revealed yet.
+  if (hasRevealed(game, role)) return GAME_STAGE.REVEAL_WAIT;
   if (!isRevealPhase(game)) return GAME_STAGE.VOTE_WAIT;
-  // It is my turn only while I can still reveal and have not; any in-flight or
-  // completed reveal means the next move belongs to the other player.
-  return game.canReveal === true && !hasRevealed(game, role) ? GAME_STAGE.REVEAL : GAME_STAGE.REVEAL_WAIT;
+  return GAME_STAGE.REVEAL;
 }
 
 function gameStageTitle(game, role, stage, audience) {

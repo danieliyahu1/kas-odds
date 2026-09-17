@@ -114,6 +114,7 @@ test('the game page names the stage and whose move it is', () => {
   assert.equal(gameStage(revealed, 'creator').title, 'Revealing...');
   assert.equal(gameStage(revealed, 'joiner').title, 'Your turn to reveal');
   assert.equal(gameStage({ matchmaking: true, status: 'reveal_broadcast', pendingReveals: [{ role: 'joiner' }] }, 'joiner').title, 'Revealing...');
+  assert.equal(gameStage({ matchmaking: true, status: 'reveal_broadcast', pendingReveals: [{ role: 'joiner' }] }, 'creator').title, 'Your turn to reveal');
   assert.equal(gameStage({ matchmaking: true, status: 'waiting_for_player_b' }, 'creator').loading, true);
   assert.equal(gameStage({ matchmaking: false, status: 'joined', canReveal: true }, 'creator').loading, false);
 });

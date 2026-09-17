@@ -320,8 +320,9 @@ async function paintGame(gameId, game) {
   void forgetRevealSecret(gameId, !active);
   const myPendingReveal = (game.pendingReveals ?? []).find((item) => item.role === role) ?? null;
   const myPendingSafety = (game.pendingSafety ?? []).find((item) => item.role === role) ?? null;
-  const revealMine = (game.canReveal || Boolean(myPendingReveal)) && (role === 'creator' || role === 'joiner') && !isMyReveal(game, role);
-  const header = paintGameHeader(game, role, gameStage(game, role));
+  const progress = gameStage(game, role);
+  const revealMine = progress?.stage === GAME_STAGE.REVEAL;
+  const header = paintGameHeader(game, role, progress);
 
   app.innerHTML = `
     <a class="back" href="/" data-action="exit">Exit</a>
@@ -430,11 +431,6 @@ async function renderRevealFailure(gameId, error) {
   if (error.code === 'REVEAL_SECRET_MISSING') return showNotice('#reveal-notice', 'Reveal unavailable', 'This browser does not have your unrevealed number for this game. Play the game in the browser you used to start it, and keep this site\'s data.', 'error');
   if (error.code === 'INVALID_REVEAL') return showNotice('#reveal-notice', 'Reveal did not match', 'The saved number no longer matches the locked commitment. You may have started this game in another browser.', 'error');
   return showActionError('#reveal-notice', error);
-}
-
-function isMyReveal(game, role) {
-  if (role !== 'creator' && role !== 'joiner') return false;
-  return game.revealedPicks?.[role] !== undefined;
 }
 
 // Once the game is over the reveal nonce is public on-chain, so drop the local
