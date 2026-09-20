@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: kasodds
   annotations:
-    kasodds/source-revision: sha-2ca95e54b7622d4cac502fa7f518619338b3fc9a
+    kasodds/source-revision: sha-a5fdde0ecec9237e9f6adaecb59a9f1e185e371e
 spec:
   replicas: 1
   # The game store is a single JSON file with process-local write locking, so two
