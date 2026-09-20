@@ -157,7 +157,7 @@ Local verification mirrors the CI gate:
 ```sh
 npm run check
 npm test
-docker build --platform linux/arm64 -t ghcr.io/danieliyahu1/kasodds/kasodds:sha-<git-sha> .
+docker build --platform linux/arm64 -t ghcr.io/danieliyahu1/kas-odds/kasodds:sha-<git-sha> .
 ```
 
 `deploy/deployment.yaml` pins the immutable image for the current release; the

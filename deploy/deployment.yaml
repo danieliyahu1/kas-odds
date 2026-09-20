@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: kasodds
-          image: ghcr.io/danieliyahu1/kasodds/kasodds@sha256:e8bdbefed0806cd8d3d1dab3e581bb61ec74416ef312387e0a6458d747b50320
+          image: ghcr.io/danieliyahu1/kas-odds/kasodds@sha256:e8bdbefed0806cd8d3d1dab3e581bb61ec74416ef312387e0a6458d747b50320
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
