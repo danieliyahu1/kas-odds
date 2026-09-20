@@ -31,7 +31,7 @@ export class MemoryRevealStore {
 }
 
 export class IndexedDbRevealStore {
-  constructor({ indexedDB = globalThis.indexedDB, databaseName = 'kaspa-even-odd', storeName = 'reveal-secrets' } = {}) {
+  constructor({ indexedDB = globalThis.indexedDB, databaseName = 'kasodds', storeName = 'reveal-secrets' } = {}) {
     if (!indexedDB) throw new ProtocolError('STORAGE_UNAVAILABLE', 'IndexedDB is required for reveal secrets');
     this.indexedDB = indexedDB;
     this.databaseName = databaseName;

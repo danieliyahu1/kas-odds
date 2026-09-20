@@ -3,8 +3,8 @@
   "compiler_version": "0.1.0",
   "structs": {},
   "contracts": {
-    "EvenOdd": {
-      "source_path": "sil/EvenOdd.sil",
+    "KasOdds": {
+      "source_path": "sil/KasOdds.sil",
       "runtime_state": {
         "source": "State",
         "fields": [

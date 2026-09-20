@@ -1,4 +1,4 @@
-// KasWare signing request construction for Even/Odd.
+// KasWare signing request construction for KasOdds.
 //
 // KasWare's signPskt signs every input with SighashType.All when signInputs is
 // omitted, which overwrites a covenant input's KCC invocation. Only inputs the

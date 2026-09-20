@@ -215,7 +215,7 @@ fn assert_fallback_claim(artifact: &SilAbiArtifact, state_script: &[u8], player:
 }
 
 fn artifact() -> SilAbiArtifact {
-    let raw = fs::read_to_string("../covenant/even_odd.template.artifact.json").expect("artifact readable");
+    let raw = fs::read_to_string("../covenant/kasodds.template.artifact.json").expect("artifact readable");
     let artifact: SilAbiArtifact = serde_json::from_str(&raw).expect("artifact parses");
     artifact.check_consistency().expect("artifact is consistent");
     artifact
@@ -226,7 +226,7 @@ fn game_state(artifact: &SilAbiArtifact, status: i64, creator: &Player, joiner: 
 }
 
 fn game_state_with_commits(artifact: &SilAbiArtifact, status: i64, creator: &Player, joiner: &Player, creator_choice: i64, joiner_choice: i64, first_revealer_hash: &[u8], creator_commit: &[u8], joiner_commit: &[u8], wallet: &Player) -> Vec<u8> {
-    let contract = artifact.contract("EvenOdd").expect("EvenOdd contract");
+    let contract = artifact.contract("KasOdds").expect("KasOdds contract");
     let mut values = BTreeMap::new();
     values.insert("creator_hash".into(), ArtifactValue::Bytes(creator.hash.clone()));
     values.insert("joiner_hash".into(), ArtifactValue::Bytes(joiner.hash.clone()));
@@ -245,7 +245,7 @@ fn game_state_with_commits(artifact: &SilAbiArtifact, status: i64, creator: &Pla
 }
 
 fn open_game_state(artifact: &SilAbiArtifact, creator: &Player, creator_commit: &[u8], wallet: &Player) -> Vec<u8> {
-    let contract = artifact.contract("EvenOdd").expect("EvenOdd contract");
+    let contract = artifact.contract("KasOdds").expect("KasOdds contract");
     let mut values = BTreeMap::new();
     values.insert("creator_hash".into(), ArtifactValue::Bytes(creator.hash.clone()));
     values.insert("joiner_hash".into(), ArtifactValue::Bytes(vec![0; 32]));

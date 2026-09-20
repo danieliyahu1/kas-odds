@@ -1,18 +1,18 @@
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMServiceScrape
 metadata:
-  name: kaspa-even-odd
-  namespace: kaspa-even-odd
+  name: kasodds
+  namespace: kasodds
   labels:
-    app.kubernetes.io/name: kaspa-even-odd
+    app.kubernetes.io/name: kasodds
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: kaspa-even-odd
+      app.kubernetes.io/name: kasodds
       app.kubernetes.io/component: metrics
   namespaceSelector:
     matchNames:
-      - kaspa-even-odd
+      - kasodds
   endpoints:
     - port: metrics
       path: /metrics

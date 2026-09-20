@@ -1,4 +1,4 @@
-// Browser client for Even/Odd.
+// Browser client for KasOdds.
 //
 // The browser is deliberately thin: it owns the hidden number and nonce
 // (created and stored locally in IndexedDB), verifies the prepared creation
@@ -92,9 +92,9 @@ function applyNetworkLabel(network) {
 
 function renderHome() {
   app.innerHTML = `
-    <section class="panel home-panel" aria-label="Play Even Odd">
+    <section class="panel home-panel" aria-label="Play KasOdds">
       <div class="panel-head">
-        <h1>Even / Odd</h1>
+        <h1>KasOdds</h1>
         <p class="lead">Two players. Two secret numbers. The total decides who takes the pot.</p>
       </div>
       <div class="home-actions">
@@ -290,7 +290,7 @@ function lockedNumberHtml(choice) {
 function lobbyNoticeHtml(note) {
   if (!note) return '';
   if (note.kind === 'kasware') {
-    return `<div class="notice error"><strong>Install KasWare to play</strong>Even/Odd needs the KasWare wallet extension in your browser to play.<div class="actions"><a class="primary" href="${KASWARE_DOWNLOAD}" target="_blank" rel="noopener noreferrer">Install KasWare</a></div></div>`;
+    return `<div class="notice error"><strong>Install KasWare to play</strong>KasOdds needs the KasWare wallet extension in your browser to play.<div class="actions"><a class="primary" href="${KASWARE_DOWNLOAD}" target="_blank" rel="noopener noreferrer">Install KasWare</a></div></div>`;
   }
   const kind = note.kind === 'error' ? 'error' : '';
   return `<div class="notice ${kind}"><strong>${escapeHtml(note.title)}</strong> ${escapeHtml(note.message ?? '')}</div>`;
@@ -991,7 +991,7 @@ function renderKaswareShortfall(selector) {
   node.innerHTML = `
     <div class="notice error">
       <strong>Install KasWare to play</strong>
-      Even/Odd needs the KasWare wallet extension in your browser to play.
+      KasOdds needs the KasWare wallet extension in your browser to play.
       <div class="actions"><a class="primary" href="${KASWARE_DOWNLOAD}" target="_blank" rel="noopener noreferrer">Install KasWare</a></div>
     </div>`;
 }

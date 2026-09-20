@@ -44,29 +44,29 @@ test('the network-qualified fee address wins over the shared one', () => {
 });
 
 test('server configuration derives the per-network store file from GAME_STORE_DIR', () => {
-  assert.equal(readServerConfig({ ...env, GAME_STORE_DIR: '/var/lib/kaspa-even-odd' }).storePath, '/var/lib/kaspa-even-odd/games-testnet-10-v10.json');
-  assert.equal(readServerConfig({ ...env, KASPA_NETWORK: 'mainnet', GAME_STORE_DIR: '/var/lib/kaspa-even-odd/' }).storePath, '/var/lib/kaspa-even-odd/games-mainnet-v10.json');
+  assert.equal(readServerConfig({ ...env, GAME_STORE_DIR: '/var/lib/kasodds' }).storePath, '/var/lib/kasodds/games-testnet-10-v10.json');
+  assert.equal(readServerConfig({ ...env, KASPA_NETWORK: 'mainnet', GAME_STORE_DIR: '/var/lib/kasodds/' }).storePath, '/var/lib/kasodds/games-mainnet-v10.json');
   // An explicit path always wins over the derived one.
-  assert.equal(readServerConfig({ ...env, GAME_STORE_DIR: '/var/lib/kaspa-even-odd', GAME_STORE_PATH: '/tmp/custom.json' }).storePath, '/tmp/custom.json');
+  assert.equal(readServerConfig({ ...env, GAME_STORE_DIR: '/var/lib/kasodds', GAME_STORE_PATH: '/tmp/custom.json' }).storePath, '/tmp/custom.json');
 });
 
 test('changing only KASPA_NETWORK switches prefix, store file, and fee wallet', () => {
   const mainnetKey = '22'.repeat(32);
   const testnetKey = '11'.repeat(32);
   const shared = {
-    GAME_STORE_DIR: '/var/lib/kaspa-even-odd',
+    GAME_STORE_DIR: '/var/lib/kasodds',
     GAME_FEE_ADDRESS_MAINNET: bech32Encode('kaspa', 0, Buffer.from(mainnetKey, 'hex')),
     GAME_FEE_ADDRESS_TESTNET_10: bech32Encode('kaspatest', 0, Buffer.from(testnetKey, 'hex')),
   };
 
   const testnet = readServerConfig({ ...shared, KASPA_NETWORK: 'testnet-10' });
   assert.equal(testnet.network.addressPrefix, 'kaspatest');
-  assert.equal(testnet.storePath, '/var/lib/kaspa-even-odd/games-testnet-10-v10.json');
+  assert.equal(testnet.storePath, '/var/lib/kasodds/games-testnet-10-v10.json');
   assert.equal(testnet.gameFeePublicKey, testnetKey);
 
   const mainnet = readServerConfig({ ...shared, KASPA_NETWORK: 'mainnet' });
   assert.equal(mainnet.network.addressPrefix, 'kaspa');
-  assert.equal(mainnet.storePath, '/var/lib/kaspa-even-odd/games-mainnet-v10.json');
+  assert.equal(mainnet.storePath, '/var/lib/kasodds/games-mainnet-v10.json');
   assert.equal(mainnet.gameFeePublicKey, mainnetKey);
 });
 

@@ -38,7 +38,7 @@ test('validateFeedback returns a trimmed message', () => {
 
 test('formatFeedbackMessage is the title and the message, nothing else', () => {
   const text = formatFeedbackMessage({ message: 'The reveal button felt off.' });
-  assert.equal(text, 'New Even/Odd feedback:\n\nThe reveal button felt off.');
+  assert.equal(text, 'New KasOdds feedback:\n\nThe reveal button felt off.');
   assert.doesNotMatch(text, /Page:/);
   assert.doesNotMatch(text, /Screen:/);
   assert.doesNotMatch(text, /Browser:/);
@@ -178,7 +178,7 @@ test('FeedbackService.submit writes-ahead to spill, delivers successfully, and r
   assert.equal(result.queued, undefined);
   assert.equal(calls.length, 1);
   assert.equal(spill.entries.length, 0);
-  assert.ok(metrics.render().includes('kaspa_feedback_total{outcome="delivered"}'));
+  assert.ok(metrics.render().includes('kasodds_feedback_total{outcome="delivered"}'));
 });
 
 test('FeedbackService.submit spills but still returns accepted when delivery fails', async (t) => {
@@ -216,7 +216,7 @@ test('FeedbackService.submit stores feedback with a warning when Telegram is not
   assert.ok(warnings[0].fields.reason.includes('TELEGRAM_FEEDBACK_BOT_TOKEN'));
   assert.equal(service.spill.entries.length, 1);
   assert.equal(service.spill.entries[0].message, 'offline note');
-  assert.ok(service.metrics.render().includes('kaspa_feedback_total{outcome="disabled"}'));
+  assert.ok(service.metrics.render().includes('kasodds_feedback_total{outcome="disabled"}'));
 });
 
 test('FeedbackService.drainPending retries spilled entries', async (t) => {
@@ -237,7 +237,7 @@ test('FeedbackService.drainPending retries spilled entries', async (t) => {
 
 test('feedback endpoint stores feedback with a warning when Telegram is not configured', async (t) => {
   const [port, metricsPort] = await freePorts(2);
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-feedback-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-feedback-'));
   const spillPath = join(directory, 'spill.json');
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
@@ -289,7 +289,7 @@ test('feedback endpoint stores feedback with a warning when Telegram is not conf
 });
 
 test('feedback endpoint stores undeliverable feedback and retries it against the configured endpoint', async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), 'even-odd-feedback-post-'));
+  const dir = await mkdtemp(join(tmpdir(), 'kasodds-feedback-post-'));
   const spillPath = join(dir, 'spill.json');
   const telegram = await startMockTelegram({ fail: true });
   t.after(() => telegram.close());
@@ -330,7 +330,7 @@ test('feedback endpoint stores undeliverable feedback and retries it against the
   assert.equal(telegram.requests.length, 1);
   assert.equal(telegram.requests[0].method, 'POST');
   assert.equal(telegram.requests[0].body.chat_id, 'dummy-chat-id');
-  assert.equal(telegram.requests[0].body.text, 'New Even/Odd feedback:\n\nLoved the game');
+  assert.equal(telegram.requests[0].body.text, 'New KasOdds feedback:\n\nLoved the game');
   assert.equal(telegram.requests[0].body.disable_web_page_preview, true);
 
   // Delivery failed, so the feedback must be stored and retried later.
@@ -351,7 +351,7 @@ test('feedback endpoint stores undeliverable feedback and retries it against the
 });
 
 test('feedback endpoint delivers immediately and leaves the queue empty when Telegram responds', async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), 'even-odd-feedback-deliver-'));
+  const dir = await mkdtemp(join(tmpdir(), 'kasodds-feedback-deliver-'));
   const spillPath = join(dir, 'spill.json');
   const telegram = await startMockTelegram({ fail: false });
   t.after(() => telegram.close());
@@ -387,14 +387,14 @@ test('feedback endpoint delivers immediately and leaves the queue empty when Tel
   assert.equal(body.accepted, true);
   assert.equal(body.queued, undefined);
   assert.equal(telegram.requests.length, 1);
-  assert.equal(telegram.requests[0].body.text, 'New Even/Odd feedback:\n\nDelivered straight away');
+  assert.equal(telegram.requests[0].body.text, 'New KasOdds feedback:\n\nDelivered straight away');
 
   const raw = await readFile(spillPath, 'utf8');
   assert.deepEqual(JSON.parse(raw), []);
 });
 
 test('feedback endpoint rejects empty messages', async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), 'even-odd-feedback-empty-'));
+  const dir = await mkdtemp(join(tmpdir(), 'kasodds-feedback-empty-'));
   const telegram = await startMockTelegram({ fail: false });
   t.after(() => telegram.close());
   const [port, metricsPort] = await freePorts(2);
@@ -430,7 +430,7 @@ test('feedback endpoint rejects empty messages', async (t) => {
 });
 
 test('feedback endpoint enforces the per-client rate limit', async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), 'even-odd-feedback-rate-'));
+  const dir = await mkdtemp(join(tmpdir(), 'kasodds-feedback-rate-'));
   const telegram = await startMockTelegram({ fail: true });
   t.after(() => telegram.close());
   const [port, metricsPort] = await freePorts(2);

@@ -13,14 +13,14 @@ test('metrics render valid Prometheus text with bounded labels and no identities
   metrics.recordPageVisit();
 
   const text = metrics.render();
-  assert.match(text, /# TYPE kaspa_http_requests_total counter/);
-  assert.match(text, /kaspa_http_requests_total\{method="POST",route="\/api\/matchmaking\/:id\/:action",status="502"\} 1/);
-  assert.match(text, /kaspa_http_errors_total\{/);
-  assert.match(text, /# TYPE kaspa_http_request_duration_seconds histogram/);
-  assert.match(text, /kaspa_http_request_duration_seconds_bucket\{le="\+Inf",.*\} 1/);
-  assert.match(text, /kaspa_rpc_requests_total\{operation="submitSafeJson",outcome="error"\} 1/);
-  assert.match(text, /kaspa_matchmaking_waiting 2/);
-  assert.match(text, /kaspa_page_visits_total 2/);
+  assert.match(text, /# TYPE kasodds_http_requests_total counter/);
+  assert.match(text, /kasodds_http_requests_total\{method="POST",route="\/api\/matchmaking\/:id\/:action",status="502"\} 1/);
+  assert.match(text, /kasodds_http_errors_total\{/);
+  assert.match(text, /# TYPE kasodds_http_request_duration_seconds histogram/);
+  assert.match(text, /kasodds_http_request_duration_seconds_bucket\{le="\+Inf",.*\} 1/);
+  assert.match(text, /kasodds_rpc_requests_total\{operation="submitSafeJson",outcome="error"\} 1/);
+  assert.match(text, /kasodds_matchmaking_waiting 2/);
+  assert.match(text, /kasodds_page_visits_total 2/);
   assert.doesNotMatch(text, /kaspa_games_total/);
   // No wallet addresses, game ids, transaction ids, or raw URLs may leak.
   assert.doesNotMatch(text, /kaspatest:|[0-9a-f]{64}/);

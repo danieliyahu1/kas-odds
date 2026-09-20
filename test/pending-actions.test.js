@@ -122,7 +122,7 @@ function rpc({ confirmedAddress, confirmedTransactionId, confirmedScriptPublicKe
 }
 
 async function withRecord(t, record, rpcOptions) {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-pending-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-pending-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   await store.saveGame(record);
@@ -212,7 +212,7 @@ test('does not confirm a reveal whose continuation is still only in the mempool'
   const record = baseRecord({
     reveals: [pendingReveal({ transactionId: 'aa'.repeat(32), address: 'kaspatest:cont-a', scriptPublicKey: spk, submittedAt: new Date().toISOString() })],
   });
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-mempool-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-mempool-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   await store.saveGame(record);
@@ -253,7 +253,7 @@ test('keeps a finished game readable, then prunes it after the retrieval window'
     payoutAddress: CREATOR_ADDRESS,
   };
   const record = baseRecord({ createdAt, reveals: [settlement] });
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-retain-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-retain-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   await store.saveGame(record);

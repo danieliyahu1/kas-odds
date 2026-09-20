@@ -23,7 +23,7 @@ function serviceOptions(store) {
 }
 
 test('matchmaking pairs wallets at the lower limit and assigns each a role and side', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const service = new BackendGameService(serviceOptions(new BackendGameStore(join(directory, 'games.json'))));
   const first = await service.joinMatchmaking({ address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 10 });
@@ -48,7 +48,7 @@ test('matchmaking pairs wallets at the lower limit and assigns each a role and s
 });
 
 test('only the match creator may start the game, with the assigned side and agreed stake', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const service = new BackendGameService({ rpc: NO_UTXO_RPC, store: new BackendGameStore(join(directory, 'games.json')), gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
   const first = await service.joinMatchmaking({ address: 'kaspatest:first', publicKey: 'a'.repeat(64) });
@@ -68,7 +68,7 @@ test('only the match creator may start the game, with the assigned side and agre
 });
 
 test('stake acceptance requires an active pair and the agreed lower limit', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const service = new BackendGameService(serviceOptions(new BackendGameStore(join(directory, 'games.json'))));
   const first = await service.joinMatchmaking({ address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 4 });
@@ -82,7 +82,7 @@ test('stake acceptance requires an active pair and the agreed lower limit', asyn
 });
 
 test('a friend room pairs the invited wallets at the host stake and assigned sides', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-service-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-room-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const service = new BackendGameService({ rpc: NO_UTXO_RPC, store: new BackendGameStore(join(directory, 'games.json')), gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
 
@@ -113,7 +113,7 @@ test('a friend room pairs the invited wallets at the host stake and assigned sid
 });
 
 test('preparing a game without a configured fee recipient fails cleanly', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const service = new BackendGameService({ rpc: NO_UTXO_RPC, store: new BackendGameStore(join(directory, 'games.json')) });
   await assert.rejects(service.prepareCreation({
@@ -126,7 +126,7 @@ test('preparing a game without a configured fee recipient fails cleanly', async 
 });
 
 test('submitting an unknown creation preparation is rejected', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const service = new BackendGameService(serviceOptions(new BackendGameStore(join(directory, 'games.json'))));
   await assert.rejects(
@@ -136,7 +136,7 @@ test('submitting an unknown creation preparation is rejected', async (t) => {
 });
 
 test('join, reveal, and read require an existing game', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const service = new BackendGameService(serviceOptions(new BackendGameStore(join(directory, 'games.json'))));
   const gameId = 'f'.repeat(64);
@@ -156,7 +156,7 @@ test('join, reveal, and read require an existing game', async (t) => {
 });
 
 test('network status is served without touching the node or exposing a browser wRPC URL', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const rpc = { getBlockDagInfo: async () => { throw new Error('networkStatus must not query the node'); } };
   const service = new BackendGameService({ rpc, store: new BackendGameStore(join(directory, 'games.json')), gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
@@ -168,7 +168,7 @@ test('network status is served without touching the node or exposing a browser w
 });
 
 test('application service uses the injected chain gateway instead of raw RPC', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-gateway-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-gateway-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   let preparedRequest;
   const chain = {
@@ -199,7 +199,7 @@ test('application service uses the injected chain gateway instead of raw RPC', a
 });
 
 test('automatic scheduler targets the open covenant deadline', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   await store.saveGame({
@@ -216,7 +216,7 @@ test('automatic scheduler targets the open covenant deadline', async (t) => {
 });
 
 test('reconciles a broadcast operation after game persistence failed', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-reconcile-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-reconcile-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   const transactionId = 'a'.repeat(64);
@@ -231,7 +231,7 @@ test('reconciles a broadcast operation after game persistence failed', async (t)
 });
 
 test('refreshTelemetry publishes the matchmaking backlog gauge and no game-state gauge', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-service-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   const metrics = new Metrics();
@@ -240,12 +240,12 @@ test('refreshTelemetry publishes the matchmaking backlog gauge and no game-state
   await service.refreshTelemetry();
 
   const text = metrics.render();
-  assert.match(text, /kaspa_matchmaking_waiting 1/);
+  assert.match(text, /kasodds_matchmaking_waiting 1/);
   assert.doesNotMatch(text, /kaspa_games_total/);
 });
 
 test('creator cancel is available immediately for an unmatched open game', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-cancel-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-cancel-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const gameId = 'ff'.repeat(32);
   const creatorAddress = 'kaspatest:creator';
@@ -348,7 +348,7 @@ test('creator cancel is available immediately for an unmatched open game', async
 });
 
 test('automatic settlement retries a rejected refund instead of abandoning it', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-retry-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-retry-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const gameId = 'ab'.repeat(32);
   const deadlineDaa = 10_000n;
@@ -421,7 +421,7 @@ test('automatic settlement retries a rejected refund instead of abandoning it', 
 });
 
 test('retries a transient orphan rejection within the same submission pass', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-orphan-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-orphan-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const gameId = 'ac'.repeat(32);
   const deadlineDaa = 10_000n;
@@ -494,7 +494,7 @@ test('retries a transient orphan rejection within the same submission pass', asy
 });
 
 test('prepares a join against the creator output while the creation is unconfirmed', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-join-prep-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-join-prep-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const gameId = 'a1'.repeat(32);
   const request = prepareCreateGame({
@@ -539,7 +539,7 @@ test('prepares a join against the creator output while the creation is unconfirm
 });
 
 test('a join is gated on its creation reaching the network', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-join-gate-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-join-gate-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const gameId = 'a2'.repeat(32);
   const request = prepareCreateGame({
@@ -577,7 +577,7 @@ test('a join is gated on its creation reaching the network', async (t) => {
 });
 
 test('a prepared join for a re-signed creation is rejected', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-join-stale-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-join-stale-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const gameIdA = 'a3'.repeat(32);
   const gameIdB = 'b3'.repeat(32);
@@ -620,7 +620,7 @@ function serializedRequest(request) {
 }
 
 test('matchmaking pairs, waits, and misses are logged without wallet addresses', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-mm-log-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-mm-log-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const events = [];
   const log = { info: (event, fields) => events.push({ event, fields }), warn: () => {}, error: () => {}, debug: () => {} };
@@ -750,7 +750,7 @@ function revealRpc({ escrow = true, continuation = null, funding = [] } = {}) {
 }
 
 async function revealService(t, { reveals = [], rpcOptions } = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-reveal-order-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-reveal-order-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   await store.saveGame(revealGameRecord(reveals));

@@ -1,4 +1,4 @@
-// Client-side transaction verification for Even/Odd.
+// Client-side transaction verification for KasOdds.
 //
 // The backend may prepare a transaction, but it must never be trusted with
 // intent. Before KasWare is asked to sign, the browser independently recomputes
@@ -6,7 +6,7 @@
 // checks that the prepared transaction locks the exact expected covenant
 // output. A mismatched commitment, side, stake, or covenant binding is refused
 // here, so a compromised server cannot substitute a different game.
-import { deriveGameInstance, parseTemplateArtifact, verifyTemplateHash, bytesToHex, hexToBytes } from '/src/covenant/even-odd-core.mjs';
+import { deriveGameInstance, parseTemplateArtifact, verifyTemplateHash, bytesToHex, hexToBytes } from '/src/covenant/kasodds-core.mjs';
 import { blake2b256 } from '/src/hashes/blake2b.mjs';
 import { createGenesisGameOutput } from '/src/genesis-transaction.js';
 import { AUTOMATION_FEE_SOMPI } from '/src/protocol.js';
@@ -18,7 +18,7 @@ let templatePromise = null;
 
 export async function loadCovenantTemplate() {
   if (!templatePromise) {
-    templatePromise = fetch('/covenant/even_odd.template.artifact.json')
+    templatePromise = fetch('/covenant/kasodds.template.artifact.json')
       .then((response) => {
         if (!response.ok) throw new Error('Covenant artifact could not be loaded');
         return response.json();

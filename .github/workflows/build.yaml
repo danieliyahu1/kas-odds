@@ -1,4 +1,4 @@
-# Builds the kaspa-even-odd image for linux/arm64, smoke-tests the published
+# Builds the kasodds image for linux/arm64, smoke-tests the published
 # artifact, then advances the committed Deployment to the exact published image
 # digest and commits that change back to main. Argo CD (oci-k3s-starter) syncs
 # the cluster to Git, so `git push` to main is the deploy button. CI never talks
@@ -28,7 +28,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ${{ github.repository }}/kaspa-even-odd
+  IMAGE: ${{ github.repository }}/kasodds
 
 jobs:
   validate:
@@ -128,16 +128,16 @@ jobs:
         run: |
           IMAGE_REF="${{ env.REGISTRY }}/${{ env.IMAGE }}:sha-${GITHUB_SHA}"
           if [ "${{ github.event_name }}" = "push" ]; then docker pull "$IMAGE_REF"; fi
-          docker run --detach --rm --name kaspa-even-odd -p 3000:3000 -p 9464:9464 \
+          docker run --detach --rm --name kasodds -p 3000:3000 -p 9464:9464 \
             -e PORT=3000 -e METRICS_PORT=9464 -e KASPA_NETWORK=testnet-10 -e GAME_STORE_PATH=/tmp/games.json \
             "$IMAGE_REF"
-          trap 'docker stop kaspa-even-odd' EXIT
+          trap 'docker stop kasodds' EXIT
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error http://127.0.0.1:3000/readyz; then break; fi
             sleep 1
           done
           curl --fail --silent --show-error http://127.0.0.1:3000/readyz
-          curl --fail --silent --show-error http://127.0.0.1:9464/metrics | grep -q kaspa_http_requests_total
+          curl --fail --silent --show-error http://127.0.0.1:9464/metrics | grep -q kasodds_http_requests_total
 
       - name: Verify arm64 image manifest
         if: github.event_name == 'push'
@@ -155,8 +155,8 @@ jobs:
             echo "origin/${GITHUB_REF_NAME} advanced to ${REMOTE}; a newer source push owns deployment"
             exit 0
           fi
-          sed -i -E "s|^([[:space:]]*image: )ghcr\.io/${GITHUB_REPOSITORY}/kaspa-even-odd[@:].*|\1${IMAGE_REF}|" deploy/deployment.yaml
-          sed -i -E "s|^([[:space:]]*kaspa-even-odd/source-revision: ).*|\1sha-${GITHUB_SHA}|" deploy/deployment.yaml
+          sed -i -E "s|^([[:space:]]*image: )ghcr\.io/${GITHUB_REPOSITORY}/kasodds[@:].*|\1${IMAGE_REF}|" deploy/deployment.yaml
+          sed -i -E "s|^([[:space:]]*kasodds/source-revision: ).*|\1sha-${GITHUB_SHA}|" deploy/deployment.yaml
           if git diff --quiet -- deploy/deployment.yaml; then
             echo "manifest already points at ${IMAGE_REF}"
             exit 0

@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { deriveGameInstance, EVEN_ODD_TEMPLATE } from '../src/covenant/even-odd.mjs';
+import { deriveGameInstance, KASODDS_TEMPLATE } from '../src/covenant/kasodds.mjs';
 import { computeGenesisCovenantId } from '../src/genesis-transaction.js';
 import { blake2b256 } from '../src/hashes/blake2b.mjs';
 import { bytesToHex, hexToBytes } from '../src/hashes/hex.mjs';
@@ -15,7 +15,7 @@ const ORACLE_CANDIDATES = [
   join(__dirname, '..', 'oracle', 'target', 'release', 'covenant-oracle.exe'),
 ];
 const ORACLE = process.env.ORACLE_BIN ?? ORACLE_CANDIDATES.find((candidate) => existsSync(candidate));
-const ARTIFACT = join(__dirname, '..', 'covenant', 'even_odd.template.artifact.json');
+const ARTIFACT = join(__dirname, '..', 'covenant', 'kasodds.template.artifact.json');
 
 const creatorPubkeyHex = '07'.repeat(32);
 const creatorCommitHex = '09'.repeat(32);
@@ -56,7 +56,7 @@ test('real Rust covenant-oracle (pinned v2.0.1) matches the JS covenant derivati
   assert.equal(oracle.instance_len, String(inst.redeemScript.length));
   assert.equal(oracle.p2sh_script_hex, inst.p2shScript.toString('hex'));
   assert.equal(oracle.address, inst.address);
-  assert.equal(oracle.template_hash, EVEN_ODD_TEMPLATE.templateHash);
+  assert.equal(oracle.template_hash, KASODDS_TEMPLATE.templateHash);
   assert.equal(oracle.template_hash, inst.templateHash);
   assert.equal(oracle.state_span_ok, 'true');
 });

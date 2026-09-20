@@ -1,10 +1,10 @@
-// Browser-side debug logging for Even/Odd.
+// Browser-side debug logging for KasOdds.
 //
 // Verbose logs are opt-in: add `?debug=1` to the URL or set
-// `localStorage['kaspa-debug'] = '1'` in the console. Warnings and errors are
+// `localStorage['kasodds-debug'] = '1'` in the console. Warnings and errors are
 // always emitted. Field names that could carry secrets or wallet identifiers
 // are redacted before they reach the console.
-const PREFIX = '[even-odd]';
+const PREFIX = '[kasodds]';
 const REDACTED_FIELD = /(address|nonce|key|signature|private|secret|txjson|preparedhash|commitment)/i;
 const MAX_VALUE_LENGTH = 200;
 
@@ -22,7 +22,7 @@ export function isLogDebug() {
     }
   } catch { /* ignore */ }
   try {
-    if (globalThis.localStorage?.getItem('kaspa-debug') === '1') return true;
+    if (globalThis.localStorage?.getItem('kasodds-debug') === '1') return true;
   } catch { /* ignore */ }
   return false;
 }

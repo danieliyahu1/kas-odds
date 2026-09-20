@@ -20,7 +20,7 @@ export const TERMINAL_ENTRIES = Object.freeze({
 
 export function buildKccEntrySignatureScript({ entry, args, redeemScript, wasm = loadWasmSdk() }) {
   const dispatchTag = getCovenantTemplate().dispatchTags?.[entry];
-  if (!dispatchTag) throw new ProtocolError('INVALID_TRANSACTION', `Unknown Even/Odd entry ${entry}`);
+  if (!dispatchTag) throw new ProtocolError('INVALID_TRANSACTION', `Unknown KasOdds entry ${entry}`);
   if (!Array.isArray(args)) throw new ProtocolError('INVALID_TRANSACTION', 'KCC entry arguments are required');
 
   const builder = new wasm.ScriptBuilder();

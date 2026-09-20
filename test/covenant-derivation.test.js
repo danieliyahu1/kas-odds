@@ -6,12 +6,12 @@ import { blake2b256 } from '../src/hashes/blake2b.mjs';
 import { bech32Encode, bech32Decode } from '../src/hashes/bech32.mjs';
 import { bytesToHex, hexToBytes } from '../src/hashes/hex.mjs';
 import {
-  EVEN_ODD_TEMPLATE,
+  KASODDS_TEMPLATE,
   deriveGameInstance,
   verifyTemplateHash,
   parseCovenantAddress,
-} from '../src/covenant/even-odd.mjs';
-import { parseTemplateArtifact } from '../src/covenant/even-odd-core.mjs';
+} from '../src/covenant/kasodds.mjs';
+import { parseTemplateArtifact } from '../src/covenant/kasodds-core.mjs';
 
 const FEE_PUBLIC_KEY = '11'.repeat(32);
 const gameWalletHash = bytesToHex(blake2b256(hexToBytes(FEE_PUBLIC_KEY))).toLowerCase();
@@ -27,7 +27,7 @@ test('blake2b-256 single block matches published vector', () => {
 
 test('blake2b-256 multi-block matches the covenant-oracle digest', () => {
   // Cross-validated against the Rust covenant-oracle (blake2b_simd hash_length(32))
-  // over the exact even/odd instance with creator_pk=0x07*32,
+  // over the exact KasOdds instance with creator_pk=0x07*32,
   // creator_commit=0x09*32, stake=100000000, deadline_daa=500000000000,
   // wallet_pk=0x11*32 (game_wallet_hash = blake2b(wallet_pk)).
   const creatorPubkey = new Array(32).fill(7);
@@ -70,7 +70,7 @@ test('bech32 decode round-trips and rejects a corrupt checksum', () => {
 
 test('pinned template hash verifies against the compiled artifact', () => {
   const v = verifyTemplateHash();
-  assert.equal(v.computed, EVEN_ODD_TEMPLATE.templateHash);
+  assert.equal(v.computed, KASODDS_TEMPLATE.templateHash);
   assert.equal(v.computed, 'ade3453c61ac5858b344b22ccf373e7e44ab18c14506f49b69e29f763057e27a');
   assert.equal(v.prefixLen, 1);
   assert.equal(v.suffixLen, 1507);
@@ -79,9 +79,9 @@ test('pinned template hash verifies against the compiled artifact', () => {
 
 test('reproducibility manifest matches covenant source and artifact bytes', () => {
   const pins = JSON.parse(readFileSync(new URL('../covenant/pins.json', import.meta.url), 'utf8'));
-  assert.equal(sha256('../covenant/even_odd.sil'), pins.covenant.sourceSha256);
-  assert.equal(sha256('../covenant/even_odd.template.artifact.json'), pins.covenant.artifactSha256);
-  assert.equal(pins.covenant.templateHash, EVEN_ODD_TEMPLATE.templateHash);
+  assert.equal(sha256('../covenant/kasodds.sil'), pins.covenant.sourceSha256);
+  assert.equal(sha256('../covenant/kasodds.template.artifact.json'), pins.covenant.artifactSha256);
+  assert.equal(pins.covenant.templateHash, KASODDS_TEMPLATE.templateHash);
   assert.equal(pins.rustyKaspa.wasmReleaseSha256, '7eaffac9cd920ef2fdf540c6e10f2a2b7761170ebc62ec57dfa0f71c64567a71');
   assert.equal(pins.rustyKaspa.status, 'pinned');
 });
@@ -91,7 +91,7 @@ test('pinned SilverScript release matches the loaded artifact', () => {
   assert.equal(pins.silverscript.release, 'v1.0.0');
   assert.equal(pins.silverscript.sourceCommit, '3ed973335b59269293564805cc2c58a14595ec03');
   assert.equal(pins.silverscript.compilerVersion, '0.1.0');
-  assert.equal(EVEN_ODD_TEMPLATE.compilerVersion, pins.silverscript.compilerVersion);
+  assert.equal(KASODDS_TEMPLATE.compilerVersion, pins.silverscript.compilerVersion);
 });
 
 test('per-game instance matches the covenant-oracle P2SH address', () => {
@@ -105,7 +105,7 @@ test('per-game instance matches the covenant-oracle P2SH address', () => {
     inst.p2shScript.toString('hex'),
     'aa2053d380d09b45ad4b13f92ff975b2c42c45618562417b7b8a0e081b3af401455f87'
   );
-  assert.equal(inst.templateHash, EVEN_ODD_TEMPLATE.templateHash);
+  assert.equal(inst.templateHash, KASODDS_TEMPLATE.templateHash);
   assert.equal(inst.address.startsWith('kaspatest:'), true);
   assert.equal(parseCovenantAddress(inst.address).version, 8);
 });
@@ -139,13 +139,13 @@ test('rejects invalid game state', () => {
 });
 
 test('rejects artifact ABI drift early and explicitly', () => {
-  const artifact = JSON.parse(readFileSync(new URL('../covenant/even_odd.template.artifact.json', import.meta.url), 'utf8'));
+  const artifact = JSON.parse(readFileSync(new URL('../covenant/kasodds.template.artifact.json', import.meta.url), 'utf8'));
   const clone = () => structuredClone(artifact);
   const driftState = clone();
-  driftState.contracts.EvenOdd.runtime_state.fields[0].name = 'renamed_hash';
+  driftState.contracts.KasOdds.runtime_state.fields[0].name = 'renamed_hash';
   assert.throws(() => parseTemplateArtifact(driftState), { code: 'ARTIFACT_MISMATCH' });
   const driftEntry = clone();
-  driftEntry.contracts.EvenOdd.entries.join.params[0].name = 'renamed_pk';
+  driftEntry.contracts.KasOdds.entries.join.params[0].name = 'renamed_pk';
   assert.throws(() => parseTemplateArtifact(driftEntry), { code: 'ARTIFACT_MISMATCH' });
   const driftCompiler = clone();
   driftCompiler.compiler_version = '0.2.0';

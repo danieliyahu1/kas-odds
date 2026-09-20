@@ -1,9 +1,9 @@
 {
-  "name": "kaspa-even-odd",
+  "name": "kasodds",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Non-custodial Even/Odd game protocol for Kaspa testnet-10",
+  "description": "Non-custodial KasOdds game protocol for Kaspa testnet-10",
   "scripts": {
     "start": "node --env-file=.env src/server.js",
     "test": "node --test \"test/*.test.js\"",

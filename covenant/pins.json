@@ -7,10 +7,10 @@
     "windowsX64CompilerSha256": "d63b77c2fa057b316efc2059e2ea44c626c2d413140f0bacdc34f9499943391f"
   },
   "covenant": {
-    "source": "covenant/even_odd.sil",
-    "sourceSha256": "96f006494308ca0e573e313fcbb1126bf7278ae6a9422992489da7521c03a4e3",
-    "artifact": "covenant/even_odd.template.artifact.json",
-    "artifactSha256": "7e54dcd45c4ddcd8c8204abd75836f9a422616b6591ed63dcc4203871de88403",
+    "source": "covenant/kasodds.sil",
+    "sourceSha256": "6d4d09e26271da1218705c9c70f91fcd29285d7e285ec87958cdde9364df9d8a",
+    "artifact": "covenant/kasodds.template.artifact.json",
+    "artifactSha256": "5670558ed48d240b4a6f48c9567f2b4bc3f94f2de890f76e1dd6ffd7cd53ce0b",
     "templateHash": "ade3453c61ac5858b344b22ccf373e7e44ab18c14506f49b69e29f763057e27a",
     "constructorArgs": "covenant/constructor-args.json",
     "constructorArgsSha256": "c14cbb58e965c9fb68c9e1f7ff535dbee72fdd68e204f008c21a4383d09592d2"

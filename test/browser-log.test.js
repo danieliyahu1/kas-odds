@@ -25,11 +25,11 @@ test('verbose browser logs are gated while warnings and errors always emit', () 
     assert.equal(capture.lines.length, 0);
     logWarn('warn_event');
     logError('error_event');
-    assert.match(capture.lines[0], /warn:\[even-odd\] warn_event$/);
-    assert.match(capture.lines[1], /error:\[even-odd\] error_event$/);
+    assert.match(capture.lines[0], /warn:\[kasodds\] warn_event$/);
+    assert.match(capture.lines[1], /error:\[kasodds\] error_event$/);
     setLogDebug(true);
     logDebug('debug_on', { status: 1 });
-    assert.match(capture.lines[2], /debug:\[even-odd\] debug_on status=1$/);
+    assert.match(capture.lines[2], /debug:\[kasodds\] debug_on status=1$/);
   } finally {
     capture.restore();
     setLogDebug(undefined);

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { prepareCreateGame } from '../src/create-game.js';
 import { createGenesisGameOutput, computeGenesisCovenantId } from '../src/genesis-transaction.js';
 import { createWasmGenesisSafeJson, verifyWasmSignedSafeJson } from '../src/wasm-transaction.js';
-import { deriveGameInstance } from '../src/covenant/even-odd.mjs';
+import { deriveGameInstance } from '../src/covenant/kasodds.mjs';
 import { playerLockSompi } from '../src/protocol.js';
 
 const require = createRequire(import.meta.url);

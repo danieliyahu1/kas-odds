@@ -1,11 +1,11 @@
-// Pure (isomorphic) Even/Odd covenant derivation.
+// Pure (isomorphic) KasOdds covenant derivation.
 //
 // This module has no Node-specific dependencies (no `fs`, `path`, `url`,
 // `Buffer`, or `require`) so it runs byte-for-byte identically in the browser
 // and in Node. The pinned template artifact is passed in explicitly via
 // `parseTemplateArtifact`, keeping the artifact-loading concern in the caller.
 //
-// The Node entry point `even-odd.mjs` loads the artifact from disk and re-exports
+// The Node entry point `kasodds.mjs` loads the artifact from disk and re-exports
 // these functions with a `Buffer`-backed `deriveGameInstance` for backward
 // compatibility; the browser imports this core module directly.
 import { blake2b256 } from '../hashes/blake2b.mjs';
@@ -20,8 +20,8 @@ function h2b(hex) {
   return hexToBytes(hex);
 }
 
-// Pinned Even/Odd covenant template, parsed from the canonical compiled
-// artifact. See covenant/even_odd.sil and covenant/even_odd.template.artifact.json.
+// Pinned KasOdds covenant template, parsed from the canonical compiled
+// artifact. See covenant/kasodds.sil and covenant/kasodds.template.artifact.json.
 export function parseTemplateArtifact(json) {
   if (!json || typeof json !== 'object' || json.schema_version !== 1) {
     throw new ProtocolError('INVALID_ARTIFACT', `unsupported artifact schema_version ${json?.schema_version}`);
@@ -29,8 +29,8 @@ export function parseTemplateArtifact(json) {
   if (json.compiler_version !== '0.1.0') {
     throw new ProtocolError('ARTIFACT_MISMATCH', `silverc compiler pinned to 0.1.0, artifact built with ${json.compiler_version}`);
   }
-  const contract = json.contracts.EvenOdd;
-  if (!contract) throw new ProtocolError('INVALID_ARTIFACT', 'artifact has no EvenOdd contract');
+  const contract = json.contracts.KasOdds;
+  if (!contract) throw new ProtocolError('INVALID_ARTIFACT', 'artifact has no KasOdds contract');
   const expectedState = [
     ['creator_hash', 'fixed_bytes', 32], ['joiner_hash', 'fixed_bytes', 32],
     ['creator_commit', 'fixed_bytes', 32], ['joiner_commit', 'fixed_bytes', 32],
@@ -44,7 +44,7 @@ export function parseTemplateArtifact(json) {
     const [name, kind, len] = expectedState[index];
     return field.name !== name || field.type?.kind !== kind || (len !== undefined && field.type.len !== len);
   })) {
-    throw new ProtocolError('ARTIFACT_MISMATCH', 'EvenOdd runtime state ABI does not match the pinned contract');
+    throw new ProtocolError('ARTIFACT_MISMATCH', 'KasOdds runtime state ABI does not match the pinned contract');
   }
   const expectedEntries = {
     refund: [['creator_pk', 'pubkey']],
@@ -61,7 +61,7 @@ export function parseTemplateArtifact(json) {
       const [paramName, kind, len] = expectedParams[index];
       return param.name !== paramName || param.type?.kind !== kind || (len !== undefined && param.type.len !== len);
     })) {
-      throw new ProtocolError('ARTIFACT_MISMATCH', `EvenOdd entry ABI does not match the pinned ${name} contract`);
+      throw new ProtocolError('ARTIFACT_MISMATCH', `KasOdds entry ABI does not match the pinned ${name} contract`);
     }
   }
   const compiled = contract.compiled;

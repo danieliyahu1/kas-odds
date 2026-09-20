@@ -7,7 +7,7 @@ import { BackendGameStore } from '../src/backend-game-store.js';
 import { GAME_RESULT_RETENTION_MS } from '../src/terminal-actions.js';
 
 test('matchmaking pairs two wallets and keeps the queue private to the store', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-match-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-match-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(filePath);
@@ -34,7 +34,7 @@ test('matchmaking pairs two wallets and keeps the queue private to the store', a
 });
 
 test('pairs any two waiters and stakes the lower limit', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-limit-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-limit-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(filePath);
@@ -53,7 +53,7 @@ test('pairs any two waiters and stakes the lower limit', async (t) => {
 });
 
 test('a private room holds a fixed stake and only the invited wallet may take the second seat', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-room-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(filePath);
@@ -80,7 +80,7 @@ test('a private room holds a fixed stake and only the invited wallet may take th
 });
 
 test('a public waiter never fills a private room seat', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-queue-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-room-queue-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(filePath);
@@ -93,7 +93,7 @@ test('a public waiter never fills a private room seat', async (t) => {
 });
 
 test('an idle private room expires like a public session', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-room-idle-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-room-idle-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(filePath);
@@ -105,7 +105,7 @@ test('an idle private room expires like a public session', async (t) => {
 });
 
 test('persists games and transaction preparations', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-store-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-store-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(filePath);
@@ -123,7 +123,7 @@ test('persists games and transaction preparations', async (t) => {
 });
 
 test('reloads stored data from disk after a new instance', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-store-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-store-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
 
@@ -135,7 +135,7 @@ test('reloads stored data from disk after a new instance', async (t) => {
 });
 
 test('completing a game keeps its terminal record and drops the live aggregates', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-complete-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-complete-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(filePath);
@@ -160,7 +160,7 @@ test('completing a game keeps its terminal record and drops the live aggregates'
 });
 
 test('pruning removes finished games after the retrieval window but keeps live ones', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-complete-prune-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-complete-prune-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(filePath);
@@ -181,7 +181,7 @@ test('pruning removes finished games after the retrieval window but keeps live o
 });
 
 test('startup pruning removes expired durable preparations', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-prune-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-prune-'));
   const filePath = join(directory, 'games.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(filePath);
@@ -195,7 +195,7 @@ test('startup pruning removes expired durable preparations', async (t) => {
 });
 
 test('rejects malformed store JSON without replacing it', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-corrupt-store-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-corrupt-store-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const filePath = join(directory, 'games.json');
   await writeFile(filePath, '{not json', 'utf8');
@@ -204,7 +204,7 @@ test('rejects malformed store JSON without replacing it', async (t) => {
 });
 
 test('rejects malformed store schemas', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-schema-store-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-schema-store-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const filePath = join(directory, 'games.json');
   await writeFile(filePath, JSON.stringify({ games: [] }), 'utf8');
@@ -212,7 +212,7 @@ test('rejects malformed store schemas', async (t) => {
 });
 
 test('preserves store path failures and their causes', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-write-store-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-write-store-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(directory);
   await assert.rejects(() => store.saveGame({ gameId: 'g'.repeat(64) }), (error) => {
@@ -223,7 +223,7 @@ test('preserves store path failures and their causes', async (t) => {
 });
 
 test('serializes concurrent store mutations and isolates returned clones', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-concurrent-store-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-concurrent-store-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   await Promise.all(Array.from({ length: 20 }, (_, index) => store.saveGame({ gameId: `${index}`.padStart(64, '0'), status: 'waiting' })));
@@ -234,7 +234,7 @@ test('serializes concurrent store mutations and isolates returned clones', async
 });
 
 test('persists and reloads non-secret submission operations', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-operations-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-operations-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   const operation = { operationId: 'operation-1', action: 'join', gameId: 'g'.repeat(64), preparedHash: 'p'.repeat(64), status: 'broadcast', transactionId: 't'.repeat(64), metadata: { joinerAddress: 'kaspatest:joiner' } };
@@ -244,7 +244,7 @@ test('persists and reloads non-secret submission operations', async (t) => {
 });
 
 test('cancelling a live session logs an address-free reason', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-match-log-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-match-log-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const events = [];
   const store = new BackendGameStore(join(directory, 'games.json'), { logger: { info: (event, fields) => events.push({ event, fields }) } });

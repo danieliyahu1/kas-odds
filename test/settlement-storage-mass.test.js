@@ -110,7 +110,7 @@ function rpcFor(ordinaryUtxos) {
 }
 
 async function withService(t, ordinaryUtxos) {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-storage-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-storage-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new BackendGameStore(join(directory, 'games.json'));
   await store.saveGame(gameRecord());

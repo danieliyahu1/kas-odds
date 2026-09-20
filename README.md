@@ -1,8 +1,8 @@
-# Kaspa Even/Odd
+# KasOdds
 
-Live: <https://kaspa-even-odd.danieliyahu.com/>
+Live: <https://kasodds.danieliyahu.com/>
 
-Initial protocol implementation for the non-custodial Even/Odd MVP on Kaspa.
+Initial protocol implementation for the non-custodial KasOdds MVP on Kaspa.
 The same image serves either Kaspa `mainnet` or `testnet-10`; the network is
 selected at runtime with the single `KASPA_NETWORK` environment variable, and
 the store file, wRPC node, and fee wallet all follow from it.
@@ -38,7 +38,7 @@ preimage, wallet key, or transaction template.
 - `src/covenant-artifact.js` validates a pinned SilverScript artifact before
   it can be used. SilverScript compilation is intentionally a build-time
   concern; the browser consumes the resulting artifact.
-- `src/covenant/even-odd.mjs` derives the per-game covenant instance: it loads
+- `src/covenant/kasodds.mjs` derives the per-game covenant instance: it loads
   the pinned artifact, substitutes the game state into the template state span,
   verifies the template hash, and produces the P2SH-256 script and the
   network-prefixed address (`kaspa:` on mainnet, `kaspatest:` on testnet-10).
@@ -79,16 +79,16 @@ preimage, wallet key, or transaction template.
   `silverscript` submodule (`silverscript-abi` by path) without modifying
   upstream code.
 
-## Pinned Even/Odd covenant (network-agnostic)
+## Pinned KasOdds covenant (network-agnostic)
 
 The canonical covenant artifact is compiled by the `silverc` binary
 from SilverScript `v1.0.0` (whose emitted artifact/compiler identifier remains
-`0.1.0`) from `covenant/even_odd.sil` into
-`covenant/even_odd.template.artifact.json`. The artifact is identical on both
+`0.1.0`) from `covenant/kasodds.sil` into
+`covenant/kasodds.template.artifact.json`. The artifact is identical on both
 networks: only the bech32 address prefix differs (Toccata covenants are live on
 mainnet and testnet-10, and the pinned WASM SDK is the mainnet Toccata release).
 
-- **contract**: `EvenOdd`, template hash `ade3453c…7e27a`
+- **contract**: `KasOdds`, template hash `ade3453c…7e27a`
 - **state span**: `offset 1, len 261` (13 fields: `creator_hash`,
   `joiner_hash`, `creator_commit`, `joiner_commit`, `stake`, `deadline_daa`,
   `creator_even`, `creator_choice`, `joiner_choice`, `first_revealer_hash`,
@@ -140,7 +140,7 @@ recovery boundaries.
 smoke-tests the published artifact against `/readyz` and `/metrics`, pushes the
 immutable `sha-<commit>` tag to GHCR, and commits the exact published digest
 into `deploy/deployment.yaml` (`deploy: sha-<commit>`), preserving the source
-commit in the `kaspa-even-odd/source-revision` annotation. The generated commit
+commit in the `kasodds/source-revision` annotation. The generated commit
 touches only `deploy/deployment.yaml`, which is excluded from the workflow
 trigger, so the delivery flow terminates without recursing. Argo CD syncs the
 cluster to Git — `prune` + `selfHeal` keep Git authoritative — so the pod rolls
@@ -157,7 +157,7 @@ Local verification mirrors the CI gate:
 ```sh
 npm run check
 npm test
-docker build --platform linux/arm64 -t ghcr.io/danieliyahu1/kaspa-even-odd/kaspa-even-odd:sha-<git-sha> .
+docker build --platform linux/arm64 -t ghcr.io/danieliyahu1/kasodds/kasodds:sha-<git-sha> .
 ```
 
 `deploy/deployment.yaml` pins the immutable image for the current release; the
@@ -166,7 +166,7 @@ removes the corresponding object from the cluster (Argo prunes it).
 
 Runtime details:
 
-- Namespace: `kaspa-even-odd`
+- Namespace: `kasodds`
 - Public port: `3000`; internal metrics port: `9464`
 - Readiness endpoint: `/readyz` (returns 503 unless the state volume is both
   readable and writable and the store parses as valid JSON)
@@ -174,9 +174,9 @@ Runtime details:
 - Required runtime secrets: none beyond the fee wallet identity. The app holds
   no private key — the fee wallet is a public address — so it is never a literal
   in this repository. In the cluster the Deployment reads it from the
-  `kaspa-even-odd-game-fee-address` Secret (keys `mainnet` and `testnet-10`,
-  filled from the OCI Vault entries `kaspa-even-odd-game-fee-address-mainnet`
-  and `kaspa-even-odd-game-fee-address-testnet-10`) via `valueFrom.secretKeyRef`;
+  `kasodds-game-fee-address` Secret (keys `mainnet` and `testnet-10`,
+  filled from the OCI Vault entries `kasodds-game-fee-address-mainnet`
+  and `kasodds-game-fee-address-testnet-10`) via `valueFrom.secretKeyRef`;
   locally the same values are set with `--env-file=.env` (the `.env` file is
   gitignored). Wallet private keys never leave the browser.
 - Required network: `KASPA_NETWORK` is the single switch and must be `mainnet`
@@ -193,10 +193,10 @@ Runtime details:
   supplied as `GAME_FEE_ADDRESS_MAINNET` and `GAME_FEE_ADDRESS_TESTNET_10` (a
   shared `GAME_FEE_ADDRESS` is still the fallback when the qualified name is
   absent), so `KASPA_NETWORK` alone decides which wallet is used. Both live in
-  the `kaspa-even-odd-game-fee-address` Secret — keys `mainnet` and
+  the `kasodds-game-fee-address` Secret — keys `mainnet` and
   `testnet-10` — which the ExternalSecret fills from the OCI Vault entries
-  `kaspa-even-odd-game-fee-address-mainnet` and
-  `kaspa-even-odd-game-fee-address-testnet-10` by name, so no value is ever in
+  `kasodds-game-fee-address-mainnet` and
+  `kasodds-game-fee-address-testnet-10` by name, so no value is ever in
   Git. The wallet receives 1% of the total
   locked pot
   when the pot is at least 100 KAS and the game settles with a winner (second
@@ -214,8 +214,8 @@ directly, so the server decodes the address at startup and bakes that key
   `valueFrom.secretKeyRef`, so the pod is not created when the Secret is
   missing, and each address prefix must match `KASPA_NETWORK` (a mismatched
   prefix is rejected at startup).
-- Required persistent storage: the `kaspa-even-odd-state` PVC mounted at
-  `/var/lib/kaspa-even-odd` stores non-secret backend game metadata. The store
+- Required persistent storage: the `kasodds-state` PVC mounted at
+  `/var/lib/kasodds` stores non-secret backend game metadata. The store
   file is derived from the network — `GAME_STORE_DIR` plus
   `games-<network>-v10.json` — so a network switch never points two networks at
   one file; `GAME_STORE_PATH` remains an explicit override, and locally it
@@ -233,8 +233,8 @@ directly, so the server decodes the address at startup and bakes that key
   ids. For a debug session only, `LOG_WALLET_ADDRESSES=1` reveals full wallet
   addresses on every server operation while still redacting keys, nonces,
   signatures, commitments, and bodies; leave it unset in production. In the
-  browser, add `?debug=1` (or set `localStorage['kaspa-debug'] = '1'`)
-  for verbose `[even-odd]` console tracing of the wallet flow; warnings and
+  browser, add `?debug=1` (or set `localStorage['kasodds-debug'] = '1'`)
+  for verbose `[kasodds]` console tracing of the wallet flow; warnings and
   errors are always printed.
 - Feedback: the top-bar **Feedback** button posts anonymous feedback to
   `POST /api/feedback`. The server validates it (1–1,500 characters), writes it
@@ -242,17 +242,17 @@ directly, so the server decodes the address at startup and bakes that key
   Telegram chat via `sendMessage` (`parse_mode` off, web preview disabled). The
   bot token (`TELEGRAM_FEEDBACK_BOT_TOKEN`) and chat id
   (`TELEGRAM_FEEDBACK_CHAT_ID`) are runtime-only configuration read from the
-  `kaspa-even-odd-telegram` Secret (keys `bot-token` and `chat-id`, filled from
-  the OCI Vault entries `kaspa-even-odd-telegram-bot-token` and
-  `kaspa-even-odd-telegram-chat-id`). Feedback is just the message the user wrote
+  `kasodds-telegram` Secret (keys `bot-token` and `chat-id`, filled from
+  the OCI Vault entries `kasodds-telegram-bot-token` and
+  `kasodds-telegram-chat-id`). Feedback is just the message the user wrote
   — no wallet address, game id, transaction, page, or query string is attached,
   and the text is never logged. When Telegram is not configured the feedback is
   still stored in the queue — never discarded — records a
-  `kaspa_feedback_total{outcome="disabled"}` metric, and logs a
+  `kasodds_feedback_total{outcome="disabled"}` metric, and logs a
   `feedback_delivery_disabled` warning so a missing bot is noticed without
   breaking the app; it is delivered automatically the next time the app starts
   with the bot configured. Deliveries that fail are queued at
-  `FEEDBACK_SPILL_PATH` (default `/var/lib/kaspa-even-odd/feedback-spill.json`)
+  `FEEDBACK_SPILL_PATH` (default `/var/lib/kasodds/feedback-spill.json`)
   and retried on startup and every two minutes until they land, so outages never
   lose a message. A per-client limit of five submissions per ten minutes keeps
   the channel spam-free.
@@ -265,7 +265,7 @@ Observability:
   this port.
 - `deploy/metrics-service.yaml` and `deploy/vmservicescrape.yaml` register the
   scrape target with the VictoriaMetrics operator.
-- `deploy/grafana-dashboard.yaml` provisions the "Kaspa Even/Odd" dashboard
+- `deploy/grafana-dashboard.yaml` provisions the "KasOdds" dashboard
   into the `observability` namespace via the `grafana_dashboard: "1"` label.
 
 ## Trust model
@@ -284,7 +284,7 @@ number and nonce are generated in the browser and never leave it until reveal:
   server-prepared transaction with KasWare and returning it for broadcast.
 - `src/wasm-loader.mjs` loads the pinned Rusty Kaspa v2.0.1 SDK in Node and
   verifies the WASM binary against the pinned SHA-256 before use.
-- `src/covenant/even-odd-core.mjs` is the isomorphic, `Buffer`-free covenant
+- `src/covenant/kasodds-core.mjs` is the isomorphic, `Buffer`-free covenant
   derivation; `src/covenant/template.mjs` supplies the pinned artifact.
 - The server sends a strict `Content-Security-Policy` (same-origin scripts,
   `wasm-unsafe-eval`, `connect-src 'self'`, no objects/frames) as

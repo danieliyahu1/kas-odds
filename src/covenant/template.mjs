@@ -3,8 +3,8 @@
 // Node auto-loads the pinned artifact from disk (top-level await). The browser
 // loads the artifact over HTTP and calls `setCovenantTemplate` once at startup.
 // Shared builders read it through `getCovenantTemplate()` so they never import
-// the Node-only `even-odd.mjs` loader.
-import { parseTemplateArtifact } from './even-odd-core.mjs';
+// the Node-only `kasodds.mjs` loader.
+import { parseTemplateArtifact } from './kasodds-core.mjs';
 import { ProtocolError } from '../protocol.js';
 
 let template = null;
@@ -13,7 +13,7 @@ const isBrowser = typeof window !== 'undefined' && typeof document !== 'undefine
 if (!isBrowser) {
   const { readFileSync } = await import('node:fs');
   const { fileURLToPath } = await import('node:url');
-  const artifactPath = fileURLToPath(new URL('../../covenant/even_odd.template.artifact.json', import.meta.url));
+  const artifactPath = fileURLToPath(new URL('../../covenant/kasodds.template.artifact.json', import.meta.url));
   template = parseTemplateArtifact(JSON.parse(readFileSync(artifactPath, 'utf8')));
 }
 

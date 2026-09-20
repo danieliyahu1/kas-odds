@@ -13,7 +13,7 @@ const feeAddress = bech32Encode('kaspatest', 0, Buffer.from(feePublicKey, 'hex')
 
 test('server serves the browser application and health probe', async (t) => {
   const [port, metricsPort] = await freePorts(2);
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-server-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-server-'));
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
       ...process.env,
@@ -46,9 +46,9 @@ test('server serves the browser application and health probe', async (t) => {
     fetch(`http://127.0.0.1:${port}/main.js`),
     fetch(`http://127.0.0.1:${port}/secrets.js`),
     fetch(`http://127.0.0.1:${port}/verify.js`),
-    fetch(`http://127.0.0.1:${port}/src/covenant/even-odd-core.mjs`),
+    fetch(`http://127.0.0.1:${port}/src/covenant/kasodds-core.mjs`),
     fetch(`http://127.0.0.1:${port}/src/genesis-transaction.js`),
-    fetch(`http://127.0.0.1:${port}/covenant/even_odd.template.artifact.json`),
+    fetch(`http://127.0.0.1:${port}/covenant/kasodds.template.artifact.json`),
     fetch(`http://127.0.0.1:${port}/covenant/pins.json`),
     fetch(`http://127.0.0.1:${port}/vendor/kaspa-wasm32-sdk/v2.0.1/web/kaspa/kaspa.js`),
     fetch(`http://127.0.0.1:${port}/icon.svg`),
@@ -58,12 +58,12 @@ test('server serves the browser application and health probe', async (t) => {
   assert.equal(host.status, 200);
   assert.equal(rival.status, 200);
   const pageHtml = await page.text();
-  assert.match(pageHtml, /Even\/Odd/);
+  assert.match(pageHtml, /KasOdds/);
   assert.match(pageHtml, /Connect Wallet/);
   assert.match(pageHtml, /id="wallet-button"/);
   assert.match(pageHtml, /<script type="module" src="\/main\.js"><\/script>/);
   assert.doesNotMatch(pageHtml, /<script type="module">import/);
-  assert.deepEqual(await health.json().then(({ ok, service, network }) => ({ ok, service, network })), { ok: true, service: 'kaspa-even-odd', network: 'testnet-10' });
+  assert.deepEqual(await health.json().then(({ ok, service, network }) => ({ ok, service, network })), { ok: true, service: 'kasodds', network: 'testnet-10' });
   assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/api/config`)).json(), {
     network: 'testnet-10',
     addressPrefix: 'kaspatest',
@@ -96,7 +96,7 @@ test('server serves the browser application and health probe', async (t) => {
   assert.equal(wasmJs.status, 200);
   assert.equal(icon.status, 200);
   assert.match(icon.headers.get('content-type') ?? '', /image\/svg\+xml/);
-  assert.equal((await artifact.json()).contracts.EvenOdd.compiled.state_span.len, 261);
+  assert.equal((await artifact.json()).contracts.KasOdds.compiled.state_span.len, 261);
   assert.match(await pins.json().then((p) => p.rustyKaspa.webVendoredWasmFileSha256), /^[0-9a-f]{64}$/);
 
   const runtimeConfigScript = await fetch(`http://127.0.0.1:${port}/runtime-config.js`);
@@ -142,7 +142,7 @@ test('server serves the browser application and health probe', async (t) => {
   assert.match(browserSource, /Find a player/);
   assert.match(browserSource, /Play with a friend/);
   assert.match(browserSource, /location\.pathname === '\/host'/);
-  assert.match(browserSource, /Even \/ Odd|Even\/Odd/);
+  assert.match(browserSource, /KasOdds/);
   assert.doesNotMatch(browserSource, /DEFAULT_WRPC_URL|WrpcClient|readRecoveryReadiness|game-client|client-actions/);
   assert.doesNotMatch(browserSource, /data-reveal-number|FIXED_NONCE|fill\(1\)|transientCommitment/);
   assert.doesNotMatch(browserSource, /Guess even|Joining unavailable|data-action="create"/);
@@ -199,7 +199,7 @@ test('server serves the browser application and health probe', async (t) => {
     '/kasware-signing.js',
     '/kasware-connect.js',
     '/log.js',
-    '/src/covenant/even-odd-core.mjs',
+    '/src/covenant/kasodds-core.mjs',
     '/src/covenant/template.mjs',
     '/src/genesis-transaction.js',
     '/src/protocol.js',
@@ -267,9 +267,9 @@ test('server serves the browser application and health probe', async (t) => {
   assert.equal(metricsResponse.status, 200);
   assert.match(metricsResponse.headers.get('content-type') ?? '', /text\/plain/);
   const metricsText = await metricsResponse.text();
-  assert.match(metricsText, /kaspa_http_requests_total\{/);
-  assert.match(metricsText, /kaspa_storage_operations_total\{operation="health"/);
-  assert.match(metricsText, /kaspa_process_resident_memory_bytes/);
+  assert.match(metricsText, /kasodds_http_requests_total\{/);
+  assert.match(metricsText, /kasodds_storage_operations_total\{operation="health"/);
+  assert.match(metricsText, /kasodds_process_resident_memory_bytes/);
   assert.doesNotMatch(metricsText, /kaspatest:|[0-9a-f]{64}/);
 
   // Oversized relay payloads are rejected and the connection is not drained.
@@ -303,7 +303,7 @@ test('server serves the browser application and health probe', async (t) => {
 });
 
 test('matchmaking joins and pairs when the lower limit sets the stake', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-http-match-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-http-match-'));
   const [port, metricsPort] = await freePorts(2);
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
@@ -353,7 +353,7 @@ test('matchmaking joins and pairs when the lower limit sets the stake', async (t
 });
 
 test('a friend room pairs the invited wallet at the host stake', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-http-room-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-http-room-'));
   const [port, metricsPort] = await freePorts(2);
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
@@ -398,7 +398,7 @@ test('a friend room pairs the invited wallet at the host stake', async (t) => {
 });
 
 test('starts without a fee recipient configured and reports the game fee as not configured', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'even-odd-server-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-server-'));
   const [port, metricsPort] = await freePorts(2);
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {

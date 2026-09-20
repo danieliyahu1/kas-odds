@@ -6,7 +6,7 @@ rust-version = "1.94.0"
 publish = false
 
 # Standalone covenant-oracle: a tiny cross-check binary that reproduces the
-# JS EvenOdd covenant derivation using the Rusty-Kaspa crates. It lives OUTSIDE
+# JS KasOdds covenant derivation using the Rusty-Kaspa crates. It lives OUTSIDE
 # the pinned silverscript tree so we never modify upstream code —
 # silverscript-abi is consumed by path from the vendored submodule, untouched.
 [workspace]

@@ -10,7 +10,7 @@ import {
 } from './protocol.js';
 import { resolveNetworkProfile } from './network.js';
 import { serializeInvite } from './invite.js';
-import { deriveGameInstance, EVEN_ODD_TEMPLATE } from './covenant/even-odd.mjs';
+import { deriveGameInstance, KASODDS_TEMPLATE } from './covenant/kasodds.mjs';
 import { blake2b256 } from './hashes/blake2b.mjs';
 import { bytesToHex, hexToBytes } from './hashes/hex.mjs';
 import { validateCreationTransaction, verifySignedCreationSafeJson } from './genesis-transaction.js';
@@ -61,7 +61,7 @@ export function prepareCreateGame({
     creatorPublicKey: publicKey,
     creatorCommitment: commitment,
     deadlineDaa: deadline,
-    covenantTemplateHash: EVEN_ODD_TEMPLATE.templateHash,
+    covenantTemplateHash: KASODDS_TEMPLATE.templateHash,
     covenantAddress: covenant.address,
     covenantScriptPublicKey: covenant.p2shScript.toString('hex'),
     covenantRedeemScript: covenant.redeemScript.toString('hex'),

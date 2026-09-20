@@ -1,7 +1,7 @@
-// Browser-local reveal-secret storage for Even/Odd.
+// Browser-local reveal-secret storage for KasOdds.
 //
 // Each game's hidden number is committed on-chain as blake2b256(choice_le64 ||
-// nonce). The covenant (even_odd.sil `reveal`) re-derives that exact preimage,
+// nonce). The covenant (kasodds.sil `reveal`) re-derives that exact preimage,
 // so the commitment format is fixed and must never be "domain separated" here.
 // Secrecy comes entirely from the 32-byte nonce being unpredictable per game.
 //
@@ -10,7 +10,7 @@
 // reveal makes the locked stake unrecoverable through the normal interface.
 import { blake2b256 } from '/src/hashes/blake2b.mjs';
 
-const DB_NAME = 'kaspa-even-odd';
+const DB_NAME = 'kasodds';
 const STORE_NAME = 'reveal-secrets';
 const SECRET_PREFIX = 's:';
 const LINK_PREFIX = 'g:';

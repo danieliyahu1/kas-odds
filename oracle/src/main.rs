@@ -87,10 +87,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let contract = match abi.contract("EvenOdd") {
+    let contract = match abi.contract("KasOdds") {
         Some(c) => c,
         None => {
-            eprintln!("error: no EvenOdd contract");
+            eprintln!("error: no KasOdds contract");
             return ExitCode::FAILURE;
         }
     };

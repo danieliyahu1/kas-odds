@@ -1,6 +1,6 @@
 import { normalizePublicKey, prepareCreateGame } from './create-game.js';
 import { verifySignedCreationSafeJson } from './genesis-transaction.js';
-import { deriveGameInstance } from './covenant/even-odd.mjs';
+import { deriveGameInstance } from './covenant/kasodds.mjs';
 import { verifySignedJoinTransaction } from './join-transactions.js';
 import { DEFAULT_RELAY_FLOOR_RATE } from './fee-policy.js';
 import { prepareRevealTransaction, prepareTerminalTransaction, prepareCovenantOnlyTransaction, prepareOpenRefundTransaction, serializeTerminalTransaction, verifySignedTerminalTransaction } from './terminal-transactions.js';
@@ -41,7 +41,7 @@ const RETRYABLE_SUBMISSION_PATTERN = /orphan|mempool|double.?spend|reorg|not (?:
 // out once the creation reached the node, and must be dropped if it never did.
 const CREATION_STATE = Object.freeze({ BROADCAST: 'broadcast', SUBMITTING: 'submitting', FAILED: 'failed' });
 
-// Application use cases for the Even/Odd game.
+// Application use cases for the KasOdds game.
 //
 // The browser is a thin client: it owns the hidden number and nonce (never sent
 // here until reveal) and KasWare signatures, while this service owns chain

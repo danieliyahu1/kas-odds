@@ -1,6 +1,6 @@
 pragma silverscript ^0.1.0;
 
-// Even/Odd game covenant for the non-custodial Kaspa testnet-10 MVP.
+// KasOdds game covenant for the non-custodial Kaspa testnet-10 MVP.
 //
 // Phase model (runtime `status`):
 //   0 = waiting for a joiner (creator funds their escrow alone)
@@ -36,7 +36,7 @@ pragma silverscript ^0.1.0;
 // Commitments are public-nonce commitments: each player commits to blake2b(
 // choice || nonce ); `nonce` is revealed together with `choice` at reveal so
 // anyone can verify the commitment before the stakes are paid.
-contract EvenOdd(
+contract KasOdds(
     byte[32] init_creator_hash,
     byte[32] init_creator_commit,
     int init_stake,
@@ -62,7 +62,7 @@ contract EvenOdd(
     // Creator reclaims their full escrow any time while no joiner has matched
     // (status == 0). The creator signs the refund spend, proving authorship
     // even before the open-game deadline; no joiner can claim the pot this way.
-    // No game value is ever used for fees (KEO-1 safeguard).
+    // No game value is ever used for fees (KO-1 safeguard).
     entry refund(pubkey creator_pk) {
         require(stake >= 100000000);
         require(creator_even == 0 || creator_even == 1);

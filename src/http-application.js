@@ -50,10 +50,10 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
         return sendJson(res, 429, { error: 'RATE_LIMITED', message: 'Too many requests; slow down and retry shortly' });
       }
     }
-    if (pathname === '/healthz') return sendJson(res, 200, { ok: true, service: 'kaspa-even-odd', network: network.id, startedAt });
+    if (pathname === '/healthz') return sendJson(res, 200, { ok: true, service: 'kasodds', network: network.id, startedAt });
     if (pathname === '/readyz') {
-      try { await store.health(); return sendJson(res, 200, { ok: true, service: 'kaspa-even-odd', network: network.id, startedAt }); }
-      catch { return sendJson(res, 503, { ok: false, service: 'kaspa-even-odd', error: 'STORAGE_UNAVAILABLE' }); }
+      try { await store.health(); return sendJson(res, 200, { ok: true, service: 'kasodds', network: network.id, startedAt }); }
+      catch { return sendJson(res, 503, { ok: false, service: 'kasodds', error: 'STORAGE_UNAVAILABLE' }); }
     }
     if (req.method === 'GET' && pathname === '/api/config') return sendJson(res, 200, await gameService.networkStatus());
     if (req.method === 'POST' && pathname === '/api/feedback') {
@@ -97,7 +97,7 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
     if (req.method === 'GET' && sourceModule) return serveFile(paths.sourceRoot, sourceModule[1], res);
     const vendorFile = pathname.match(/^\/vendor\/(.+\.(?:js|mjs|wasm|json))$/i);
     if (req.method === 'GET' && vendorFile) return serveFile(paths.vendorRoot, vendorFile[1], res);
-    if (req.method === 'GET' && pathname === '/covenant/even_odd.template.artifact.json') return serveFile(paths.covenantRoot, 'even_odd.template.artifact.json', res);
+    if (req.method === 'GET' && pathname === '/covenant/kasodds.template.artifact.json') return serveFile(paths.covenantRoot, 'kasodds.template.artifact.json', res);
     if (req.method === 'GET' && pathname === '/covenant/pins.json') return serveFile(paths.covenantRoot, 'pins.json', res);
     return sendJson(res, 404, { error: 'not_found' });
   }

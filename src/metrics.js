@@ -67,45 +67,45 @@ export class Metrics {
 
   recordHttp({ method, route, status, durationSeconds }) {
     const labels = { method, route, status: String(status) };
-    this.increment('kaspa_http_requests_total', 'Total HTTP requests handled.', labels);
-    this.observe('kaspa_http_request_duration_seconds', 'HTTP request duration in seconds.', { method, route }, durationSeconds);
+    this.increment('kasodds_http_requests_total', 'Total HTTP requests handled.', labels);
+    this.observe('kasodds_http_request_duration_seconds', 'HTTP request duration in seconds.', { method, route }, durationSeconds);
     if (status >= 400) {
-      this.increment('kaspa_http_errors_total', 'Total HTTP responses with a 4xx or 5xx status.', labels);
+      this.increment('kasodds_http_errors_total', 'Total HTTP responses with a 4xx or 5xx status.', labels);
     }
   }
 
   recordRpc({ operation, outcome, durationSeconds }) {
-    this.increment('kaspa_rpc_requests_total', 'Total Kaspa wRPC calls.', { operation, outcome });
-    this.observe('kaspa_rpc_request_duration_seconds', 'Kaspa wRPC call duration in seconds.', { operation }, durationSeconds);
+    this.increment('kasodds_rpc_requests_total', 'Total Kaspa wRPC calls.', { operation, outcome });
+    this.observe('kasodds_rpc_request_duration_seconds', 'Kaspa wRPC call duration in seconds.', { operation }, durationSeconds);
   }
 
   recordStorage({ operation, outcome, durationSeconds }) {
-    this.increment('kaspa_storage_operations_total', 'Total backend store operations.', { operation, outcome });
-    this.observe('kaspa_storage_operation_duration_seconds', 'Backend store operation duration in seconds.', { operation }, durationSeconds);
+    this.increment('kasodds_storage_operations_total', 'Total backend store operations.', { operation, outcome });
+    this.observe('kasodds_storage_operation_duration_seconds', 'Backend store operation duration in seconds.', { operation }, durationSeconds);
   }
 
   recordGameEvent(event) {
-    this.increment('kaspa_game_events_total', 'Backend game lifecycle events.', { event });
+    this.increment('kasodds_game_events_total', 'Backend game lifecycle events.', { event });
   }
 
   recordPageVisit() {
-    this.increment('kaspa_page_visits_total', 'Number of homepage loads.', {});
+    this.increment('kasodds_page_visits_total', 'Number of homepage loads.', {});
   }
 
   setMatchmakingWaiting(value) {
-    this.set('kaspa_matchmaking_waiting', 'Number of matchmaking sessions waiting for a rival.', {}, value);
+    this.set('kasodds_matchmaking_waiting', 'Number of matchmaking sessions waiting for a rival.', {}, value);
   }
 
   setRelayEntries(value) {
-    this.set('kaspa_relay_entries', 'Number of live relay entries held in memory.', {}, value);
+    this.set('kasodds_relay_entries', 'Number of live relay entries held in memory.', {}, value);
   }
 
   recordFeedback({ outcome }) {
-    this.increment('kaspa_feedback_total', 'Anonymous user feedback submissions.', { outcome });
+    this.increment('kasodds_feedback_total', 'Anonymous user feedback submissions.', { outcome });
   }
 
   setProductInfo(version) {
-    this.set('kaspa_app_info', 'Application build information.', { version }, 1);
+    this.set('kasodds_app_info', 'Application build information.', { version }, 1);
   }
 
   render() {
@@ -158,24 +158,24 @@ export class Metrics {
     const memory = process.memoryUsage();
     const cpu = process.cpuUsage();
     const cpuSeconds = (cpu.user + cpu.system) / 1_000_000;
-    lines.push('# HELP kaspa_process_start_time_seconds Start time of the process since unix epoch in seconds.');
-    lines.push('# TYPE kaspa_process_start_time_seconds gauge');
-    lines.push(`kaspa_process_start_time_seconds ${formatNumber(this.startTimeMs / 1000)}`);
-    lines.push('# HELP kaspa_process_uptime_seconds Process uptime in seconds.');
-    lines.push('# TYPE kaspa_process_uptime_seconds gauge');
-    lines.push(`kaspa_process_uptime_seconds ${formatNumber(uptimeSeconds)}`);
-    lines.push('# HELP kaspa_process_cpu_seconds_total Total user and system CPU time spent in seconds.');
-    lines.push('# TYPE kaspa_process_cpu_seconds_total counter');
-    lines.push(`kaspa_process_cpu_seconds_total ${formatNumber(cpuSeconds)}`);
-    lines.push('# HELP kaspa_process_resident_memory_bytes Resident memory size in bytes.');
-    lines.push('# TYPE kaspa_process_resident_memory_bytes gauge');
-    lines.push(`kaspa_process_resident_memory_bytes ${memory.rss}`);
-    lines.push('# HELP kaspa_nodejs_heap_used_bytes Node.js heap used in bytes.');
-    lines.push('# TYPE kaspa_nodejs_heap_used_bytes gauge');
-    lines.push(`kaspa_nodejs_heap_used_bytes ${memory.heapUsed}`);
-    lines.push('# HELP kaspa_nodejs_heap_total_bytes Node.js heap total in bytes.');
-    lines.push('# TYPE kaspa_nodejs_heap_total_bytes gauge');
-    lines.push(`kaspa_nodejs_heap_total_bytes ${memory.heapTotal}`);
+    lines.push('# HELP kasodds_process_start_time_seconds Start time of the process since unix epoch in seconds.');
+    lines.push('# TYPE kasodds_process_start_time_seconds gauge');
+    lines.push(`kasodds_process_start_time_seconds ${formatNumber(this.startTimeMs / 1000)}`);
+    lines.push('# HELP kasodds_process_uptime_seconds Process uptime in seconds.');
+    lines.push('# TYPE kasodds_process_uptime_seconds gauge');
+    lines.push(`kasodds_process_uptime_seconds ${formatNumber(uptimeSeconds)}`);
+    lines.push('# HELP kasodds_process_cpu_seconds_total Total user and system CPU time spent in seconds.');
+    lines.push('# TYPE kasodds_process_cpu_seconds_total counter');
+    lines.push(`kasodds_process_cpu_seconds_total ${formatNumber(cpuSeconds)}`);
+    lines.push('# HELP kasodds_process_resident_memory_bytes Resident memory size in bytes.');
+    lines.push('# TYPE kasodds_process_resident_memory_bytes gauge');
+    lines.push(`kasodds_process_resident_memory_bytes ${memory.rss}`);
+    lines.push('# HELP kasodds_nodejs_heap_used_bytes Node.js heap used in bytes.');
+    lines.push('# TYPE kasodds_nodejs_heap_used_bytes gauge');
+    lines.push(`kasodds_nodejs_heap_used_bytes ${memory.heapUsed}`);
+    lines.push('# HELP kasodds_nodejs_heap_total_bytes Node.js heap total in bytes.');
+    lines.push('# TYPE kasodds_nodejs_heap_total_bytes gauge');
+    lines.push(`kasodds_nodejs_heap_total_bytes ${memory.heapTotal}`);
   }
 }
 

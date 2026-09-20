@@ -1,12 +1,12 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kaspa-even-odd
-  namespace: kaspa-even-odd
+  name: kasodds
+  namespace: kasodds
   labels:
-    app.kubernetes.io/name: kaspa-even-odd
+    app.kubernetes.io/name: kasodds
   annotations:
-    kaspa-even-odd/source-revision: sha-2ca95e54b7622d4cac502fa7f518619338b3fc9a
+    kasodds/source-revision: sha-2ca95e54b7622d4cac502fa7f518619338b3fc9a
 spec:
   replicas: 1
   # The game store is a single JSON file with process-local write locking, so two
@@ -15,11 +15,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: kaspa-even-odd
+      app.kubernetes.io/name: kasodds
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: kaspa-even-odd
+        app.kubernetes.io/name: kasodds
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
@@ -33,8 +33,8 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: kaspa-even-odd
-          image: ghcr.io/danieliyahu1/kaspa-even-odd/kaspa-even-odd@sha256:e8bdbefed0806cd8d3d1dab3e581bb61ec74416ef312387e0a6458d747b50320
+        - name: kasodds
+          image: ghcr.io/danieliyahu1/kasodds/kasodds@sha256:e8bdbefed0806cd8d3d1dab3e581bb61ec74416ef312387e0a6458d747b50320
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -51,34 +51,34 @@ spec:
             - name: KASPA_NETWORK
               value: "testnet-10"
             - name: GAME_STORE_DIR
-              value: /var/lib/kaspa-even-odd
+              value: /var/lib/kasodds
             - name: GAME_FEE_ADDRESS_MAINNET
               valueFrom:
                 secretKeyRef:
-                  name: kaspa-even-odd-game-fee-address
+                  name: kasodds-game-fee-address
                   key: mainnet
             - name: GAME_FEE_ADDRESS_TESTNET_10
               valueFrom:
                 secretKeyRef:
-                  name: kaspa-even-odd-game-fee-address
+                  name: kasodds-game-fee-address
                   key: testnet-10
             - name: FEEDBACK_SPILL_PATH
-              value: /var/lib/kaspa-even-odd/feedback-spill.json
+              value: /var/lib/kasodds/feedback-spill.json
             - name: TELEGRAM_FEEDBACK_BOT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: kaspa-even-odd-telegram
+                  name: kasodds-telegram
                   key: bot-token
                   optional: true
             - name: TELEGRAM_FEEDBACK_CHAT_ID
               valueFrom:
                 secretKeyRef:
-                  name: kaspa-even-odd-telegram
+                  name: kasodds-telegram
                   key: chat-id
                   optional: true
           volumeMounts:
             - name: game-state
-              mountPath: /var/lib/kaspa-even-odd
+              mountPath: /var/lib/kasodds
           startupProbe:
             httpGet:
               path: /healthz
@@ -120,4 +120,4 @@ spec:
       volumes:
         - name: game-state
           persistentVolumeClaim:
-            claimName: kaspa-even-odd-state
+            claimName: kasodds-state

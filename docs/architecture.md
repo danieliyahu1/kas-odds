@@ -51,8 +51,8 @@ JSON, creates parent directories, serializes mutations, writes atomically, and
 returns clones. `src/feedback.js` uses the same fail-closed rule: only a missing
 spill file means an empty queue; malformed or unreadable state is an error.
 
-The deployment uses `/var/lib/kaspa-even-odd/games-mainnet-v10.json` and
-`/var/lib/kaspa-even-odd/feedback-spill.json` on the persistent volume; the game
+The deployment uses `/var/lib/kasodds/games-mainnet-v10.json` and
+`/var/lib/kasodds/feedback-spill.json` on the persistent volume; the game
 store path is network-scoped so two profiles never share a record set.
 
 ## Verification And Delivery
