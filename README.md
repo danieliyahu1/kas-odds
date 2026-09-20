@@ -1,6 +1,6 @@
 # KasOdds
 
-Live: <https://kasodds.danieliyahu.com/>
+Live: <https://kasodds.com/>
 
 Initial protocol implementation for the non-custodial KasOdds MVP on Kaspa.
 The same image serves either Kaspa `mainnet` or `testnet-10`; the network is
