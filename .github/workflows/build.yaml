@@ -155,7 +155,7 @@ jobs:
             echo "origin/${GITHUB_REF_NAME} advanced to ${REMOTE}; a newer source push owns deployment"
             exit 0
           fi
-          sed -i -E "s|^([[:space:]]*image: )ghcr\.io/${GITHUB_REPOSITORY}/kasodds[@:].*|\1${IMAGE_REF}|" deploy/deployment.yaml
+          sed -i -E "s|^([[:space:]]*image: )ghcr\.io/[^[:space:]]*/kasodds[@:].*|\1${IMAGE_REF}|" deploy/deployment.yaml
           sed -i -E "s|^([[:space:]]*kasodds/source-revision: ).*|\1sha-${GITHUB_SHA}|" deploy/deployment.yaml
           if git diff --quiet -- deploy/deployment.yaml; then
             echo "manifest already points at ${IMAGE_REF}"
