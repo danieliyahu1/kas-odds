@@ -48,8 +48,14 @@ spec:
               value: "9464"
             # The single switch between networks: the address prefix, KasWare
             # network, wRPC node, store file, and fee wallet all follow from it.
+            # The value is read at runtime from the kasodds-network Secret
+            # (Vault entry `kasodds-network`), so switching networks on the VM
+            # needs no Git commit.
             - name: KASPA_NETWORK
-              value: "testnet-10"
+              valueFrom:
+                secretKeyRef:
+                  name: kasodds-network
+                  key: network
             - name: GAME_STORE_DIR
               value: /var/lib/kasodds
             - name: GAME_FEE_ADDRESS_MAINNET
