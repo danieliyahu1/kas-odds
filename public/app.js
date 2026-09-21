@@ -68,6 +68,7 @@ export async function boot() {
     // Warm the covenant artifact now so the first lock never waits on it.
     void loadCovenantTemplate().catch(() => {});
     cachedConfig = await loadRuntimeConfig();
+    applyNetworkLabel(cachedConfig.network);
     initWalletButton();
     initFeedback();
     if (location.pathname === '/join') {
@@ -84,6 +85,16 @@ export async function boot() {
     logError('boot_failed', { code: error.code, message: error.message });
     renderBackendError(error.message);
   }
+}
+
+// The network is context, not a feature: mainnet is the default reality and
+// stays silent, while testnet must be unmistakable because its coins are
+// worthless. The exact network id stays in the title for anyone who wants it.
+function applyNetworkLabel(network) {
+  const label = document.querySelector('#network-label');
+  if (!label) return;
+  label.textContent = network === 'mainnet' ? '' : 'Testnet';
+  label.title = network;
 }
 
 function renderHome() {

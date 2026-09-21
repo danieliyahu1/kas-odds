@@ -105,7 +105,8 @@ test('server serves the browser application and health probe', async (t) => {
   const runtimeConfigScript = await fetch(`http://127.0.0.1:${port}/runtime-config.js`);
   assert.equal(runtimeConfigScript.status, 200);
   assert.match(await runtimeConfigScript.text(), /loadRuntimeConfig/);
-  assert.doesNotMatch(pageHtml, /id="network-label"/);
+  assert.match(pageHtml, /id="network-label"/);
+  assert.match(browserSource, /function applyNetworkLabel/);
 
   // The thin client talks only to this server; it never constructs or verifies
   // chain transactions itself beyond checking the prepared creation.
