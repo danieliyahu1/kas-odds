@@ -23,16 +23,20 @@ button { cursor: pointer; }
 
 .topbar { height: 64px; padding: 0 clamp(18px, 5vw, 64px); border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
 .brand { color: var(--text); text-decoration: none; display: flex; gap: 11px; align-items: center; font-size: 15px; font-weight: 700; letter-spacing: -.04em; }
+.brand-accent { color: var(--teal); }
 .brand-mark { width: 28px; height: 28px; border: 1.5px solid var(--text); border-radius: 50%; display: flex; align-items: center; justify-content: center; gap: 3px; transform: rotate(-17deg); }
 .brand-mark i { display: block; width: 5px; height: 5px; background: var(--text); border-radius: 50%; }
 .brand-mark i + i { background: var(--teal); }
-.network { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-.network-separator { color: var(--line); }
-.pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--teal-bright); box-shadow: 0 0 0 4px rgba(73,234,203,.16); }
 .topbar-actions { display: flex; align-items: center; gap: 14px; }
-.wallet-button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text); font-size: 12px; font-weight: 700; letter-spacing: .01em; transition: border-color .15s ease, background .15s ease, color .15s ease; }
+.footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px clamp(18px, 5vw, 64px); border-top: 1px solid var(--line); }
+.footer-network { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.footer-actions { display: flex; align-items: center; gap: 12px; }
+.pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--teal-bright); box-shadow: 0 0 0 4px rgba(73,234,203,.16); }
+.wallet-slot { display: flex; align-items: center; gap: 10px; }
+.wallet-address { display: inline-flex; align-items: center; gap: 7px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; font-weight: 700; letter-spacing: .01em; transition: color .15s ease; }
+.wallet-address:hover { color: var(--teal); }
+.wallet-button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border: 1px solid rgba(233,241,239,.24); border-radius: 999px; background: transparent; color: var(--text); font-size: 12px; font-weight: 700; letter-spacing: .01em; transition: border-color .15s ease, background .15s ease, color .15s ease; }
 .wallet-button:hover { border-color: var(--teal); color: var(--teal); }
-.wallet-button.connected { border-color: var(--teal); background: rgba(112,199,186,.14); color: var(--teal); }
 .wallet-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal-bright); box-shadow: 0 0 0 3px rgba(73,234,203,.2); }
 .wallet-notice { position: fixed; top: 74px; right: clamp(18px, 5vw, 64px); width: min(100% - 36px, 360px); z-index: 20; }
 .wallet-notice:empty { display: none; }
@@ -44,6 +48,20 @@ main { width: min(100% - 36px, 460px); margin: 0 auto; padding: 44px 0 72px; fle
 .home-actions { display: grid; gap: 10px; }
 .home-button { display: block; text-decoration: none; }
 .home-button.primary, .home-button.outline { width: 100%; }
+.home-actions .primary:hover { background: var(--teal); color: var(--text); transform: translateY(-1px); box-shadow: 0 6px 18px rgba(73,234,203,.22); }
+.home-actions .primary:active { transform: none; box-shadow: none; }
+.home-actions .outline:hover { border-color: var(--teal); color: var(--teal); }
+.home-fineprint { margin: 14px 0 0; text-align: center; color: var(--muted); font-size: 13px; }
+.inline-link { color: var(--text); text-decoration: none; font-weight: 600; }
+.inline-link:hover { color: var(--teal); }
+.rules { display: grid; gap: 18px; }
+.rule-title { margin: 0 0 4px; font-size: 14px; font-weight: 800; letter-spacing: -.01em; }
+.rule-body { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.rule-body strong { color: var(--text); }
+.doc-panel h2, .doc-panel .rule-title, .doc-panel .rule-body strong { color: var(--teal); }
+.doc-panel .lead, .doc-panel .rule-body { color: var(--text); }
+.doc-panel .proof-note { color: var(--text); }
+.proof-note { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
 .panel-head { margin-bottom: 22px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .stage-rail { display: flex; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
@@ -80,7 +98,7 @@ legend { display: block; margin-bottom: 12px; color: var(--muted); font-size: 13
 .notice .actions { margin-top: 10px; }
 
 .actions { display: flex; gap: 10px; margin-top: 18px; }
-.primary, .outline, .share-button { border: 0; border-radius: 10px; padding: 15px 18px; font-size: 14px; font-weight: 800; letter-spacing: .01em; text-align: center; width: 100%; transition: transform .15s ease, background .15s ease; }
+.primary, .outline, .share-button { border: 0; border-radius: 10px; padding: 15px 18px; font-size: 14px; font-weight: 800; letter-spacing: .01em; text-align: center; width: 100%; transition: transform .15s ease, background .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease; }
 .primary { background: var(--teal); color: var(--teal-deep); }
 .primary:hover { background: var(--teal-bright); }
 .primary:disabled { background: #1c262b; color: #55666a; cursor: default; }
@@ -113,7 +131,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .header-loading { display: flex; align-items: center; gap: 14px; }
 .header-loading h2 { margin: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } .choice:hover { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } .choice:hover { transform: none; } .home-actions .primary:hover { transform: none; } }
 .share-button { border: 1px solid var(--teal); background: transparent; color: var(--teal); margin-top: 0; width: 100%; }
 .share-button:hover { background: rgba(112,199,186,.12); }
 
@@ -147,8 +165,8 @@ a.proof-tx:hover { text-decoration: underline; }
 .result.winner .proof-heading, .result.winner .proof-label { color: rgba(6,32,29,.72); }
 .result.winner .proof-tx { color: var(--teal-deep); }
 
-.feedback-button, .telegram-button, .github-button { display: inline-flex; align-items: center; padding: 7px 14px; border: 1px solid rgba(112,199,186,.5); border-radius: 999px; background: rgba(112,199,186,.14); color: var(--teal); font-size: 12px; font-weight: 800; letter-spacing: .01em; transition: background .15s ease, border-color .15s ease, color .15s ease; }
-.feedback-button:hover, .telegram-button:hover, .github-button:hover { border-color: var(--teal-bright); background: rgba(112,199,186,.24); color: var(--teal-bright); }
+.feedback-button, .telegram-button, .github-button { display: inline-flex; align-items: center; padding: 7px 14px; border: 1px solid rgba(233,241,239,.24); border-radius: 999px; background: transparent; color: var(--text); font-size: 12px; font-weight: 800; letter-spacing: .01em; transition: background .15s ease, border-color .15s ease, color .15s ease; }
+.feedback-button:hover, .telegram-button:hover, .github-button:hover { border-color: var(--teal); background: rgba(112,199,186,.14); color: var(--teal); }
 a.telegram-button, a.github-button { text-decoration: none; padding: 7px; }
 a.telegram-button svg, a.github-button svg { display: block; width: 16px; height: 16px; }
 .feedback-dialog { width: min(100% - 32px, 440px); max-height: min(100% - 48px, 520px); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); padding: 0; }
@@ -170,5 +188,5 @@ a.telegram-button svg, a.github-button svg { display: block; width: 16px; height
   main { width: min(100% - 24px, 460px); padding: 28px 0 56px; }
   .panel { padding: 22px; }
   .topbar { padding: 0 16px; }
-  .network span:not(.pulse):not(:last-child) { display: none; }
+  .footer { padding: 16px; }
 }

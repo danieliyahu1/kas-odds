@@ -34,10 +34,11 @@ test('server serves the browser application and health probe', async (t) => {
   t.after(() => rm(directory, { recursive: true, force: true }));
 
   await waitForServer(`http://127.0.0.1:${port}/readyz`);
-  const [page, host, rival, health, missing, demoApi, appScript, lobbyScript, mainScript, secretsScript, verifyScript, coreScript, genesisScript, artifact, pins, wasmJs, icon] = await Promise.all([
+  const [page, host, rival, protectedPage, health, missing, demoApi, appScript, lobbyScript, mainScript, secretsScript, verifyScript, coreScript, genesisScript, artifact, pins, wasmJs, icon] = await Promise.all([
     fetch(`http://127.0.0.1:${port}/`),
     fetch(`http://127.0.0.1:${port}/host`),
     fetch(`http://127.0.0.1:${port}/rival`),
+    fetch(`http://127.0.0.1:${port}/protected`),
     fetch(`http://127.0.0.1:${port}/healthz`),
     fetch(`http://127.0.0.1:${port}/public-game-list`),
     fetch(`http://127.0.0.1:${port}/api/demo/games`),
@@ -57,10 +58,12 @@ test('server serves the browser application and health probe', async (t) => {
   assert.equal(page.status, 200);
   assert.equal(host.status, 200);
   assert.equal(rival.status, 200);
+  assert.equal(protectedPage.status, 200);
   const pageHtml = await page.text();
   assert.match(pageHtml, /KasOdds/);
   assert.match(pageHtml, /Connect Wallet/);
   assert.match(pageHtml, /id="wallet-button"/);
+  assert.match(pageHtml, /id="wallet-slot"/);
   assert.match(pageHtml, /<script type="module" src="\/main\.js"><\/script>/);
   assert.doesNotMatch(pageHtml, /<script type="module">import/);
   assert.deepEqual(await health.json().then(({ ok, service, network }) => ({ ok, service, network })), { ok: true, service: 'kasodds', network: 'testnet-10' });
@@ -102,7 +105,7 @@ test('server serves the browser application and health probe', async (t) => {
   const runtimeConfigScript = await fetch(`http://127.0.0.1:${port}/runtime-config.js`);
   assert.equal(runtimeConfigScript.status, 200);
   assert.match(await runtimeConfigScript.text(), /loadRuntimeConfig/);
-  assert.match(pageHtml, /id="network-label"/);
+  assert.doesNotMatch(pageHtml, /id="network-label"/);
 
   // The thin client talks only to this server; it never constructs or verifies
   // chain transactions itself beyond checking the prepared creation.
@@ -142,6 +145,19 @@ test('server serves the browser application and health probe', async (t) => {
   assert.match(browserSource, /Find a player/);
   assert.match(browserSource, /Play with a friend/);
   assert.match(browserSource, /location\.pathname === '\/host'/);
+  // The stake-safety page is reachable from the home screen, and it states the
+  // timeout guarantee in plain language.
+  assert.match(browserSource, /location\.pathname === '\/protected'/);
+  assert.match(browserSource, /function renderProtected/);
+  // Signing out is an explicit control beside the address, not a click on the
+  // address itself, and the address copies the full value.
+  assert.match(browserSource, /data-wallet-action="disconnect"/);
+  assert.match(browserSource, /data-wallet-action="copy"/);
+  assert.match(browserSource, /function onDisconnectClick/);
+  assert.match(browserSource, /function onCopyAddressClick/);
+  assert.match(browserSource, /class="wallet-address"/);
+  assert.match(browserSource, /How your stake is protected/);
+  assert.match(browserSource, /covenant\/kasodds\.sil/);
   assert.match(browserSource, /KasOdds/);
   assert.doesNotMatch(browserSource, /DEFAULT_WRPC_URL|WrpcClient|readRecoveryReadiness|game-client|client-actions/);
   assert.doesNotMatch(browserSource, /data-reveal-number|FIXED_NONCE|fill\(1\)|transientCommitment/);

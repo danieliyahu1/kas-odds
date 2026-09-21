@@ -18,6 +18,7 @@ import { loadRuntimeConfig, runtimeConfig } from '/runtime-config.js';
 const app = document.querySelector('#app');
 const params = new URLSearchParams(location.search);
 const KASWARE_DOWNLOAD = 'https://chromewebstore.google.com/detail/kasware-wallet/hklhheigdmpoolooomdihmhlpjjdbklf';
+const COVENANT_SOURCE = 'https://github.com/danieliyahu1/kas-odds/blob/main/covenant/kasodds.sil';
 
 // Client-side timing for the pre-signature pipeline. The backend prepares in a
 // few hundred milliseconds; everything after that until KasWare opens is either
@@ -67,7 +68,6 @@ export async function boot() {
     // Warm the covenant artifact now so the first lock never waits on it.
     void loadCovenantTemplate().catch(() => {});
     cachedConfig = await loadRuntimeConfig();
-    applyNetworkLabel(cachedConfig.network);
     initWalletButton();
     initFeedback();
     if (location.pathname === '/join') {
@@ -78,6 +78,7 @@ export async function boot() {
     if (location.pathname === '/game') return renderGame(params.get('id') ?? params.get('game'));
     if (location.pathname === '/host') return renderLobby({ mode: 'host', roomId: isRoomId(params.get('room')) ? params.get('room') : null });
     if (location.pathname === '/rival') return renderLobby({ mode: 'public' });
+    if (location.pathname === '/protected') return renderProtected();
     renderHome();
   } catch (error) {
     logError('boot_failed', { code: error.code, message: error.message });
@@ -85,22 +86,57 @@ export async function boot() {
   }
 }
 
-function applyNetworkLabel(network) {
-  const label = document.querySelector('#network-label');
-  if (label) label.textContent = network;
-}
-
 function renderHome() {
   app.innerHTML = `
     <section class="panel home-panel" aria-label="Play KasOdds">
       <div class="panel-head">
-        <h1>KasOdds</h1>
-        <p class="lead">Two players. Two secret numbers. The total decides who takes the pot.</p>
+        <h1><span class="brand-accent">Kas</span>Odds</h1>
+        <p class="lead">Pick 1 or 2 in secret. An even total wins for Even, an odd total wins for Odd.</p>
       </div>
       <div class="home-actions">
         <a class="primary home-button" href="/rival">Play someone new</a>
         <a class="outline home-button" href="/host">Play with a friend</a>
       </div>
+      <p class="home-fineprint"><a class="inline-link" href="/protected">How your stake is protected</a></p>
+    </section>`;
+}
+
+// The plain-language safety page. It answers the one financial question a
+// first-time player has — "what happens to my stake if the other player
+// disappears?" — before they commit money. The covenant source stays linked for
+// anyone who wants to verify it, but no player has to read SilverScript to trust
+// the outcome.
+function renderProtected() {
+  app.innerHTML = `
+    <a class="back" href="/">Back</a>
+    <section class="panel doc-panel" aria-label="How your stake is protected">
+      <div class="panel-head">
+        <h2>How your stake is protected</h2>
+        <p class="lead">Both stakes are locked in a contract on Kaspa. The contract, not the other player or this server, decides where the money goes. Your opponent cannot trap your stake by leaving.</p>
+      </div>
+      <div class="rules">
+        <div class="rule">
+          <p class="rule-title">Both players reveal</p>
+          <p class="rule-body">The two numbers add up. An <strong>even</strong> total wins for the Even player; an <strong>odd</strong> total wins for the Odd player. The winner takes the pot minus a 1% game fee, charged only when that fee is at least 1 KAS. Smaller pots pay the winner in full.</p>
+        </div>
+        <div class="rule">
+          <p class="rule-title">Nobody joins</p>
+          <p class="rule-body">While a game waits for a second player, the creator can take back the full stake at any time. Five minutes after the game is created, anyone can relay the refund, minus the network fee.</p>
+        </div>
+        <div class="rule">
+          <p class="rule-title">Neither player reveals</p>
+          <p class="rule-body">If neither player reveals within five minutes of the join, the contract returns both stakes, minus the network fee. Either player, or anyone else, can relay it.</p>
+        </div>
+        <div class="rule">
+          <p class="rule-title">Only one player reveals</p>
+          <p class="rule-body">The first player to reveal claims the pot five minutes later, minus the network and game fees. An opponent who disappears never costs the honest player their stake.</p>
+        </div>
+        <div class="rule">
+          <p class="rule-title">Before you stake</p>
+          <p class="rule-body">Your number is stored only in this browser until you reveal it. Keep this browser and its site data until the game ends. If it is cleared, you cannot reveal, and the timeout rule above decides the outcome. The server prepares and relays transactions, but every timeout is enforced by the contract on-chain no matter who broadcasts.</p>
+        </div>
+      </div>
+      <p class="proof-note muted-note">Each game creates its own covenant. <a class="inline-link" href="${COVENANT_SOURCE}" target="_blank" rel="noopener noreferrer">Read the covenant source on GitHub</a>.</p>
     </section>`;
 }
 
@@ -744,6 +780,7 @@ function rememberAddress(address) {
   if (!address) return;
   window.__connectedAddress = address;
   try { localStorage.setItem('kaspa-connected-address', address); } catch { /* ignore */ }
+  renderWalletButton();
 }
 
 function connectedAddress() {
@@ -752,42 +789,59 @@ function connectedAddress() {
 }
 
 function initWalletButton() {
-  const button = document.querySelector('#wallet-button');
-  if (!button) return;
-  button.addEventListener('click', onWalletClick);
+  const slot = document.querySelector('#wallet-slot');
+  if (!slot) return;
+  slot.addEventListener('click', (event) => {
+    const action = event.target.closest('[data-wallet-action]')?.dataset.walletAction;
+    if (action === 'connect') void onConnectClick();
+    else if (action === 'disconnect') onDisconnectClick();
+    else if (action === 'copy') void onCopyAddressClick();
+  });
   renderWalletButton();
 }
 
+// The header shows one control at a time: "Connect Wallet" while signed out, and
+// the connected address beside an explicit "Disconnect" button while signed in.
+// The address copies the full value; signing out stays a separate, visible button
+// so it is never hidden behind a click on the address.
 function renderWalletButton() {
-  const button = document.querySelector('#wallet-button');
-  if (!button) return;
+  const slot = document.querySelector('#wallet-slot');
+  if (!slot) return;
   const address = connectedAddress();
   if (address) {
-    button.classList.add('connected');
-    button.setAttribute('aria-label', `Connected ${address}. Click to disconnect.`);
-    button.innerHTML = `<span class="wallet-dot" aria-hidden="true"></span>${escapeHtml(shortAddress(address))}`;
-  } else {
-    button.classList.remove('connected');
-    button.removeAttribute('aria-label');
-    button.textContent = 'Connect Wallet';
-  }
-}
-
-async function onWalletClick() {
-  if (connectedAddress()) {
-    window.__connectedAddress = undefined;
-    try { localStorage.removeItem('kaspa-connected-address'); } catch { /* ignore */ }
-    clearWalletNotice();
-    renderWalletButton();
+    slot.innerHTML = `
+      <button type="button" class="wallet-address" data-wallet-action="copy" title="${escapeHtml(address)}" aria-label="Copy wallet address ${escapeHtml(address)}"><span class="wallet-dot" aria-hidden="true"></span>${escapeHtml(shortAddress(address))}</button>
+      <button type="button" class="wallet-button" data-wallet-action="disconnect" aria-label="Disconnect wallet ${escapeHtml(address)}">Disconnect</button>`;
     return;
   }
+  slot.innerHTML = '<button type="button" class="wallet-button" id="wallet-button" data-wallet-action="connect">Connect Wallet</button>';
+}
+
+async function onConnectClick() {
   try {
     const { account } = await connectKasware('#wallet-notice');
     rememberAddress(account.address);
     clearWalletNotice();
-    renderWalletButton();
   } catch {
     renderWalletButton();
+  }
+}
+
+function onDisconnectClick() {
+  window.__connectedAddress = undefined;
+  try { localStorage.removeItem('kaspa-connected-address'); } catch { /* ignore */ }
+  clearWalletNotice();
+  renderWalletButton();
+}
+
+async function onCopyAddressClick() {
+  const address = connectedAddress();
+  if (!address) return;
+  try {
+    await copyLink(address);
+    showToast('Address copied');
+  } catch {
+    showToast('Could not copy the address');
   }
 }
 
