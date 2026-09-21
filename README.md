@@ -327,6 +327,16 @@ join to take the other side. Until a join confirms,
   covenant still enforces the reveal/claim/refund timeouts on-chain regardless
   of who broadcasts.
 
+## Non-browser clients
+
+Every client is a wallet that submits covenant-valid transactions, and confirmed
+KasOdds covenant state is authoritative. There is no bot flag, no separate queue,
+no account, and no server-side signing — the browser is only one client. A script,
+bot, or agent can drive the same HTTP API.
+
+See [`docs/http-api.md`](docs/http-api.md) for the endpoints, the commit-reveal
+encoding, signing requirements, error codes, timeouts, and idempotency.
+
 ## Support
 
 If you like this repo, you can tip me at [https://kas.coffee/danieliyahu](https://kas.coffee/danieliyahu).
