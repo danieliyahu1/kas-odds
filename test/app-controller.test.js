@@ -73,6 +73,7 @@ test('game wait resolves to ready, cancelled, timeout, or pending', () => {
 test('action error copy maps known codes and falls back for anything unknown', () => {
   assert.deepEqual(actionErrorCopy({ code: 'NO_UTXOS' }), { title: 'Network fee unavailable', message: 'This wallet needs a small separate balance to pay the network fee.' });
   assert.deepEqual(actionErrorCopy({ code: 'MATCH_TIMEOUT' }), { title: 'Still waiting for your opponent', message: 'They did not create the game in time. Try again in a moment.' });
+  assert.deepEqual(actionErrorCopy({ code: 'GAME_CANCELLED' }), { title: 'The game was canceled', message: 'Find another player to play against. No KAS was locked.' });
   assert.equal(actionErrorCopy({ code: 'SOMETHING_NEW' }).title, 'Please try again');
   assert.equal(actionErrorCopy(undefined).title, 'Please try again');
 });

@@ -631,6 +631,94 @@ test('a prepared join for a re-signed creation is rejected', async (t) => {
   await assert.rejects(service.submitJoin(gameIdA, { preparedHash: 'ab'.repeat(32), signedTxJson: '{}' }), { code: 'MATCH_NOT_READY' });
 });
 
+test('a broadcast creator refund does not block a join', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-join-broadcast-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameId = 'a4'.repeat(32);
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'aa'.repeat(32),
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame({
+    ...unconfirmedGameRecord({ gameId, request }),
+    status: 'creator_refund_broadcast',
+    safetyActions: [{ action: 'creator_refund', transactionId: 'dd'.repeat(32), playerAddress: 'kaspatest:creator', role: 'creator', status: 'broadcast', submittedAt: new Date().toISOString() }],
+  });
+  await store.saveOperation(creationOperation(gameId, '07'.repeat(32), 'broadcast'));
+  const joinTxJson = JSON.stringify({
+    inputs: [{ transactionId: gameId, index: 0, sequence: '0', signatureScript: 'aa', utxo: { amount: '100000000', scriptPublicKey: request.covenantScriptPublicKey, blockDaaScore: String(UNCONFIRMED_INPUT_DAA_SCORE), covenantId: '03'.repeat(32) } }],
+    outputs: [{ value: '200000000', scriptPublicKey: '00', covenant: null }],
+  });
+  let built = 0;
+  const chain = {
+    getCurrentDaaScore: async () => 500n,
+    getUtxos: async () => ({ entries: [] }),
+    prepareJoin: async () => { built += 1; return { txJson: joinTxJson, preparedHash: 'ab'.repeat(32), feeSompi: 0n, feerate: 1 }; },
+  };
+  const service = new BackendGameService({ chain, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  const result = await service.prepareJoin(gameId, { joinerAddress: 'kaspatest:joiner', joinerPublicKey: 'bb'.repeat(32), joinerCommitment: 'dd'.repeat(32) });
+
+  assert.equal(result.gameId, gameId);
+  assert.equal(built, 1, 'a broadcast refund is not truth and must not block the join');
+});
+
+test('a confirmed creator refund refuses a join', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-join-cancelled-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameId = 'a5'.repeat(32);
+  const matchId = 'c5'.repeat(32);
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'aa'.repeat(32),
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame({
+    ...unconfirmedGameRecord({ gameId, request, matchId }),
+    status: 'creator_refunded',
+    safetyActions: [{ action: 'creator_refund', transactionId: 'dd'.repeat(32), playerAddress: 'kaspatest:creator', role: 'creator', status: 'confirmed', submittedAt: new Date().toISOString() }],
+  });
+  await store.saveMatch({
+    matchId, status: 'started', gameId, creatorIndex: 0, creatorSide: 'even', stakeKas: 1,
+    players: [{ address: 'kaspatest:creator', publicKey: 'aa'.repeat(32), limitKas: 1 }, { address: 'kaspatest:joiner', publicKey: 'bb'.repeat(32), limitKas: 1 }],
+  });
+  await store.saveJoinPrepared({
+    preparedHash: 'ab'.repeat(32), gameId, matchId, joinerAddress: 'kaspatest:joiner', joinerPublicKey: 'bb'.repeat(32),
+    joinerCommitment: 'dd'.repeat(32), txJson: '{}', feeSompi: '0', priorityFeerate: 1,
+    joinedAddress: 'kaspatest:joined', joinedScriptPublicKey: '00', joinedRedeemScript: '00', covenantId: '03'.repeat(32), createdAt: new Date().toISOString(),
+  });
+  const chain = {
+    getCurrentDaaScore: async () => 500n,
+    getUtxos: async () => { throw new Error('a cancelled game must not be read from the chain'); },
+    prepareJoin: async () => { throw new Error('a cancelled game must not build a join'); },
+  };
+  const service = new BackendGameService({ chain, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  await assert.rejects(
+    service.prepareJoin(gameId, { joinerAddress: 'kaspatest:joiner', joinerPublicKey: 'bb'.repeat(32), joinerCommitment: 'dd'.repeat(32), matchId }),
+    { code: 'GAME_CANCELLED' },
+  );
+  await assert.rejects(
+    service.submitJoin(gameId, { preparedHash: 'ab'.repeat(32), signedTxJson: '{}' }),
+    { code: 'GAME_CANCELLED' },
+  );
+});
+
 function serializedRequest(request) {
   return Object.fromEntries(Object.entries(request).map(([key, value]) => [key, typeof value === 'bigint' ? String(value) : value]));
 }

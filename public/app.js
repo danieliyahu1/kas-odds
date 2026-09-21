@@ -169,7 +169,7 @@ function renderLobby({ mode, roomId = null }) {
 // the step the player is actually on. Every action is delegated back to the
 // controller.
 function paintLobby(snapshot, actions) {
-  const { mode, phase, match, number, draft, busy, note, error } = snapshot;
+  const { mode, phase, match, number, draft, busy, note, error, gameCancelled } = snapshot;
   const label = mode === LOBBY_MODE.PUBLIC ? 'Play someone new' : 'Play with a friend';
   const progress = lobbyStage({ phase, mode, match });
   const stageTitle = progress ? progress.title : '';
@@ -290,12 +290,14 @@ function paintLobby(snapshot, actions) {
   }
 
   if (phase === LOBBY_PHASE.ABANDONED) {
+    const friend = mode === LOBBY_MODE.PUBLIC ? 'opponent' : 'friend';
+    const title = gameCancelled ? 'The game was canceled' : `Your ${friend} left`;
     if (mode === LOBBY_MODE.PUBLIC) {
-      paint('Your opponent left', `
+      paint(title, `
         <div class="notice"><strong>No KAS was locked.</strong></div>
         <div class="actions"><a class="primary home-button" href="/rival">Find another player</a></div>`);
     } else {
-      paint('Your friend left', `
+      paint(title, `
         <div class="notice"><strong>No KAS was locked.</strong></div>
         <div class="actions"><a class="primary home-button" href="/host">Start a new game</a></div>`);
     }

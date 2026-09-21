@@ -171,6 +171,7 @@ export class BackendGameService {
     const gameRecord = await this.store.loadGame(id);
     if (!gameRecord) throw new ProtocolError('GAME_NOT_FOUND', 'Game was not found');
     if (gameRecord.join?.transactionId) throw new ProtocolError('GAME_ALREADY_JOINED', 'Another player already joined this game');
+    this.#assertJoinable(gameRecord);
     if (gameRecord.matchId && input.matchId !== gameRecord.matchId) throw new ProtocolError('MATCH_NOT_READY', 'This game belongs to a different matchmaking session');
     if (gameRecord.matchId) await this.#validateMatchJoin(gameRecord.matchId, id, input.joinerAddress);
     const request = deserializeRequest(gameRecord.request);
@@ -237,12 +238,20 @@ export class BackendGameService {
     return { gameId: id, preparedHash: prepared.preparedHash, txJson: prepared.txJson, stakeSompi: String(request.stakeSompi), feeSompi: String(prepared.feeSompi), verification: createTransactionIntent({ action: 'join', txJson: prepared.txJson, feeSompi: prepared.feeSompi }) };
   }
 
-  async submitJoin(gameId, { preparedHash, signedTxJson }) {
+  async submitJoin(gameId, input) {
     const id = validateGameId(gameId);
+    // A join and a creator refund spend the same creator output, so the two
+    // decisions are serialized per game: whichever is accepted first closes the
+    // other path deterministically.
+    return this.#withGameLock(id, () => this.#submitJoinLocked(id, input));
+  }
+
+  async #submitJoinLocked(id, { preparedHash, signedTxJson }) {
     const prepared = await this.store.loadJoinPrepared(preparedHash);
     if (!prepared || prepared.gameId !== id) throw new ProtocolError('PREPARATION_NOT_FOUND', 'Join preparation was not found');
     const gameRecord = await this.store.loadGame(id);
     if (!gameRecord) throw new ProtocolError('GAME_NOT_FOUND', 'Game was not found');
+    this.#assertJoinable(gameRecord);
     if (gameRecord.matchId && prepared.matchId !== gameRecord.matchId) throw new ProtocolError('MATCH_NOT_READY', 'This join does not belong to the matchmaking session');
     // A re-signed creation changes the game id; the prepared join must belong to
     // the game the match is currently pointing at.
@@ -428,6 +437,9 @@ export class BackendGameService {
       try {
         const request = deserializeRequest(record.request);
         let current = await this.#refreshActionState(record);
+        // A creator who cancelled and left the page stops polling, so the
+        // background keeper confirms the refund (and completes the game) here.
+        current = await this.#refreshSafetyState(current);
         if (current.automaticSettlement?.status === 'broadcast') {
           await this.#refreshAutomaticSettlement(current, request);
           continue;
@@ -664,8 +676,12 @@ export class BackendGameService {
     return { gameId: id, preparedHash, txJson, feeSompi: String(funding.feeSompi), action, verification: createTransactionIntent({ action: 'refund', txJson, feeSompi: funding.feeSompi }) };
   }
 
-  async submitSafetyAction(gameId, action, { preparedHash, signedTxJson }) {
+  async submitSafetyAction(gameId, action, input) {
     const id = validateGameId(gameId);
+    return this.#withGameLock(id, () => this.#submitSafetyActionLocked(id, action, input));
+  }
+
+  async #submitSafetyActionLocked(id, action, { preparedHash, signedTxJson }) {
     const prepared = await this.store.loadActionPrepared(preparedHash);
     if (!prepared || prepared.gameId !== id || prepared.action !== action) throw new ProtocolError('PREPARATION_NOT_FOUND', 'Action preparation was not found');
     const gameRecord = await this.store.loadGame(id);
@@ -1114,6 +1130,20 @@ export class BackendGameService {
     const playerIndex = match.players.indexOf(player);
     if (match.status !== 'started' || match.gameId !== gameId || playerIndex === match.creatorIndex) {
       throw new ProtocolError('MATCH_NOT_READY', 'This matchmaking game is not ready for you');
+    }
+  }
+
+  // The app projects confirmed chain state, it does not decide outcomes. A join
+  // is refused only once the creator's refund is confirmed on-chain; a broadcast
+  // refund is not truth, so it never blocks a join and the chain arbitrates any
+  // live race.
+  #assertJoinable(gameRecord) {
+    const confirmedRefund = (gameRecord.safetyActions ?? []).some((item) => item.action === 'creator_refund' && item.status === 'confirmed');
+    const confirmedAutomaticRefund = gameRecord.automaticSettlement
+      && ['refund_open', 'refund_all'].includes(gameRecord.automaticSettlement.action)
+      && gameRecord.automaticSettlement.status === 'confirmed';
+    if (confirmedRefund || confirmedAutomaticRefund || gameRecord.status === 'creator_refunded') {
+      throw new ProtocolError('GAME_CANCELLED', 'The game was canceled');
     }
   }
 

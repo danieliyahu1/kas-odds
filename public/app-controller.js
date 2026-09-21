@@ -304,6 +304,7 @@ export function actionErrorCopy(error) {
     CREATION_PENDING: ['Almost there', "Your opponent's game is still reaching the network. Try again in a moment."],
     CREATION_FAILED: ['The game did not start', "Your opponent's game did not reach the network. No KAS was locked."],
     GAME_EXPIRED: ['This game expired', 'The joining window closed. No KAS was locked.'],
+    GAME_CANCELLED: ['The game was canceled', 'Find another player to play against. No KAS was locked.'],
   }[error?.code] ?? ['Please try again', 'Something went wrong. Please try again in a few seconds. Your game funds remain safe.'];
   return { title: copy[0], message: copy[1] };
 }

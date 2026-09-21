@@ -68,6 +68,7 @@ export function createLobbyController({
   let busy = false;
   let started = false;
   let picking = false;
+  let gameCancelled = false;
 
   const poller = createPollController({ onPoll: () => refreshMatch(), intervalMs: pollIntervalMs, setIntervalFn, clearIntervalFn });
 
@@ -83,7 +84,7 @@ export function createLobbyController({
   }
 
   function snapshot() {
-    return { mode, phase, match, number: selected, draft, busy, note, error };
+    return { mode, phase, match, number: selected, draft, busy, note, error, gameCancelled };
   }
 
   function emit() {
@@ -153,7 +154,12 @@ export function createLobbyController({
   function transitionForMatch() {
     const view = resolveMatchView(match);
     if (view === MATCH_VIEW.REOPEN) { poller.stop(); navigate(`/game?id=${match.gameId}`); return; }
-    if (view === MATCH_VIEW.ABANDONED) poller.stop();
+    if (view === MATCH_VIEW.ABANDONED) {
+      poller.stop();
+      // A match that carried an on-chain game and is now cancelled means that
+      // game is dead, not that the opponent merely walked away.
+      if (match?.gameId) gameCancelled = true;
+    }
     picking = view === MATCH_VIEW.PLAY;
     phase = view === MATCH_VIEW.FINDING ? LOBBY_PHASE.WAITING
       : view === MATCH_VIEW.ABANDONED ? LOBBY_PHASE.ABANDONED
@@ -184,6 +190,13 @@ export function createLobbyController({
     } catch (caught) {
       if (caught?.code !== 'MATCH_NOT_FOUND') return;
       poller.stop();
+      // A started match that disappears means its on-chain game is gone; the only
+      // way that happens before a join is the creator's confirmed refund.
+      if (match?.status === 'started') {
+        gameCancelled = true;
+        phase = LOBBY_PHASE.ABANDONED;
+        return emit();
+      }
       handleLobbyError(caught);
     }
   }
@@ -281,7 +294,8 @@ export function createLobbyController({
   function handleStartError(caught) {
     started = false;
     logError('match_start_failed', { code: caught?.code, message: caught?.message });
-    if (caught?.code === 'MATCH_CANCELLED') {
+    if (caught?.code === 'MATCH_CANCELLED' || caught?.code === 'GAME_CANCELLED') {
+      if (caught?.code === 'GAME_CANCELLED') gameCancelled = true;
       phase = LOBBY_PHASE.ABANDONED;
       return emit();
     }
@@ -305,6 +319,7 @@ export function createLobbyController({
     error = null;
     draft = null;
     picking = false;
+    gameCancelled = false;
     phase = initialPhase();
     emit();
   }

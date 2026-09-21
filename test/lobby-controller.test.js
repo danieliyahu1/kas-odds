@@ -253,6 +253,73 @@ test('an opponent who leaves before the game is created cancels the start', asyn
   assert.equal(harnessed.last().phase, LOBBY_PHASE.ABANDONED);
 });
 
+test('a started game that disappears abandons the joiner while picking', async () => {
+  let gone = false;
+  const harnessed = harness({
+    mode: LOBBY_MODE.GUEST,
+    roomId: 'r1',
+    api: async (url) => {
+      if (url === '/api/matchmaking/r1/join') return joinerMatch({ gameId: GAME_ID, status: 'started' });
+      if (url.startsWith('/api/matchmaking/r1?')) {
+        if (!gone) return joinerMatch({ gameId: GAME_ID, status: 'started' });
+        throw Object.assign(new Error('gone'), { code: 'MATCH_NOT_FOUND' });
+      }
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectGuest();
+  await flush();
+  await flush();
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.PICK);
+
+  gone = true;
+  harnessed.timers[0]();
+  await flush();
+  await flush();
+
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.ABANDONED);
+  assert.equal(harnessed.last().gameCancelled, true);
+});
+
+test('a join refused as cancelled abandons the lobby', async () => {
+  const harnessed = harness({
+    mode: LOBBY_MODE.GUEST,
+    roomId: 'r1',
+    api: async (url) => {
+      if (url === '/api/matchmaking/r1/join') return joinerMatch({ gameId: GAME_ID });
+      if (url === `/api/games/${GAME_ID}/join/prepare`) throw Object.assign(new Error('cancelled'), { code: 'GAME_CANCELLED' });
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectGuest();
+  harnessed.actions.selectNumber(0);
+  await harnessed.actions.play();
+
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.ABANDONED);
+  assert.equal(harnessed.last().gameCancelled, true);
+});
+
+test('an opponent who leaves before a game exists is not a cancelled game', async () => {
+  const harnessed = harness({
+    mode: LOBBY_MODE.GUEST,
+    roomId: 'r1',
+    api: async (url) => {
+      if (url === '/api/matchmaking/r1/join') return joinerMatch({ gameId: null });
+      if (url.startsWith('/api/matchmaking/r1?')) return { ...joinerMatch(), status: 'cancelled', opponentConnected: false };
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectGuest();
+  harnessed.actions.selectNumber(0);
+  await harnessed.actions.play();
+
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.ABANDONED);
+  assert.equal(harnessed.last().gameCancelled, false);
+});
+
 test('a match that is abandoned cancels polling and stops the wait', async () => {
   let abandoned = false;
   const harnessed = harness({
