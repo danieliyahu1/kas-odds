@@ -35,8 +35,8 @@ button { cursor: pointer; }
 .wallet-slot { display: flex; align-items: center; gap: 10px; }
 .wallet-address { display: inline-flex; align-items: center; gap: 7px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; font-weight: 700; letter-spacing: .01em; transition: color .15s ease; }
 .wallet-address:hover { color: var(--teal); }
-.wallet-button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border: 1px solid rgba(233,241,239,.24); border-radius: 999px; background: transparent; color: var(--text); font-size: 12px; font-weight: 700; letter-spacing: .01em; transition: border-color .15s ease, background .15s ease, color .15s ease; }
-.wallet-button:hover { border-color: var(--teal); color: var(--teal); }
+.wallet-button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--text); font-size: 12px; font-weight: 700; letter-spacing: .01em; transition: background .15s ease, color .15s ease; }
+.wallet-button:hover { color: var(--teal); }
 .wallet-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal-bright); box-shadow: 0 0 0 3px rgba(73,234,203,.2); }
 .wallet-notice { position: fixed; top: 74px; right: clamp(18px, 5vw, 64px); width: min(100% - 36px, 360px); z-index: 20; }
 .wallet-notice:empty { display: none; }
@@ -165,8 +165,8 @@ a.proof-tx:hover { text-decoration: underline; }
 .result.winner .proof-heading, .result.winner .proof-label { color: rgba(6,32,29,.72); }
 .result.winner .proof-tx { color: var(--teal-deep); }
 
-.feedback-button, .telegram-button, .github-button { display: inline-flex; align-items: center; padding: 7px 14px; border: 1px solid rgba(233,241,239,.24); border-radius: 999px; background: transparent; color: var(--text); font-size: 12px; font-weight: 800; letter-spacing: .01em; transition: background .15s ease, border-color .15s ease, color .15s ease; }
-.feedback-button:hover, .telegram-button:hover, .github-button:hover { border-color: var(--teal); background: rgba(112,199,186,.14); color: var(--teal); }
+.feedback-button, .telegram-button, .github-button { display: inline-flex; align-items: center; padding: 7px 14px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--text); font-size: 12px; font-weight: 800; letter-spacing: .01em; transition: background .15s ease, color .15s ease; }
+.feedback-button:hover, .telegram-button:hover, .github-button:hover { color: var(--teal); }
 a.telegram-button, a.github-button { text-decoration: none; padding: 7px; }
 a.telegram-button svg, a.github-button svg { display: block; width: 16px; height: 16px; }
 .feedback-dialog { width: min(100% - 32px, 440px); max-height: min(100% - 48px, 520px); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); padding: 0; }
