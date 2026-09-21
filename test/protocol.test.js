@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseInvite, serializeInvite } from '../src/invite.js';
+import { prepareJoinGame } from '../src/join-game.js';
 import { MemoryGameStore, prepareCreateGame } from '../src/create-game.js';
-import { ProtocolError, stakeToSompi, playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, validateGameFeeAddress, resolveGameFeePublicKey } from '../src/protocol.js';
+import { ProtocolError, stakeToSompi, playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, resolveEconomics, covenantValueSompi, validateStakeInput, validateGameFeeAddress, resolveGameFeePublicKey } from '../src/protocol.js';
 import { bech32Encode } from '../src/hashes/bech32.mjs';
 import { KaspaCreationConfirmer, submitSignedTransaction } from '../src/kaspa-adapter.js';
 import { KaswareWalletAdapter, waitForKaswareProvider } from '../src/kasware-wallet.js';
@@ -27,13 +28,54 @@ const feeAddress = bech32Encode('kaspatest', 0, Buffer.from(feePublicKey, 'hex')
 test('converts KAS to exact sompi without floating point', () => {
   assert.equal(stakeToSompi(1), 100_000_000n);
   assert.equal(stakeToSompi(1_000_000), 100_000_000_000_000n);
-  assert.throws(() => stakeToSompi(1.5), { code: 'INVALID_STAKE' });
+  // Fractions are allowed from 1 KAS up, down to the sompi (8 decimals).
+  assert.equal(stakeToSompi(1.5), 150_000_000n);
+  assert.equal(stakeToSompi(1.00000001), 100_000_001n);
+  assert.equal(stakeToSompi(60.5), 6_050_000_000n);
+  assert.equal(stakeToSompi('1.00000001'), 100_000_001n);
+  // Zero and sub-1 KAS are not valid stakes; every game is a staked game.
+  assert.throws(() => stakeToSompi(0), { code: 'INVALID_STAKE' });
+  assert.throws(() => stakeToSompi(0.5), { code: 'INVALID_STAKE' });
   assert.throws(() => stakeToSompi(1_000_001), { code: 'INVALID_STAKE' });
+  assert.throws(() => stakeToSompi(Number.NaN), { code: 'INVALID_STAKE' });
+  // More than eight decimals has no exact sompi value, so it is rejected rather
+  // than silently rounded to a different wager.
+  assert.throws(() => stakeToSompi(1.000000001), { code: 'INVALID_STAKE' });
+  assert.throws(() => stakeToSompi(1.123456789), { code: 'INVALID_STAKE' });
+  assert.throws(() => stakeToSompi('1.123456789'), { code: 'INVALID_STAKE' });
+  // Trailing zeros do not count as extra precision.
+  assert.equal(stakeToSompi(1.5), stakeToSompi(1.500000000));
 });
 
 test('rejects a per-player stake below 1 KAS', () => {
   assert.throws(() => playerLockSompi(99_999_999n), { code: 'INVALID_STAKE' });
   assert.equal(playerLockSompi(100_000_000n), 100_000_000n);
+  // Pot, fee, and payout helpers inherit the same minimum, so no downstream
+  // value can be derived from a sub-1-KAS stake.
+  assert.throws(() => grossPotSompi(99_999_999n), { code: 'INVALID_STAKE' });
+  assert.throws(() => gameFeeSompi(99_999_999n), { code: 'INVALID_STAKE' });
+  assert.throws(() => winnerPayoutSompi(99_999_999n), { code: 'INVALID_STAKE' });
+});
+
+test('validates a positive staked amount and rejects zero', () => {
+  assert.equal(validateStakeInput(3), 3);
+  assert.equal(validateStakeInput(1.5), 1.5);
+  assert.throws(() => validateStakeInput(0), { code: 'INVALID_STAKE' });
+  assert.throws(() => validateStakeInput(0.5), { code: 'INVALID_STAKE' });
+});
+
+test('economics derive the pot, fee, and payout from the stake alone', () => {
+  const stake = 100_000_000n;
+  const economics = resolveEconomics({ stakeSompi: stake });
+  assert.equal(economics.stakeSompi, stake);
+  assert.equal(economics.lockSompi, stake);
+  assert.equal(economics.potSompi, grossPotSompi(stake));
+  assert.equal(economics.gameFeeSompi, gameFeeSompi(stake));
+  assert.equal(economics.settlementPayoutSompi, winnerPayoutSompi(stake));
+  assert.equal(economics.payoutRole, 'winner');
+  assert.equal(covenantValueSompi({ stakeSompi: stake }), stake);
+  // A zero stake cannot be escrowed.
+  assert.throws(() => resolveEconomics({ stakeSompi: 0n }), { code: 'INVALID_STAKE' });
 });
 
 test('uses the full stake as each lock and waives fees below a 100 KAS pot', () => {
@@ -130,6 +172,18 @@ test('serializes and parses an invite carrying the full creation state', () => {
   assert.deepEqual(parsed.creation, creation);
   assert.deepEqual(parsed.gameId, gameId);
   assert.throws(() => parseInvite(`${invite}&zz=1`, 'https://example.test', 'testnet-10'), { code: 'INVALID_INVITE' });
+});
+
+test('prepareJoinGame accepts the invite stake and rejects a sub-1-KAS override', () => {
+  const gameId = 'b'.repeat(64);
+  const creation = { creatorPublicKey: '07'.repeat(32), creatorCommitment: '09'.repeat(32), side: 'even', stakeKas: 5, deadlineDaa: 500000000123n, creatorAddress: 'kaspatest:creator' };
+  const invite = serializeInvite({ gameId, origin: 'https://example.test/create', creation, network: 'testnet-10' });
+  const base = { invite, expectedOrigin: 'https://example.test', network: 'testnet-10', joinerAddress: 'kaspatest:joiner', joinerPublicKey: '08'.repeat(32), joinerCommitment: '0a'.repeat(32), currentDaaScore: 1n };
+  assert.equal(prepareJoinGame({ ...base, stakeKas: 5 }).stakeSompi, 500_000_000n);
+  assert.equal(prepareJoinGame({ ...base, stakeSompi: 500_000_000n }).stakeSompi, 500_000_000n);
+  assert.throws(() => prepareJoinGame({ ...base, stakeSompi: 99_999_999n }), { code: 'INVALID_STAKE' });
+  assert.throws(() => prepareJoinGame({ ...base, stakeSompi: 0n }), { code: 'INVALID_STAKE' });
+  assert.throws(() => prepareJoinGame({ ...base, stakeKas: 0.5 }), { code: 'INVALID_STAKE' });
 });
 
 test('confirms creation before producing an invite', async () => {

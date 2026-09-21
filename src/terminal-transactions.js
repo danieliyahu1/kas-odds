@@ -1,4 +1,4 @@
-import { playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, automaticFallbackPayoutSompi, AUTOMATION_FEE_SOMPI, ProtocolError } from './protocol.js';
+import { playerLockSompi, resolveEconomics, AUTOMATION_FEE_SOMPI, ProtocolError } from './protocol.js';
 import { getCovenantTemplate } from './covenant/template.mjs';
 import { hexToBytes, bytesToHex } from './hashes/hex.mjs';
 import {
@@ -34,7 +34,8 @@ export function prepareFallbackClaimTransaction({ game, caller, currentDaaScore,
   const decision = resolveFallbackClaim({ game, caller, currentDaaScore });
   if (!decision.available) throw new ProtocolError('ACTION_UNAVAILABLE', decision.message);
   if (typeof walletPublicKey !== 'string' || walletPublicKey.length === 0) throw new ProtocolError('INVALID_TRANSACTION', 'Game wallet public key is required');
-  const gameFee = gameFeeSompi(game.stakeSompi);
+  const economics = resolveEconomics(game);
+  const gameFee = economics.gameFeeSompi;
   if (gameFee > 0n && (typeof feeScriptPublicKey !== 'string' || feeScriptPublicKey.length === 0)) throw new ProtocolError('INVALID_TRANSACTION', 'Game fee script public key is required');
   return prepareCovenantOnlyTransaction({
     action: TERMINAL_ENTRIES.fallbackClaim,
@@ -42,7 +43,7 @@ export function prepareFallbackClaimTransaction({ game, caller, currentDaaScore,
     inputSequence: FALLBACK_CLAIM_DAA_OFFSET,
     args: [publicKey, walletPublicKey],
     outputs: [
-      { value: automaticFallbackPayoutSompi(game.stakeSompi), scriptPublicKey: recipientScriptPublicKey },
+      { value: economics.automaticFallbackPayoutSompi, scriptPublicKey: recipientScriptPublicKey },
       ...(gameFee > 0n ? [{ value: gameFee, scriptPublicKey: feeScriptPublicKey }] : []),
     ],
   });
@@ -65,7 +66,7 @@ export function prepareRefundAllTransaction({ gameInput, stakeSompi, creatorPubl
 export function prepareOpenRefundTransaction({ gameInput, stakeSompi, settleFeeSompi, deadlineDaa, creatorPublicKey }) {
   const stake = playerLockSompi(BigInt(stakeSompi));
   const fee = BigInt(settleFeeSompi);
-  if (fee <= 0n || fee >= stake) throw new ProtocolError('INVALID_TRANSACTION', 'Open refund fee must be smaller than the stake');
+  if (fee <= 0n || fee >= stake) throw new ProtocolError('INVALID_TRANSACTION', 'Open refund fee must be smaller than the covenant lock');
   return prepareCovenantOnlyTransaction({
     action: TERMINAL_ENTRIES.refundOpen,
     gameInput,
@@ -82,11 +83,12 @@ export function prepareOpenRefundTransaction({ gameInput, stakeSompi, settleFeeS
 export function prepareRevealTransaction({ game, caller, currentDaaScore, secret, gameInput, recipientScriptPublicKey, continuationScriptPublicKey, continuationCovenant, feeInputs = [], feeSompi = 0n, change, publicKey, payoutPublicKey = publicKey, walletPublicKey, feeScriptPublicKey }) {
   const decision = resolveReveal({ game, caller, currentDaaScore, secret });
   if (!decision.available) throw new ProtocolError('ACTION_UNAVAILABLE', decision.message);
+  const economics = resolveEconomics(game);
   const isFirstReveal = !game.firstReveal;
   if (isFirstReveal && (typeof continuationScriptPublicKey !== 'string' || continuationScriptPublicKey.length === 0 || !continuationCovenant)) {
     throw new ProtocolError('INVALID_TRANSACTION', 'Reveal continuation script public key is required');
   }
-  const gameFee = isFirstReveal ? 0n : gameFeeSompi(game.stakeSompi);
+  const gameFee = isFirstReveal ? 0n : economics.gameFeeSompi;
   if (!isFirstReveal && (typeof recipientScriptPublicKey !== 'string' || recipientScriptPublicKey.length === 0 || (gameFee > 0n && (typeof feeScriptPublicKey !== 'string' || feeScriptPublicKey.length === 0)))) {
     throw new ProtocolError('INVALID_TRANSACTION', 'Winner and game fee script public keys are required');
   }
@@ -95,7 +97,7 @@ export function prepareRevealTransaction({ game, caller, currentDaaScore, secret
   }
   const revealArgs = [publicKey, { type: 'int', value: decision.choice }, decision.nonceHex, payoutPublicKey, walletPublicKey];
   if (isFirstReveal) {
-    const continued = grossPotSompi(game.stakeSompi);
+    const continued = economics.potSompi;
     return prepareTerminalTransaction({
       action: TERMINAL_ENTRIES.reveal,
       gameInput,
@@ -113,7 +115,7 @@ export function prepareRevealTransaction({ game, caller, currentDaaScore, secret
     action: TERMINAL_ENTRIES.reveal,
     gameInput,
     args: revealArgs,
-    payoutValue: winnerPayoutSompi(game.stakeSompi),
+    payoutValue: economics.settlementPayoutSompi,
     recipientScriptPublicKey,
     extraOutputs: gameFee > 0n ? [{ value: gameFee, scriptPublicKey: feeScriptPublicKey }] : [],
     feeInputs,
@@ -193,16 +195,17 @@ export function validateRevealTemplate({ game, caller, currentDaaScore, secret, 
     throw new ProtocolError('INVALID_REVEAL', 'Reveal preimage does not match commitment');
   }
   const tx = parseTransaction(transaction);
+  const economics = resolveEconomics(game);
   if (!game.firstReveal) {
-    assertRevealContinuation(tx, grossPotSompi(game.stakeSompi));
+    assertRevealContinuation(tx, economics.potSompi);
   } else {
     const winner = parityOutcome({
       creatorChoice: caller === 'creator' ? decision.choice : game.creatorChoice,
       joinerChoice: caller === 'joiner' ? decision.choice : game.joinerChoice,
       creatorEven: game.creatorEven,
     });
-    assertSinglePayout(tx, winnerPayoutSompi(game.stakeSompi), game.participants?.[winner]?.scriptPublicKey, 'winner payout');
-    assertGameFeeOutput(tx, gameFeeSompi(game.stakeSompi));
+    assertSinglePayout(tx, economics.settlementPayoutSompi, game.participants?.[winner]?.scriptPublicKey, 'winner payout');
+    assertGameFeeOutput(tx, economics.gameFeeSompi);
   }
   assertFeeSeparated(tx);
   return tx;

@@ -152,6 +152,8 @@ function buildStateScript(game) {
   const creatorCommit = normalizeBytes(game.creatorCommit, 32, 'creatorCommit');
   const joinerPubkey = game.joinerPubkey === undefined ? null : normalizeBytes(game.joinerPubkey, 32, 'joinerPubkey');
   const joinerCommit = game.joinerCommit === undefined ? ZERO32 : normalizeBytes(game.joinerCommit, 32, 'joinerCommit');
+  // The state carries the per-player stake. The covenant requires at least
+  // 1 KAS in every entry, so a sub-1-KAS instance is impossible by script rule.
   if (typeof game.stakeSompi !== 'bigint' || game.stakeSompi < MIN_STAKE_SOMPI) {
     throw new ProtocolError('INVALID_STATE', 'stakeSompi must be at least 1 KAS');
   }

@@ -14,6 +14,20 @@ players are matched: the creator signs the creation transaction first, then the
 matched opponent signs the join. The invite carries no secret, commitment
 preimage, wallet key, or transaction template.
 
+## Stakes
+
+Every game is a **staked** game: both players wager the same amount, and the
+winner takes the pot. A stake may be any amount from `1` to `1,000,000 KAS`,
+fractions included down to the sompi (eight decimal places). Zero and anything
+below `1` KAS is rejected — there is no free-play mode.
+
+The covenant enforces the minimum on-chain, not just the app: every entry
+requires `stake >= 1 KAS`. Both players fund their own escrow, so the joined
+covenant holds `grossPot = stake * 2`. For a pot of at least 100 KAS, 1% goes to
+the game wallet and the winner receives the remainder; smaller pots pay the
+winner in full. The game fee is never charged without a winner.
+
+
 ## Current boundary
 
 - `src/network.js` is the single runtime registry of supported Kaspa networks.

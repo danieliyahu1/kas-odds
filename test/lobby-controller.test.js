@@ -77,12 +77,45 @@ test('the lobby opens on the phase that matches how the player arrived', () => {
 test('an invalid stake is rejected before the wallet is touched, keeping the typed value', () => {
   const harnessed = harness();
   harnessed.controller.start();
+  harnessed.actions.connectLimit('1000001');
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.LIMIT);
+  assert.equal(harnessed.last().note.kind, 'error');
+  assert.equal(harnessed.last().draft, '1000001');
+  assert.equal(harnessed.connectedCount(), 0);
+  assert.deepEqual(harnessed.urls(), []);
+});
+
+test('a zero limit is rejected before the wallet is touched', () => {
+  const harnessed = harness();
+  harnessed.controller.start();
   harnessed.actions.connectLimit('0');
   assert.equal(harnessed.last().phase, LOBBY_PHASE.LIMIT);
   assert.equal(harnessed.last().note.kind, 'error');
   assert.equal(harnessed.last().draft, '0');
   assert.equal(harnessed.connectedCount(), 0);
   assert.deepEqual(harnessed.urls(), []);
+});
+
+test('a sub-1 KAS stake is rejected, but a fractional stake is accepted', async () => {
+  const harnessed = harness();
+  harnessed.controller.start();
+  harnessed.actions.connectLimit('0.5');
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.LIMIT);
+  assert.equal(harnessed.last().note.kind, 'error');
+  assert.equal(harnessed.last().draft, '0.5');
+  assert.equal(harnessed.connectedCount(), 0);
+  assert.deepEqual(harnessed.urls(), []);
+
+  const accepted = harness({
+    api: async (url) => {
+      if (url === '/api/matchmaking/join') return waitingMatch();
+      return {};
+    },
+  });
+  accepted.controller.start();
+  await accepted.actions.connectLimit('1.5');
+  assert.equal(accepted.last().phase, LOBBY_PHASE.WAITING);
+  assert.equal(accepted.connectedCount(), 1);
 });
 
 test('a public match waits, then flips to the pick screen once paired', async () => {

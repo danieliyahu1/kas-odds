@@ -1,4 +1,4 @@
-import { gameFeeSompi, winnerPayoutSompi, ProtocolError } from './protocol.js';
+import { resolveEconomics, MIN_STAKE_SOMPI, ProtocolError } from './protocol.js';
 
 // Kaspa mainnet and testnet-10 both target 10 BPS. The PRD's five-minute waits
 // therefore pin to 300 seconds * 10 DAA-score increments per second.
@@ -90,15 +90,16 @@ export function validateFallbackClaimTemplate({ game, caller, currentDaaScore, t
   if (!resolved.available) throw new ProtocolError('ACTION_UNAVAILABLE', resolved.message);
   const tx = parseTransaction(transaction);
   const player = state.participants[caller];
-  assertSinglePayout(tx, winnerPayoutSompi(state.stakeSompi), player.scriptPublicKey, 'fallback claim payout');
-  assertGameFeeOutput(tx, gameFeeSompi(state.stakeSompi));
+  const economics = resolveEconomics(state);
+  assertSinglePayout(tx, economics.settlementPayoutSompi, player.scriptPublicKey, 'fallback claim payout');
+  assertGameFeeOutput(tx, economics.gameFeeSompi);
   assertFeeSeparated(tx);
   return tx;
 }
 
 function normalizeGameState(game) {
   if (!game || typeof game !== 'object') throw new ProtocolError('INVALID_GAME_STATE', 'Game state is required');
-  const stakeSompi = normalizePositiveBigInt(game.stakeSompi, 'stake sompi');
+  const stakeSompi = normalizeStakeSompi(game.stakeSompi);
   const potSompi = normalizePositiveBigInt(game.potSompi, 'pot sompi');
   const participants = normalizeParticipants(game.participants);
   const players = Object.keys(participants);
@@ -207,4 +208,12 @@ function normalizeDaa(value, name) {
   if (typeof value === 'bigint' && value >= 0n) return value;
   if (typeof value === 'string' && /^(0|[1-9][0-9]*)$/.test(value)) return BigInt(value);
   throw new ProtocolError('INVALID_GAME_STATE', `${name} must be a non-negative integer`);
+}
+
+// The covenant requires at least 1 KAS in every entry, so a game state with a
+// smaller stake can never be valid.
+function normalizeStakeSompi(value) {
+  if (typeof value === 'bigint' && value >= MIN_STAKE_SOMPI) return value;
+  if (typeof value === 'string' && /^[0-9]+$/.test(value) && BigInt(value) >= MIN_STAKE_SOMPI) return BigInt(value);
+  throw new ProtocolError('INVALID_GAME_STATE', 'stake sompi must be at least 1 KAS');
 }

@@ -47,6 +47,21 @@ test('matchmaking pairs wallets at the lower limit and assigns each a role and s
   assert.equal(firstStatus.role === 'creator' ? 'joiner' : 'creator', second.role);
 });
 
+test('matchmaking accepts fractional stakes and still takes the lower limit', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const service = new BackendGameService(serviceOptions(new BackendGameStore(join(directory, 'games.json'))));
+  const first = await service.joinMatchmaking({ address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 4 });
+  assert.equal(first.status, 'waiting');
+  const second = await service.joinMatchmaking({ address: 'kaspatest:second', publicKey: 'b'.repeat(64), limitKas: 1.5 });
+  assert.equal(second.status, 'matched');
+  assert.equal(second.stakeKas, 1.5);
+  assert.equal(second.myLimitKas, 1.5);
+  // Sub-1 KAS amounts, including zero, are rejected.
+  await assert.rejects(service.joinMatchmaking({ address: 'kaspatest:low', publicKey: 'c'.repeat(64), limitKas: 0.5 }), { code: 'INVALID_STAKE' });
+  await assert.rejects(service.joinMatchmaking({ address: 'kaspatest:zero', publicKey: 'c'.repeat(64), limitKas: 0 }), { code: 'INVALID_STAKE' });
+});
+
 test('only the match creator may start the game, with the assigned side and agreed stake', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -76,7 +91,7 @@ test('stake acceptance requires an active pair and the agreed lower limit', asyn
   assert.equal(first.stakeKas, null);
   const second = await service.joinMatchmaking({ address: 'kaspatest:second', publicKey: 'b'.repeat(64), limitKas: 8 });
   assert.equal(second.stakeKas, 4);
-  // Limits are validated as whole KAS amounts from 1 to 1,000,000.
+  // Limits are validated as KAS amounts from 1 to 1,000,000; zero is rejected.
   await assert.rejects(service.joinMatchmaking({ address: 'kaspatest:zero', publicKey: 'c'.repeat(64), limitKas: 0 }), { code: 'INVALID_STAKE' });
   await assert.rejects(service.joinMatchmaking({ address: 'kaspatest:huge', publicKey: 'd'.repeat(64), limitKas: 1_000_001 }), { code: 'INVALID_STAKE' });
 });
@@ -100,7 +115,8 @@ test('a friend room pairs the invited wallets at the host stake and assigned sid
   // Reconnecting is idempotent, and the seat is single-use.
   assert.equal((await service.joinRoom(host.matchId, { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) })).matchId, host.matchId);
   await assert.rejects(service.joinRoom(host.matchId, { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_FULL' });
-  await assert.rejects(service.createRoom({ address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 0 }), { code: 'INVALID_STAKE' });
+  // A zero stake is rejected: a room must have a positive stake.
+  await assert.rejects(service.createRoom({ address: 'kaspatest:freehost', publicKey: 'f'.repeat(64), stakeKas: 0 }), { code: 'INVALID_STAKE' });
 
   // Only the host creates, using the room's fixed stake and assigned side.
   const hostView = await service.matchmakingStatus(host.matchId, 'kaspatest:host');

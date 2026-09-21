@@ -38,15 +38,15 @@ export function prepareCreateGame({
   const deadline = normalizePositiveBigInt(deadlineDaa, 'deadline DAA score');
   const feePublicKey = normalizePublicKey(validateGameFeePublicKey(gameFeePublicKey), 'game fee public key');
   const gameWalletHash = bytesToHex(blake2b256(hexToBytes(feePublicKey))).toLowerCase();
-    const covenant = deriveGameInstance({
+  const covenant = deriveGameInstance({
     creatorPubkey: publicKey,
     creatorCommit: commitment,
     stakeSompi,
-     deadlineDaa: deadline,
-     creatorEven: side === 'even',
+    deadlineDaa: deadline,
+    creatorEven: side === 'even',
     gameWalletHash,
     settleFee: AUTOMATION_FEE_SOMPI,
-  }, { addressPrefix: resolveNetworkProfile(network).addressPrefix });
+  }, { addressPrefix: resolveNetworkProfile(network).addressPrefix, template: KASODDS_TEMPLATE });
   return Object.freeze({
     protocolVersion: PROTOCOL_VERSION,
     network,
@@ -54,6 +54,7 @@ export function prepareCreateGame({
     side,
     creatorEven: side === 'even',
     stakeSompi,
+    covenantValueSompi: stakeSompi,
     feeSompi,
     gameFeePublicKey: feePublicKey,
     gameWalletHash,

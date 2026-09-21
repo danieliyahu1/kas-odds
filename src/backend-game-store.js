@@ -1,7 +1,7 @@
 import { access, mkdir, readFile, rename, unlink, writeFile, constants } from 'node:fs/promises';
 import { randomInt } from 'node:crypto';
 import { dirname } from 'node:path';
-import { ProtocolError } from './protocol.js';
+import { ProtocolError, MIN_STAKE_KAS } from './protocol.js';
 import { GAME_RESULT_RETENTION_MS } from './terminal-actions.js';
 import { noopMetrics } from './metrics.js';
 
@@ -159,7 +159,7 @@ export class BackendGameStore {
       const waiting = data.queue
         .map((matchId) => data.matches[matchId])
         .find((match) => match?.status === 'waiting' && !match.private);
-      const limitKas = Number.isInteger(player.limitKas) ? player.limitKas : DEFAULT_LIMIT_KAS;
+      const limitKas = Number.isFinite(player.limitKas) && player.limitKas >= MIN_STAKE_KAS ? player.limitKas : DEFAULT_LIMIT_KAS;
       const participant = participantRecord(player, limitKas);
       if (!waiting) {
         const match = { matchId: player.matchId, status: 'waiting', players: [participant], stakeKas: null, createdAt: participant.joinedAt };

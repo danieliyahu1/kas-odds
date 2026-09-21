@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION, ProtocolError, validateGameId, validateNetwork, validateSide, stakeToSompi, MIN_STAKE_KAS, MAX_STAKE_KAS } from './protocol.js';
+import { PROTOCOL_VERSION, ProtocolError, validateGameId, validateNetwork, validateSide, stakeToSompi, MAX_STAKE_KAS } from './protocol.js';
 
 const PATH = '/join';
 const KNOWN_KEYS = ['v', 'game', 'pk', 'c', 's', 'k', 'd', 'a'];
@@ -60,8 +60,8 @@ export function parseInvite(rawUrl, expectedOrigin, network) {
 }
 
 function validateStake(value) {
-  if (!Number.isInteger(value) || value < MIN_STAKE_KAS || value > MAX_STAKE_KAS) {
-    throw new ProtocolError('INVALID_STAKE', `Stake must be an integer from ${MIN_STAKE_KAS} to ${MAX_STAKE_KAS} KAS`);
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > MAX_STAKE_KAS) {
+    throw new ProtocolError('INVALID_STAKE', `Stake must be from 1 to ${MAX_STAKE_KAS} KAS`);
   }
   stakeToSompi(value);
   return value;

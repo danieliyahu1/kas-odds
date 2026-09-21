@@ -224,3 +224,4 @@ test('automatic settlement requires no wallet signing', () => {
   assert.equal(transaction.inputs.length, 1);
   assert.match(transaction.inputs[0].signatureScript, /0e2b436c$/);
 });
+

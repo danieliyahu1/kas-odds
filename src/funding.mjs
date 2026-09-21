@@ -1,15 +1,11 @@
 // Isomorphic funding estimation for covenant transactions. Selects ordinary
 // (non-covenant) wallet UTXOs to cover the stake and fee, and reports the
 // change output. Used by the Node chain adapter and by the browser client.
-import { ProtocolError, playerLockSompi } from './protocol.js';
+import { ProtocolError, covenantValueSompi } from './protocol.js';
 import { estimateCreationFee, selectOrdinaryUtxos, CREATION_MASS_BOUND } from './fee-policy.js';
 
 export function estimateFunding({ request, entries, feerate, feeOptions }) {
-  const stakeSompi = request.stakeSompi;
-  if (typeof stakeSompi !== 'bigint' || stakeSompi <= 0n) {
-    throw new ProtocolError('INVALID_GAME_VALUE', 'Game stake must be positive sompi');
-  }
-  const lock = playerLockSompi(stakeSompi);
+  const lock = covenantValueSompi(request);
   const committedFee = request.feeSompi;
   if (typeof committedFee !== 'bigint' || committedFee < 0n) {
     throw new ProtocolError('INVALID_FEE', 'Committed fee must be non-negative sompi');

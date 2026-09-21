@@ -189,14 +189,15 @@ function paintLobby(snapshot, actions) {
 
   if (phase === LOBBY_PHASE.LIMIT) {
     paint('Play someone new', `
-      <p class="lead">Set the most you'll play. We match you with one player &mdash; the lower of your two limits is the stake.</p>
+      <p class="lead">Set your limit. We match you with one player &mdash; the lower of your two limits is the stake.</p>
       <div class="stake-block">
         <div class="stake-label-row"><label for="match-limit">Play up to (KAS)</label></div>
-        <input id="match-limit" type="number" min="1" max="1000000" step="1" value="${escapeHtml(draft ?? '1')}" class="stake-input" aria-label="Play up to in KAS">
-        <p class="fate">You'll never play for more than this.</p>
+        <input id="match-limit" type="number" min="1" max="1000000" step="any" inputmode="decimal" value="${escapeHtml(draft ?? '1')}" class="stake-input" aria-label="Play up to in KAS">
+        <p class="fate" id="match-fate"></p>
       </div>
       ${notice}
       ${startButton}Find a player</button></div>`);
+    wireStakeFate({ inputId: 'match-limit', fateId: 'match-fate', mode: 'limit' });
     bindStart(() => void actions.connectLimit(document.querySelector('#match-limit').value));
     return;
   }
@@ -206,17 +207,13 @@ function paintLobby(snapshot, actions) {
       <p class="lead">Set the stake, then share the link. You'll both pick a number once your friend joins.</p>
       <div class="stake-block">
         <div class="stake-label-row"><label for="host-stake">Stake (KAS)</label></div>
-        <input id="host-stake" type="number" min="1" max="1000000" step="1" value="${escapeHtml(draft ?? '1')}" class="stake-input" aria-label="Stake in KAS">
-        <p class="fate">Winner takes the <span id="host-pot">2 KAS</span> pot.</p>
+        <input id="host-stake" type="number" min="1" max="1000000" step="any" inputmode="decimal" value="${escapeHtml(draft ?? '1')}" class="stake-input" aria-label="Stake in KAS">
+        <p class="fate" id="host-fate"></p>
       </div>
       ${notice}
       ${startButton}Create invite</button></div>`);
-    const stakeInput = document.querySelector('#host-stake');
-    stakeInput.addEventListener('input', () => {
-      const shown = Math.min(1000000, Math.max(1, Math.floor(Number(stakeInput.value) || 1)));
-      document.querySelector('#host-pot').textContent = `${shown * 2} KAS`;
-    });
-    bindStart(() => void actions.connectHost(stakeInput.value));
+    wireStakeFate({ inputId: 'host-stake', fateId: 'host-fate', mode: 'host' });
+    bindStart(() => void actions.connectHost(document.querySelector('#host-stake').value));
     return;
   }
 
@@ -286,8 +283,7 @@ function paintLobby(snapshot, actions) {
   }
 
   if (phase === LOBBY_PHASE.WALLET) {
-    paint(stageTitle, `
-      ${lockedNumber}
+    paint(stageTitle, `${lockedNumber}
       <p class="lead">Approve <strong>${escapeHtml(lockKas(match.stakeKas))} KAS</strong>.</p>
       <p class="muted-note">Your stake stays locked until the game ends.</p>`);
     return;
@@ -665,7 +661,7 @@ function resultOverlay(game, role) {
   const joinerPick = displayPick(game.revealedPicks?.joiner);
   const resultTitle = role === 'creator' || role === 'joiner'
     ? `${won ? 'You won ' : 'You lost '}<strong>${escapeHtml(game.stakeKas * 2)} KAS</strong>.`
-    : `<strong>${capitalize(winnerSideName(game))}</strong> took the pot.`;
+    : `<strong>${capitalize(winnerSideName(game))}</strong> took the round.`;
   return `
     <div class="result ${won ? 'winner' : 'loser'}">
       <p class="result-title">${resultTitle}</p>
@@ -1068,11 +1064,34 @@ function isRoomId(value) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 function formatKas(sompi) { return (Number(sompi) / 100_000_000).toFixed(8).replace(/0+$/, '').replace(/\.$/, ''); }
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]); }
 function lockKas(stakeKas) { return Number(stakeKas); }
-function winnerKas(stakeKas) { const pot = Number(stakeKas) * 2; return pot - platformFeeKas(stakeKas); }
-// The covenant charges `gross_pot / 100` with integer division, so the fee is a
-// floored percent of the pot; the app must floor too or it will promise more
-// than the winner actually receives.
-function platformFeeKas(stakeKas) { const pot = Number(stakeKas) * 2; return pot >= 100 ? Math.floor(pot / 100) : 0; }
+
+// Shows what the entered amount buys as the player types, so the stake and the
+// prize stay one consistent answer on screen.
+function wireStakeFate({ inputId, fateId, mode }) {
+  const input = document.querySelector(`#${inputId}`);
+  const fate = document.querySelector(`#${fateId}`);
+  if (!input || !fate) return;
+  const update = () => {
+    const amount = Number(input.value);
+    if (mode === 'host') {
+      const pot = Number.isFinite(amount) && amount >= 1 ? roundKas(amount * 2) : 2;
+      fate.textContent = `Winner takes the ${pot} KAS pot.`;
+    } else {
+      fate.textContent = '1 KAS minimum.';
+    }
+  };
+  update();
+  input.addEventListener('input', update);
+}
+
+// Stakes may be fractional, so the display is computed in sompi (the covenant's
+// unit) and converted back, never in floating-point KAS. The covenant charges
+// `gross_pot / 100` with integer division once the pot reaches 100 KAS.
+function roundKas(value) { return Math.round(Number(value) * 100_000_000) / 100_000_000; }
+function potSompi(stakeKas) { return BigInt(Math.round(Number(stakeKas) * 2 * 100_000_000)); }
+function feeSompi(stakeKas) { const pot = potSompi(stakeKas); return pot >= 10_000_000_000n ? pot / 100n : 0n; }
+function winnerKas(stakeKas) { return Number(potSompi(stakeKas) - feeSompi(stakeKas)) / 100_000_000; }
+function platformFeeKas(stakeKas) { return Number(feeSompi(stakeKas)) / 100_000_000; }
 let cachedConfig = null;
 async function gameFeePublicKey() {
   if (!cachedConfig) cachedConfig = await api('/api/config');

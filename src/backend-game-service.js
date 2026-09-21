@@ -8,7 +8,7 @@ import { parityOutcome, verifyRevealPreimage } from './reveal.js';
 import { createTransactionIntent } from './transaction-intent.js';
 import { blake2b256 } from './hashes/blake2b.mjs';
 import { FALLBACK_CLAIM_DAA_OFFSET, FIVE_MINUTE_DAA_OFFSET, NO_REVEAL_REFUND_DAA_OFFSET, DAA_PER_SECOND, safetyReadiness } from './terminal-actions.js';
-import { playerLockSompi, grossPotSompi, gameFeeSompi, winnerPayoutSompi, automaticFallbackPayoutSompi, automaticRefundPayoutSompi, AUTOMATION_FEE_SOMPI, MIN_STAKE_KAS, stakeToSompi, PROTOCOL_VERSION, ProtocolError, UNCONFIRMED_INPUT_DAA_SCORE, validateGameFeePublicKey, validateGameId } from './protocol.js';
+import { resolveEconomics, AUTOMATION_FEE_SOMPI, PROTOCOL_VERSION, ProtocolError, UNCONFIRMED_INPUT_DAA_SCORE, validateGameFeePublicKey, validateGameId } from './protocol.js';
 import { DEFAULT_NETWORK_PROFILE } from './network.js';
 import { noopMetrics } from './metrics.js';
 import { EphemeralPreparations } from './ephemeral-preparations.js';
@@ -187,12 +187,13 @@ export class BackendGameService {
     const currentDaaScore = await this.chain.getCurrentDaaScore();
     if (currentDaaScore >= request.deadlineDaa) throw new ProtocolError('GAME_EXPIRED', 'The joining deadline has passed');
 
+    const economics = resolveEconomics(request);
     const joined = deriveGameInstance({
       creatorPubkey: request.creatorPublicKey,
       creatorCommit: request.creatorCommitment,
       joinerPubkey: joinerPublicKey,
       joinerCommit: joinerCommitment,
-      stakeSompi: request.stakeSompi,
+      stakeSompi: economics.stakeSompi,
       deadlineDaa: request.deadlineDaa,
       creatorEven: request.creatorEven,
          gameWalletHash: request.gameWalletHash,
@@ -301,6 +302,7 @@ export class BackendGameService {
     gameRecord = await this.#refreshActionState(gameRecord);
     if (gameRecord.status === 'settled') throw new ProtocolError('GAME_SETTLED', 'This game is already settled');
     const request = deserializeRequest(gameRecord.request);
+    const economics = resolveEconomics(request);
     const publicKey = normalizePublicKey(input.playerPublicKey, 'player public key');
     const player = this.#player(gameRecord, request, input.playerAddress, publicKey);
     this.#logPlayer('reveal_prepare', player.address, { gameId: id, role: player.role });
@@ -322,6 +324,8 @@ export class BackendGameService {
     const state = this.#revealGameState(id, gameRecord, request, current, confirmedReveals);
 
     const { continuation, winner } = this.#revealContinuation({ request, gameRecord, player, choice, publicKey, first });
+    const payoutRole = winner;
+    const payoutPublicKey = payoutRole === 'creator' ? request.creatorPublicKey : payoutRole === 'joiner' ? gameRecord.join.joinerPublicKey : publicKey;
     const build = (funding) => prepareRevealTransaction({
       game: state,
       caller: player.address,
@@ -330,14 +334,14 @@ export class BackendGameService {
       gameInput: { ...current.entry, transactionId: current.transactionId, index: 0, covenantId: gameRecord.join.covenantId, redeemScript: current.redeemScript },
       continuationScriptPublicKey: continuation ? `0000${continuation.p2shScript.toString('hex')}` : undefined,
       continuationCovenant: continuation ? { authorizingInput: 0, covenantId: gameRecord.join.covenantId } : undefined,
-      recipientScriptPublicKey: winner ? playerScriptPublicKey(winner === 'creator' ? request.creatorPublicKey : gameRecord.join.joinerPublicKey) : undefined,
-      feeScriptPublicKey: gameFeeSompi(request.stakeSompi) > 0n ? playerScriptPublicKey(request.gameFeePublicKey) : undefined,
+      recipientScriptPublicKey: winner ? playerScriptPublicKey(payoutPublicKey) : undefined,
+      feeScriptPublicKey: economics.gameFeeSompi > 0n ? playerScriptPublicKey(request.gameFeePublicKey) : undefined,
       walletPublicKey: request.gameFeePublicKey,
       feeInputs: funding.inputs,
       feeSompi: funding.feeSompi,
       change: funding.change,
       publicKey,
-      payoutPublicKey: winner === 'creator' ? request.creatorPublicKey : winner === 'joiner' ? gameRecord.join.joinerPublicKey : publicKey,
+      payoutPublicKey,
     });
     const funding = await this.#actionFunding(player.address, build);
     const prepared = build(funding);
@@ -359,7 +363,7 @@ export class BackendGameService {
       continuationScriptPublicKey: continuation ? `0000${continuation.p2shScript.toString('hex')}` : undefined,
       continuationRedeemScript: continuation?.redeemScript.toString('hex'),
       winner,
-      payoutAddress: winner === 'creator' ? request.creatorAddress : winner ? gameRecord.join.joinerAddress : undefined,
+      payoutAddress: payoutRole === 'creator' ? request.creatorAddress : payoutRole ? gameRecord.join.joinerAddress : undefined,
       createdAt: new Date().toISOString(),
     });
     // Reserve only once a lead reveal is actually built, so a failed preparation
@@ -435,10 +439,12 @@ export class BackendGameService {
           continue;
         }
         if (!current.join) {
+          const economics = resolveEconomics(request);
           const open = await this.#openCreationUtxo(current.gameId, request, deserializePrepared(current.prepared));
           if (open.currentDaaScore < request.deadlineDaa) continue;
+          const refundPayout = economics.refundOpenPayoutSompi;
           const prepared = prepareOpenRefundTransaction({
-            gameInput: { ...open.entry, transactionId: current.gameId, index: 0, amount: playerLockSompi(request.stakeSompi), covenantId: deserializePrepared(current.prepared).covenantId, redeemScript: request.covenantRedeemScript },
+            gameInput: { ...open.entry, transactionId: current.gameId, index: 0, amount: economics.lockSompi, covenantId: deserializePrepared(current.prepared).covenantId, redeemScript: request.covenantRedeemScript },
             stakeSompi: request.stakeSompi,
             settleFeeSompi: request.settleFeeSompi,
             deadlineDaa: request.deadlineDaa,
@@ -449,44 +455,47 @@ export class BackendGameService {
            const operationId = operationKey('automatic_settlement', Buffer.from(blake2b256(new TextEncoder().encode(txJson))).toString('hex'));
            const transactionId = await this.#submitOperation({
              operationId, action: 'automatic_settlement', gameId: record.gameId, preparedHash: operationId,
-             metadata: { status: 'refund_open_broadcast', settlement: { action: 'refund_open', txJson, payouts: [{ outputIndex: 0, value: String(playerLockSompi(request.stakeSompi) - request.settleFeeSompi), scriptPublicKey: playerScriptPublicKey(request.creatorPublicKey), address: request.creatorAddress }] } },
+             metadata: { status: 'refund_open_broadcast', settlement: { action: 'refund_open', txJson, payouts: [{ outputIndex: 0, value: String(refundPayout), scriptPublicKey: playerScriptPublicKey(request.creatorPublicKey), address: request.creatorAddress }] } },
              submit: () => this.chain.submitSafeJson(txJson).then(validateGameId),
            });
           await this.#saveGame({ ...current, status: 'refund_open_broadcast', automaticSettlement: {
             action: 'refund_open', transactionId, txJson, status: 'broadcast', submittedAt: new Date().toISOString(),
-            payouts: [{ outputIndex: 0, value: String(playerLockSompi(request.stakeSompi) - request.settleFeeSompi), scriptPublicKey: playerScriptPublicKey(request.creatorPublicKey), address: request.creatorAddress }],
+            payouts: [{ outputIndex: 0, value: String(refundPayout), scriptPublicKey: playerScriptPublicKey(request.creatorPublicKey), address: request.creatorAddress }],
           } });
           this.metrics.recordGameEvent('refund_open_submitted');
            logger.info('automatic_settlement_submitted', { gameId: record.gameId, action: 'refund_open', transactionId, feeSompi: String(request.settleFeeSompi), mass: feeDiagnostics.mass, requiredFeeSompi: String(feeDiagnostics.requiredFeeSompi), feeRate: feeDiagnostics.effectiveFeeRate });
           attempted += 1;
           continue;
         }
+        const economics = resolveEconomics(request);
         const covenant = await this.#currentGameUtxo(current, request, reveals[0] ?? null);
         const age = covenant.currentDaaScore - BigInt(covenant.entry.blockDaaScore);
         let action;
         let args;
         let outputs;
+        let payoutAddresses;
         if (reveals.length === 0 && age >= NO_REVEAL_REFUND_DAA_OFFSET) {
           action = 'refund_all';
           args = [request.creatorPublicKey, current.join.joinerPublicKey];
-          const refund = automaticRefundPayoutSompi(request.stakeSompi);
+          const refund = economics.refundAllPayoutSompi;
           outputs = [
             { value: refund, scriptPublicKey: playerScriptPublicKey(request.creatorPublicKey) },
             { value: refund, scriptPublicKey: playerScriptPublicKey(current.join.joinerPublicKey) },
           ];
+          payoutAddresses = [request.creatorAddress, current.join.joinerAddress];
         } else if (reveals.length === 1 && age >= FALLBACK_CLAIM_DAA_OFFSET) {
           action = 'fallback_claim';
           const first = reveals[0];
           args = [first.role === 'creator' ? request.creatorPublicKey : current.join.joinerPublicKey, request.gameFeePublicKey];
           const winnerKey = args[0];
-          outputs = [{ value: automaticFallbackPayoutSompi(request.stakeSompi), scriptPublicKey: playerScriptPublicKey(winnerKey) }];
-          const fee = gameFeeSompi(request.stakeSompi);
-          if (fee > 0n) outputs.push({ value: fee, scriptPublicKey: playerScriptPublicKey(request.gameFeePublicKey) });
+          outputs = [{ value: economics.automaticFallbackPayoutSompi, scriptPublicKey: playerScriptPublicKey(winnerKey) }];
+          if (economics.gameFeeSompi > 0n) outputs.push({ value: economics.gameFeeSompi, scriptPublicKey: playerScriptPublicKey(request.gameFeePublicKey) });
+          payoutAddresses = [first.role === 'creator' ? request.creatorAddress : current.join.joinerAddress];
         } else continue;
 
         const prepared = prepareCovenantOnlyTransaction({
           action,
-          gameInput: { ...covenant.entry, transactionId: covenant.transactionId, index: 0, amount: grossPotSompi(request.stakeSompi), covenantId: current.join.covenantId, redeemScript: covenant.redeemScript },
+          gameInput: { ...covenant.entry, transactionId: covenant.transactionId, index: 0, amount: economics.potSompi, covenantId: current.join.covenantId, redeemScript: covenant.redeemScript },
           inputSequence: action === 'fallback_claim' ? FALLBACK_CLAIM_DAA_OFFSET : NO_REVEAL_REFUND_DAA_OFFSET,
           args,
           outputs,
@@ -496,15 +505,12 @@ export class BackendGameService {
           const operationId = operationKey('automatic_settlement', Buffer.from(blake2b256(new TextEncoder().encode(txJson))).toString('hex'));
           const transactionId = await this.#submitOperation({
             operationId, action: 'automatic_settlement', gameId: record.gameId, preparedHash: operationId,
-            metadata: { status: `${action}_broadcast`, settlement: { action, txJson, payouts: outputs.slice(0, action === 'refund_all' ? 2 : 1).map((output, outputIndex) => ({ outputIndex, value: String(output.value), scriptPublicKey: output.scriptPublicKey, address: action === 'refund_all' ? [request.creatorAddress, current.join.joinerAddress][outputIndex] : [reveals[0].role === 'creator' ? request.creatorAddress : current.join.joinerAddress][outputIndex] })) } },
+            metadata: { status: `${action}_broadcast`, settlement: { action, txJson, payouts: outputs.map((output, outputIndex) => ({ outputIndex, value: String(output.value), scriptPublicKey: output.scriptPublicKey, address: payoutAddresses[outputIndex] })) } },
             submit: () => this.chain.submitSafeJson(txJson).then(validateGameId),
           });
-        const payoutAddresses = action === 'refund_all'
-          ? [request.creatorAddress, current.join.joinerAddress]
-          : [reveals[0].role === 'creator' ? request.creatorAddress : current.join.joinerAddress];
         await this.#saveGame({ ...current, status: `${action}_broadcast`, automaticSettlement: {
           action, transactionId, txJson, status: 'broadcast', submittedAt: new Date().toISOString(),
-          payouts: outputs.slice(0, action === 'refund_all' ? 2 : 1).map((output, outputIndex) => ({ outputIndex, value: String(output.value), scriptPublicKey: output.scriptPublicKey,
+          payouts: outputs.map((output, outputIndex) => ({ outputIndex, value: String(output.value), scriptPublicKey: output.scriptPublicKey,
             address: payoutAddresses[outputIndex] })),
         } });
         this.metrics.recordGameEvent(`${action}_submitted`);
@@ -620,15 +626,16 @@ export class BackendGameService {
     if (action === 'creator_refund') {
       if (gameRecord.join) throw new ProtocolError('ACTION_UNAVAILABLE', 'Player B already joined this game');
       const creation = deserializePrepared(gameRecord.prepared);
+      const economics = resolveEconomics(request);
       const open = await this.#openCreationUtxo(id, request, creation);
-      current = { entry: open.entry, currentDaaScore: open.currentDaaScore, transactionId: id, redeemScript: request.covenantRedeemScript, value: playerLockSompi(request.stakeSompi) };
+      current = { entry: open.entry, currentDaaScore: open.currentDaaScore, transactionId: id, redeemScript: request.covenantRedeemScript, value: economics.lockSompi };
       covenantEntry = 'refund';
     } else {
       throw new ProtocolError('UNSUPPORTED_ACTION', 'Unsupported safety action');
     }
 
     let preparedArgs = [publicKey];
-    let preparedPayout = playerLockSompi(request.stakeSompi);
+    let preparedPayout = resolveEconomics(request).refundPayoutSompi;
     const preparedExtraOutputs = [];
     const build = (funding) => prepareTerminalTransaction({
       action: covenantEntry,
@@ -723,7 +730,7 @@ export class BackendGameService {
       network: this.network.id,
       status,
       confirmationStatus: confirmation.status,
-      stakeKas: Number(request.stakeSompi / 100_000_000n),
+      stakeKas: Number(request.stakeSompi) / 100_000_000,
       creator: { address: request.creatorAddress, side: request.side },
       joiner: refreshed.join ? { address: refreshed.join.joinerAddress } : null,
       deadlineDaa: String(request.deadlineDaa),
@@ -757,6 +764,7 @@ export class BackendGameService {
   // --- Reveal helpers ------------------------------------------------------
 
   #revealContinuation({ request, gameRecord, player, choice, publicKey, first }) {
+    const economics = resolveEconomics(request);
     if (!first) {
       const firstHash = Buffer.from(blake2b256(Buffer.from(publicKey, 'hex'))).toString('hex');
       return {
@@ -765,7 +773,7 @@ export class BackendGameService {
           creatorCommit: request.creatorCommitment,
           joinerPubkey: gameRecord.join.joinerPublicKey,
           joinerCommit: gameRecord.join.joinerCommitment,
-          stakeSompi: request.stakeSompi,
+          stakeSompi: economics.stakeSompi,
           deadlineDaa: request.deadlineDaa,
           creatorEven: request.creatorEven,
           creatorChoice: player.role === 'creator' ? choice : 0,
@@ -785,6 +793,7 @@ export class BackendGameService {
 
   #revealGameState(gameId, record, request, current, confirmedReveals) {
     const first = confirmedReveals[0];
+    const economics = resolveEconomics(request);
     return {
       gameId,
       network: this.network.id,
@@ -796,8 +805,8 @@ export class BackendGameService {
       creatorEven: request.creatorEven,
       creatorChoice: first?.role === 'creator' ? first.choice : 0,
       joinerChoice: first?.role === 'joiner' ? first.choice : 0,
-      stakeSompi: request.stakeSompi,
-      potSompi: request.stakeSompi * 2n,
+      stakeSompi: economics.stakeSompi,
+      potSompi: economics.potSompi,
       participants: {
         [request.creatorAddress]: { commitment: request.creatorCommitment },
         [record.join.joinerAddress]: { commitment: record.join.joinerCommitment },
@@ -813,7 +822,7 @@ export class BackendGameService {
     const descriptor = firstReveal
       ? { transactionId: firstReveal.transactionId, address: firstReveal.continuationAddress, scriptPublicKey: firstReveal.continuationScriptPublicKey, redeemScript: firstReveal.continuationRedeemScript }
       : { transactionId: record.join.transactionId, address: record.join.joinedAddress, scriptPublicKey: record.join.joinedScriptPublicKey, redeemScript: record.join.joinedRedeemScript };
-    const { entry, currentDaaScore } = await this.#expectedUtxo(descriptor, grossPotSompi(request.stakeSompi));
+    const { entry, currentDaaScore } = await this.#expectedUtxo(descriptor, resolveEconomics(request).potSompi);
     return { entry, currentDaaScore, joinedDaaScore: BigInt(entry.blockDaaScore), transactionId: descriptor.transactionId, redeemScript: descriptor.redeemScript };
   }
 
@@ -845,10 +854,12 @@ export class BackendGameService {
   }
 
   async #revealConfirmation(record, request, reveal) {
+    const economics = resolveEconomics(request);
+    const payoutPublicKey = reveal.payoutAddress === request.creatorAddress ? request.creatorPublicKey : record.join.joinerPublicKey;
     const descriptor = reveal.winner
-      ? { transactionId: reveal.transactionId, address: reveal.payoutAddress, scriptPublicKey: playerScriptPublicKey(reveal.winner === 'creator' ? request.creatorPublicKey : record.join.joinerPublicKey), outputIndex: 0 }
+      ? { transactionId: reveal.transactionId, address: reveal.payoutAddress, scriptPublicKey: playerScriptPublicKey(payoutPublicKey), outputIndex: 0 }
       : { transactionId: reveal.transactionId, address: reveal.continuationAddress, scriptPublicKey: reveal.continuationScriptPublicKey, outputIndex: 0 };
-    const expected = reveal.winner ? winnerPayoutSompi(request.stakeSompi) : grossPotSompi(request.stakeSompi);
+    const expected = reveal.winner ? economics.settlementPayoutSompi : economics.potSompi;
     try {
       const { entry, currentDaaScore } = await this.#expectedUtxo(descriptor, expected);
       if (!isDaaConfirmed(entry, currentDaaScore)) return null;
@@ -884,8 +895,9 @@ export class BackendGameService {
   }
 
   async #safetyConfirmation(record, request, item) {
+    const economics = resolveEconomics(request);
     const publicKey = item.role === 'creator' ? request.creatorPublicKey : record.join?.joinerPublicKey;
-    const value = item.action === 'fallback_claim' ? winnerPayoutSompi(request.stakeSompi) : playerLockSompi(request.stakeSompi);
+    const value = item.action === 'fallback_claim' ? economics.settlementPayoutSompi : economics.refundPayoutSompi;
     const descriptor = item.continuationAddress
       ? { transactionId: item.transactionId, address: item.continuationAddress, scriptPublicKey: item.continuationScriptPublicKey, outputIndex: item.continuationOutputIndex ?? 1 }
       : { transactionId: item.transactionId, address: item.playerAddress, scriptPublicKey: playerScriptPublicKey(publicKey), outputIndex: 0 };
@@ -954,7 +966,7 @@ export class BackendGameService {
     return {
       transactionId: gameId,
       index: 0,
-      amount: playerLockSompi(request.stakeSompi),
+      amount: resolveEconomics(request).lockSompi,
       scriptPublicKey: prepared.scriptPublicKey,
       covenantId: prepared.covenantId,
       redeemScript: request.covenantRedeemScript,
@@ -1008,7 +1020,7 @@ export class BackendGameService {
     const entry = (utxos.entries ?? utxos).find((candidate) => {
       const outpoint = candidate.outpoint ?? candidate;
       return outpoint.transactionId === record.join.transactionId && outpoint.index === 0
-        && BigInt(candidate.amount) === grossPotSompi(request.stakeSompi)
+        && BigInt(candidate.amount) === resolveEconomics(request).potSompi
         && candidate.scriptPublicKey === record.join.joinedScriptPublicKey;
     });
     if (!entry) return { status: 'observed' };
@@ -1077,7 +1089,7 @@ export class BackendGameService {
         creatorPublicKey: request.creatorPublicKey,
         creatorCommitment: request.creatorCommitment,
         side: request.side,
-        stakeKas: Number(request.stakeSompi / 100_000_000n),
+        stakeKas: Number(request.stakeSompi) / 100_000_000,
         deadlineDaa: String(request.deadlineDaa),
         creatorAddress: request.creatorAddress,
       };
@@ -1306,7 +1318,13 @@ function serializeRequest(request) {
 }
 
 function deserializeRequest(request) {
-  return { ...request, stakeSompi: BigInt(request.stakeSompi), feeSompi: BigInt(request.feeSompi), deadlineDaa: BigInt(request.deadlineDaa), settleFeeSompi: BigInt(request.settleFeeSompi ?? 0) };
+  return {
+    ...request,
+    stakeSompi: BigInt(request.stakeSompi),
+    feeSompi: BigInt(request.feeSompi),
+    deadlineDaa: BigInt(request.deadlineDaa),
+    settleFeeSompi: BigInt(request.settleFeeSompi ?? 0),
+  };
 }
 
 function serializePrepared(prepared) {

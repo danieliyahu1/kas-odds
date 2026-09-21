@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION, ProtocolError, stakeToSompi, validateGameId, validateNetwork } from './protocol.js';
+import { PROTOCOL_VERSION, ProtocolError, stakeToSompi, validateGameId, validateNetwork, MIN_STAKE_SOMPI } from './protocol.js';
 import { parseInvite } from './invite.js';
 
 export const JOIN_COPY = Object.freeze({ matched: 'Game matched. Reveal phase is now open.', unavailable: 'This game is no longer accepting a player.', wrongStake: 'Player B must match the exact stake.' });
@@ -7,7 +7,7 @@ export function prepareJoinGame({ invite, expectedOrigin, network, joinerAddress
   const parsed = typeof invite === 'string' ? parseInvite(invite, expectedOrigin, network) : invite;
   validateNetwork(network);
   if (!parsed || parsed.protocolVersion !== PROTOCOL_VERSION || parsed.network !== network) throw new ProtocolError('INVALID_INVITE', 'Invite does not match the selected network');
-  return Object.freeze({ protocolVersion: PROTOCOL_VERSION, network, gameId: validateGameId(parsed.gameId), joinerAddress, joinerPublicKey, joinerCommitment, stakeSompi: stakeSompi === undefined ? stakeToSompi(stakeKas) : normalizeAmount(stakeSompi, 'Requested stake'), currentDaaScore: normalizeAmount(currentDaaScore, 'Current DAA score') });
+  return Object.freeze({ protocolVersion: PROTOCOL_VERSION, network, gameId: validateGameId(parsed.gameId), joinerAddress, joinerPublicKey, joinerCommitment, stakeSompi: stakeSompi === undefined ? stakeToSompi(stakeKas) : normalizeStakeSompi(stakeSompi), currentDaaScore: normalizeAmount(currentDaaScore, 'Current DAA score') });
 }
 
 export async function prepareJoin({ request, chain }) {
@@ -76,6 +76,7 @@ async function readJoinableGame(chain, request) {
 }
 
 function normalizeAmount(value, name) { try { const result = typeof value === 'bigint' ? value : BigInt(value); if (result >= 0n) return result; } catch {} throw new ProtocolError('INVALID_GAME_VALUE', `${name} must be a non-negative integer`); }
+function normalizeStakeSompi(value) { try { const result = typeof value === 'bigint' ? value : BigInt(value); if (result >= MIN_STAKE_SOMPI) return result; } catch {} throw new ProtocolError('INVALID_STAKE', 'Requested stake must be at least 1 KAS'); }
 function normalizeTxId(value) { if (!/^[0-9a-f]{64}$/i.test(value ?? '')) throw new ProtocolError('SUBMISSION_FAILED', 'Join submission did not return a transaction identifier'); return value.toLowerCase(); }
 function assertChain(chain, methods) { if (!chain || methods.some((method) => typeof chain[method] !== 'function')) throw new ProtocolError('CHAIN_UNAVAILABLE', 'Complete join chain adapter is required'); }
 function assertStore(store) { if (!store || typeof store.load !== 'function' || typeof store.save !== 'function') throw new ProtocolError('STORAGE_UNAVAILABLE', 'Join lifecycle storage is required'); }

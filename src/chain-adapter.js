@@ -1,4 +1,4 @@
-import { playerLockSompi, ProtocolError } from './protocol.js';
+import { covenantValueSompi, resolveEconomics, ProtocolError } from './protocol.js';
 import { readAddressUtxos, KaspaCreationConfirmer } from './kaspa-adapter.js';
 import { selectOrdinaryUtxos } from './fee-policy.js';
 import { estimateFunding } from './funding.mjs';
@@ -66,7 +66,7 @@ export class KaspaChainAdapter {
     const confirmer = new KaspaCreationConfirmer({
       rpc: this.rpc,
       covenantAddress: request.covenantAddress ?? this.covenantAddress,
-      playerLockSompi: playerLockSompi(request.stakeSompi),
+      playerLockSompi: covenantValueSompi(request),
       scriptPublicKey,
       outputIndex: this.outputIndex,
       attempts: this.confidenceAttempts,
@@ -120,11 +120,11 @@ export class KaspaChainAdapter {
   async prepareJoin({ request, game }) {
     const utxos = await readAddressUtxos({ rpc: this.rpc, addresses: [request.joinerAddress] });
     const entries = Array.isArray(utxos) ? utxos : utxos?.entries ?? [];
-    const stakeSompi = BigInt(game.stakeSompi ?? game.potSompi);
-    const lock = playerLockSompi(stakeSompi);
+    const economics = resolveEconomics(game);
+    const reserved = economics.potSompi - economics.lockSompi;
     const feerate = await this.#readPriorityFeerate();
     const initialFee = BigInt(Math.ceil(Math.max(feerate, 100) * 100_000));
-    const selected = selectOrdinaryUtxos({ utxos: entries, targetSompi: lock + initialFee }).selected;
+    const selected = selectOrdinaryUtxos({ utxos: entries, targetSompi: reserved + initialFee }).selected;
     const selectedEntries = entries.filter((entry) => selected.some((item) => (entry.transactionId ?? entry.outpoint?.transactionId)?.toLowerCase() === item.transactionId && (entry.index ?? entry.outpoint?.index) === item.index));
     const total = selectedEntries.reduce((sum, entry) => sum + BigInt(entry.amount ?? entry.utxo?.amount), 0n);
     const changeScriptPublicKey = request.changeScriptPublicKey ?? selectedEntries[0]?.scriptPublicKey ?? selectedEntries[0]?.utxo?.scriptPublicKey;
@@ -132,7 +132,7 @@ export class KaspaChainAdapter {
       network: request.network,
       priorityFeerate: feerate,
       fundingSompi: total,
-      reservedSompi: lock,
+      reservedSompi: reserved,
       changeScriptPublicKey,
       build: ({ feeSompi, change }) => prepareJoinTransaction({
         game,

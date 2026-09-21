@@ -30,6 +30,14 @@ blocks for library consumers; it is not used to boot the server.
 
 ## Game Lifecycle
 
+Every game is a `staked` game: both players wager the same amount and the winner
+takes the pot. One pinned covenant artifact
+(`covenant/kasodds.template.artifact.json`) backs every game; the covenant
+requires `stake >= 1 KAS` on-chain, so zero and sub-1 KAS stakes are impossible
+by script rule. `src/protocol.js` `resolveEconomics` derives the pot, the
+operator fee, and the payout from the stake alone, and the transaction builders
+share those values. `src/covenant/template.mjs` loads the single pinned artifact.
+
 The backend persists non-secret game records and transaction preparations. Each
 create, join, reveal, and terminal action follows the same safety shape:
 

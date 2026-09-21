@@ -26,8 +26,8 @@ const walletHashHex = bytesToHex(blake2b256(hexToBytes(walletPubkeyHex))).toLowe
 const playerLockSompi = stakeSompi;
 const settleFeeSompi = 1600000;
 
-function runOracle() {
-  return execFileSync(ORACLE, [ARTIFACT, creatorPubkeyHex, creatorCommitHex, String(stakeSompi), String(deadlineDaa), walletPubkeyHex, String(settleFeeSompi)], {
+function runOracle(artifact = ARTIFACT) {
+  return execFileSync(ORACLE, [artifact, creatorPubkeyHex, creatorCommitHex, String(stakeSompi), String(deadlineDaa), walletPubkeyHex, String(settleFeeSompi)], {
     encoding: 'utf8',
   });
 }

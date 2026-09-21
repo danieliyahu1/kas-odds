@@ -1,4 +1,4 @@
-import { playerLockSompi, grossPotSompi, ProtocolError } from './protocol.js';
+import { resolveEconomics, ProtocolError } from './protocol.js';
 import { buildKccEntrySignatureScript } from './terminal-transactions.js';
 import { loadWasmSdk, verifyWasmSignedSafeJson } from './wasm-transaction.js';
 import { describeTransactionChanges, unsignedInputs } from './transaction-diagnostics.js';
@@ -11,9 +11,9 @@ export function prepareJoinTransaction({ game, joinerPublicKey, joinerCommitment
   }
   const publicKey = bytes(joinerPublicKey, 32, 'joiner public key');
   const commitment = bytes(joinerCommitment, 32, 'joiner commitment');
-  const stake = positive(game.stakeSompi ?? game.potSompi, 'game stake');
-  const lock = playerLockSompi(stake);
-  const grossPot = grossPotSompi(stake);
+  const economics = resolveEconomics(game);
+  const lock = economics.lockSompi;
+  const potValue = economics.potSompi;
   if (typeof feeSompi !== 'bigint' || feeSompi < 0n) throw new ProtocolError('INVALID_FEE', 'Fee must be a non-negative sompi amount');
 
   const input = normalizeInput({ ...gameInput, amount: lock, covenantId: gameInput.covenantId ?? game.currentCovenantId }, buildKccEntrySignatureScript({
@@ -28,8 +28,8 @@ export function prepareJoinTransaction({ game, joinerPublicKey, joinerCommitment
     return normalized;
   });
   const totalIn = [input, ...ordinary].reduce((sum, entry) => sum + BigInt(entry.utxo.amount), 0n);
-  const output = { value: String(grossPot), scriptPublicKey: continuationScriptPublicKey, covenant: continuationCovenant };
-  const expectedChange = totalIn - grossPot - feeSompi;
+  const output = { value: String(potValue), scriptPublicKey: continuationScriptPublicKey, covenant: continuationCovenant };
+  const expectedChange = totalIn - potValue - feeSompi;
   if (expectedChange < 0n) throw new ProtocolError('INSUFFICIENT_UTXOS', 'Joiner inputs cannot fund the matching lock and fee');
   if (expectedChange > 0n && !change?.scriptPublicKey) throw invalid('Change script public key is required');
   if (change !== undefined && BigInt(change.value) !== expectedChange) throw new ProtocolError('FEE_SUBSTITUTION', 'Change does not match the exact fee');

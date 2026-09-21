@@ -5,7 +5,10 @@ export const PROTOCOL_VERSION = 'EO/v10';
 export const MIN_STAKE_KAS = 1;
 export const MAX_STAKE_KAS = 1_000_000;
 export const SOMPI_PER_KAS = 100_000_000n;
+// 1 KAS = 100,000,000 sompi, so eight is the deepest exact decimal place.
+export const KAS_DECIMALS = 8;
 export const MIN_STAKE_SOMPI = BigInt(MIN_STAKE_KAS) * SOMPI_PER_KAS;
+
 // Protocol v7: the entered stake IS the complete per-player lock — no extra fee
 // is added on top. Both players fund `stake`, so the joined covenant holds
 // `grossPot = stake * 2`. When a winner exists (second reveal or fallback claim)
@@ -61,11 +64,37 @@ function assertStakeSompi(value, name = 'stake sompi') {
   return value;
 }
 
+// Accepts any finite KAS amount from 1 to 1,000,000 (fractions allowed). Zero and
+// anything else outside that range is rejected: every game is a staked game.
 export function stakeToSompi(stakeKas) {
-  if (!Number.isInteger(stakeKas) || stakeKas < MIN_STAKE_KAS || stakeKas > MAX_STAKE_KAS) {
-    throw new ProtocolError('INVALID_STAKE', `Stake must be an integer from ${MIN_STAKE_KAS} to ${MAX_STAKE_KAS} KAS`);
+  const value = toKasNumber(stakeKas);
+  if (value < MIN_STAKE_KAS || value > MAX_STAKE_KAS) {
+    throw new ProtocolError('INVALID_STAKE', `Stake must be from ${MIN_STAKE_KAS} to ${MAX_STAKE_KAS} KAS`);
   }
-  return BigInt(stakeKas) * SOMPI_PER_KAS;
+  assertSompiPrecision(value);
+  const sompi = Math.round(value * Number(SOMPI_PER_KAS));
+  if (!Number.isSafeInteger(sompi) || sompi <= 0) {
+    throw new ProtocolError('INVALID_STAKE', 'Stake exceeds the supported sompi precision');
+  }
+  return BigInt(sompi);
+}
+
+// The chain stores value in sompi (1 KAS = 100,000,000 sompi), so an amount with
+// more than eight decimal places has no exact on-chain representation. Reject it
+// rather than silently rounding the wager to a different amount.
+function assertSompiPrecision(value) {
+  const fraction = String(value).split('.')[1] ?? '';
+  if (fraction.replace(/0+$/, '').length > KAS_DECIMALS) {
+    throw new ProtocolError('INVALID_STAKE', `Stake supports at most ${KAS_DECIMALS} decimal places`);
+  }
+}
+
+function toKasNumber(stakeKas) {
+  const value = typeof stakeKas === 'string' ? Number(stakeKas) : stakeKas;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new ProtocolError('INVALID_STAKE', 'Stake must be a finite number of KAS');
+  }
+  return value;
 }
 
 // Complete per-player lock escrowed into the covenant: the entered stake.
@@ -77,9 +106,10 @@ export function playerLockSompi(stakeSompi) {
   return stake;
 }
 
-// Gross pot held by the joined covenant: both players' locks.
+// Gross pot held by the joined covenant: both players' locks. Validating the
+// lock here means every fee and payout helper inherits the >= 1 KAS minimum.
 export function grossPotSompi(stakeSompi) {
-  return assertStakeSompi(stakeSompi) * 2n;
+  return playerLockSompi(stakeSompi) * 2n;
 }
 
 // Single game fee: 1% of the total pot only when that fee is at least 1 KAS.
@@ -102,6 +132,35 @@ export function automaticFallbackPayoutSompi(stakeSompi) {
   const payout = winnerPayoutSompi(stakeSompi) - AUTOMATION_FEE_SOMPI;
   if (payout <= 0n) throw new ProtocolError('INVALID_STAKE', 'Stake is too small for automatic settlement');
   return payout;
+}
+
+export function validateStakeInput(stakeKas) {
+  const value = toKasNumber(stakeKas);
+  stakeToSompi(value);
+  return value;
+}
+
+// Canonical economics for a request or game record. Every on-chain value derives
+// from here so the protocol, the covenant, and the display cannot drift apart.
+export function resolveEconomics(source) {
+  const stake = playerLockSompi(source.stakeSompi);
+  return Object.freeze({
+    stakeSompi: stake,
+    lockSompi: stake,
+    potSompi: grossPotSompi(stake),
+    gameFeeSompi: gameFeeSompi(stake),
+    settlementPayoutSompi: winnerPayoutSompi(stake),
+    automaticFallbackPayoutSompi: automaticFallbackPayoutSompi(stake),
+    refundPayoutSompi: stake,
+    refundOpenPayoutSompi: stake - AUTOMATION_FEE_SOMPI,
+    refundAllPayoutSompi: stake - AUTOMATION_FEE_SOMPI / 2n,
+    payoutRole: 'winner',
+  });
+}
+
+// The value carried by the covenant output for a given request/game.
+export function covenantValueSompi(source) {
+  return resolveEconomics(source).lockSompi;
 }
 
 export function validateGameFeePublicKey(value, name = 'game fee public key') {

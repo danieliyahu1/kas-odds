@@ -34,6 +34,18 @@ test('reports refund readiness from DAA scores', () => {
   assert.deepEqual(safetyReadiness(5_000n, 4_000n), { ready: true, remainingSeconds: 0 });
 });
 
+test('a game state below the 1 KAS covenant minimum is rejected', () => {
+  const firstReveal = { player: 'creator', confirmedDaaScore: 2_000n };
+  assert.throws(
+    () => resolveFallbackClaim({ game: { ...game, stakeSompi: 99_999_999n, firstReveal }, caller: 'creator', currentDaaScore: 5_000n }),
+    { code: 'INVALID_GAME_STATE' },
+  );
+  assert.throws(
+    () => resolveFallbackClaim({ game: { ...game, stakeSompi: 0n, firstReveal }, caller: 'creator', currentDaaScore: 5_000n }),
+    { code: 'INVALID_GAME_STATE' },
+  );
+});
+
 test('fallback claim is unavailable until first reveal plus fallback deadline', () => {
   const firstReveal = { player: 'creator', confirmedDaaScore: 2_000n };
   assert.deepEqual(resolveFallbackClaim({ game: { ...game, firstReveal }, caller: 'creator', currentDaaScore: 4_999n }), {

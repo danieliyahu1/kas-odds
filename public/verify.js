@@ -12,13 +12,13 @@ import { createGenesisGameOutput } from '/src/genesis-transaction.js';
 import { AUTOMATION_FEE_SOMPI } from '/src/protocol.js';
 import { verifyTransactionIntent } from '/src/transaction-intent.js';
 
-const SOMPI_PER_KAS = 100_000_000n;
+const ARTIFACT_URL = '/covenant/kasodds.template.artifact.json';
 
 let templatePromise = null;
 
 export async function loadCovenantTemplate() {
   if (!templatePromise) {
-    templatePromise = fetch('/covenant/kasodds.template.artifact.json')
+    templatePromise = fetch(ARTIFACT_URL)
       .then((response) => {
         if (!response.ok) throw new Error('Covenant artifact could not be loaded');
         return response.json();
@@ -43,9 +43,14 @@ export async function deriveCovenant({ creatorPublicKey, creatorCommitment, side
   }, { template, addressPrefix });
 }
 
+// The value the covenant carries: the per-player stake, converted to sompi.
+export function covenantValueSompiFor({ stakeKas }) {
+  return BigInt(Math.round(Number(stakeKas) * 100_000_000));
+}
+
 export async function verifyCreation({ txJson, creatorPublicKey, creatorCommitment, side, stakeKas, deadlineDaa, gameFeePublicKey, feeSompi, changeScriptPublicKey, addressPrefix }) {
-  const stakeSompi = BigInt(stakeKas) * SOMPI_PER_KAS;
-  const instance = await deriveCovenant({ creatorPublicKey, creatorCommitment, side, stakeSompi, deadlineDaa: BigInt(deadlineDaa), gameFeePublicKey, addressPrefix });
+  const covenantValue = covenantValueSompiFor({ stakeKas });
+  const instance = await deriveCovenant({ creatorPublicKey, creatorCommitment, side, stakeSompi: covenantValue, deadlineDaa: BigInt(deadlineDaa), gameFeePublicKey, addressPrefix });
 
   let transaction;
   try {
@@ -59,7 +64,7 @@ export async function verifyCreation({ txJson, creatorPublicKey, creatorCommitme
 
   const covenantScriptPublicKey = bytesToHex(instance.p2shScript);
   const expected = createGenesisGameOutput({
-    request: { stakeSompi, covenantScriptPublicKey },
+    request: { stakeSompi: covenantValue, covenantScriptPublicKey },
     authorizingInput: 0,
     authorizingOutpoint: transaction.inputs[0],
   });

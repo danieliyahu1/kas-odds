@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { MIN_STAKE_KAS, ProtocolError, stakeToSompi } from './protocol.js';
+import { MIN_STAKE_KAS, ProtocolError, validateStakeInput } from './protocol.js';
 import { DEFAULT_NETWORK_PROFILE } from './network.js';
 import { normalizePublicKey } from './create-game.js';
 
@@ -18,7 +18,7 @@ export class MatchmakingService {
     const address = matchmakingAddress(input.address, this.addressPrefix);
     const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
     const limitKas = input.limitKas === undefined ? MIN_STAKE_KAS : Number(input.limitKas);
-    stakeToSompi(limitKas);
+    validateStakeInput(limitKas);
     const match = await this.store.joinMatchmaking({ matchId: randomUUID(), address, publicKey, limitKas });
     this.logPlayer('matchmaking_join', address, { matchId: match.matchId, status: match.status, limitKas });
     // Always-on, address-free breadcrumbs: who got paired and who was left
@@ -42,7 +42,7 @@ export class MatchmakingService {
     const address = matchmakingAddress(input.address, this.addressPrefix);
     const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
     const stakeKas = Number(input.stakeKas);
-    stakeToSompi(stakeKas);
+    validateStakeInput(stakeKas);
     const match = await this.store.createPrivateMatch({ matchId: randomUUID(), address, publicKey, stakeKas });
     this.logPlayer('matchmaking_room_created', address, { matchId: match.matchId, stakeKas });
     this.logger.info('matchmaking_room_waiting', { matchId: match.matchId, stakeKas });

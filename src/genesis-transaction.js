@@ -1,6 +1,6 @@
 import { blake2b256 } from './hashes/blake2b.mjs';
 import { hexToBytes, bytesToHex } from './hashes/hex.mjs';
-import { playerLockSompi, ProtocolError } from './protocol.js';
+import { covenantValueSompi, ProtocolError } from './protocol.js';
 import { describeTransactionChanges } from './transaction-diagnostics.js';
 
 const COVENANT_ID_DOMAIN = new TextEncoder().encode('CovenantID');
@@ -43,7 +43,7 @@ export function createGenesisGameOutput({ request, authorizingInput, authorizing
     throw new ProtocolError('INVALID_COVENANT_BINDING', 'Genesis authorizing input must be a u16 index');
   }
   const output = {
-    value: playerLockSompi(request.stakeSompi).toString(),
+    value: covenantValueSompi(request).toString(),
     scriptPublicKey: SCRIPT_VERSION_HEX + request.covenantScriptPublicKey,
     covenant: null,
   };

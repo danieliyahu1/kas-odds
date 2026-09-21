@@ -134,8 +134,11 @@ test('different game state produces a different covenant address', () => {
 
 test('rejects invalid game state', () => {
   assert.throws(() => deriveOnTestnet({ creatorPubkey: [1, 2, 3], creatorCommit: new Array(32).fill(9), stakeSompi: 100000000n, deadlineDaa: 500000000000n, gameWalletHash }));
-  assert.throws(() => deriveOnTestnet({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: -1n, deadlineDaa: 500000000000n, gameWalletHash }));
-  assert.throws(() => deriveOnTestnet({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 99999999n, deadlineDaa: 500000000000n, gameWalletHash }), { code: 'INVALID_STATE' });
+  // A stake must be at least 1 KAS: zero, negative, and sub-1-KAS values are
+  // all impossible because every covenant entry requires `stake >= 100000000`.
+  assert.throws(() => deriveOnTestnet({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: -1n, deadlineDaa: 500000000000n, gameWalletHash }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveOnTestnet({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 0n, deadlineDaa: 500000000000n, gameWalletHash }), { code: 'INVALID_STATE' });
+  assert.throws(() => deriveOnTestnet({ creatorPubkey: new Array(32).fill(7), creatorCommit: new Array(32).fill(9), stakeSompi: 99_999_999n, deadlineDaa: 500000000000n, gameWalletHash }), { code: 'INVALID_STATE' });
 });
 
 test('rejects artifact ABI drift early and explicitly', () => {

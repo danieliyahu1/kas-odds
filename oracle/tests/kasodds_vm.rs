@@ -73,6 +73,19 @@ fn vm_accepts_signed_creator_refund_before_and_after_the_join_deadline() {
 }
 
 #[test]
+fn vm_rejects_a_sub_1_kas_stake() {
+    let artifact = artifact();
+    let creator = player(1);
+    let wallet = player(3);
+    // Every entry requires `stake >= 100000000`, so a sub-1-KAS instance can
+    // never execute an entry — even the creator's own signed refund.
+    let sub_stake = open_game_state_with_stake(&artifact, &creator, &vec![9; 32], &wallet, 99_999_999);
+    assert_signed_creator_refund(&artifact, &sub_stake, &creator, DEADLINE_DAA, false);
+    let one_kas = open_game_state_with_stake(&artifact, &creator, &vec![9; 32], &wallet, 100_000_000);
+    assert_signed_creator_refund(&artifact, &one_kas, &creator, DEADLINE_DAA, true);
+}
+
+#[test]
 fn vm_accepts_late_fallback_claim_and_rejects_early_or_wrong_revealer() {
     let artifact = artifact();
     let creator = player(1);
@@ -245,13 +258,17 @@ fn game_state_with_commits(artifact: &SilAbiArtifact, status: i64, creator: &Pla
 }
 
 fn open_game_state(artifact: &SilAbiArtifact, creator: &Player, creator_commit: &[u8], wallet: &Player) -> Vec<u8> {
+    open_game_state_with_stake(artifact, creator, creator_commit, wallet, STAKE as i64)
+}
+
+fn open_game_state_with_stake(artifact: &SilAbiArtifact, creator: &Player, creator_commit: &[u8], wallet: &Player, stake: i64) -> Vec<u8> {
     let contract = artifact.contract("KasOdds").expect("KasOdds contract");
     let mut values = BTreeMap::new();
     values.insert("creator_hash".into(), ArtifactValue::Bytes(creator.hash.clone()));
     values.insert("joiner_hash".into(), ArtifactValue::Bytes(vec![0; 32]));
     values.insert("creator_commit".into(), ArtifactValue::Bytes(creator_commit.to_vec()));
     values.insert("joiner_commit".into(), ArtifactValue::Bytes(vec![0; 32]));
-    values.insert("stake".into(), ArtifactValue::Int(STAKE as i64));
+    values.insert("stake".into(), ArtifactValue::Int(stake));
     values.insert("deadline_daa".into(), ArtifactValue::Int(DEADLINE_DAA as i64));
     values.insert("creator_even".into(), ArtifactValue::Int(1));
     values.insert("creator_choice".into(), ArtifactValue::Int(0));

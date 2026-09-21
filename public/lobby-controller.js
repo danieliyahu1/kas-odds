@@ -27,6 +27,7 @@ const MATCH_WAIT_TIMEOUT_MS = 60_000;
 const MATCH_POLL_INTERVAL_MS = 1000;
 const MIN_STAKE_KAS = 1;
 const MAX_STAKE_KAS = 1_000_000;
+const KAS_DECIMALS = 8;
 
 export function createLobbyController({
   mode,
@@ -101,14 +102,14 @@ export function createLobbyController({
   function connectLimit(limitKas) {
     draft = String(limitKas ?? '');
     const amount = normalizeKas(limitKas);
-    if (amount === null) return rejectNote('Enter a limit', 'Use a whole number from 1 to 1,000,000 KAS.');
+    if (amount === null) return rejectNote('Enter a limit', 'Use a number from 1 to 1,000,000 KAS.');
     return begin((player) => api('/api/matchmaking/join', { method: 'POST', body: { address: player.address, publicKey: player.publicKey, limitKas: amount } }));
   }
 
   function connectHost(stakeKas) {
     draft = String(stakeKas ?? '');
     const amount = normalizeKas(stakeKas);
-    if (amount === null) return rejectNote('Enter a stake', 'Use a whole number from 1 to 1,000,000 KAS.');
+    if (amount === null) return rejectNote('Enter a stake', 'Use a number from 1 to 1,000,000 KAS.');
     return begin((player) => api('/api/matchmaking/room', { method: 'POST', body: { address: player.address, publicKey: player.publicKey, stakeKas: amount } }));
   }
 
@@ -333,6 +334,18 @@ export function matchWaitError(code, message) {
 }
 
 function normalizeKas(value) {
-  const amount = Math.floor(Number(value));
-  return Number.isInteger(amount) && amount >= MIN_STAKE_KAS && amount <= MAX_STAKE_KAS ? amount : null;
+  const raw = String(value ?? '').trim();
+  if (raw === '') return null;
+  const amount = Number(raw);
+  if (!Number.isFinite(amount)) return null;
+  if (amount < MIN_STAKE_KAS || amount > MAX_STAKE_KAS) return null;
+  if (!hasSompiPrecision(raw)) return null;
+  return amount;
+}
+
+// 1 KAS = 100,000,000 sompi, so more than eight decimal places has no exact
+// on-chain value. Reject it rather than silently rounding the wager.
+function hasSompiPrecision(raw) {
+  const fraction = raw.split('.')[1] ?? '';
+  return fraction.replace(/0+$/, '').length <= KAS_DECIMALS;
 }
