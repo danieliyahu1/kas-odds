@@ -59,7 +59,7 @@ export class KaspaChainAdapter {
     });
   }
 
-  async confirmCreation({ transactionId, request, prepared }) {
+  async confirmCreation({ transactionId, request, prepared, attempts = this.confidenceAttempts }) {
     // The node reports UTXOs with the versioned output script, so match against
     // the versioned SPK the prepared tx actually carries.
     const scriptPublicKey = prepared?.scriptPublicKey ?? request.covenantScriptPublicKey ?? this.scriptPublicKey;
@@ -69,7 +69,7 @@ export class KaspaChainAdapter {
       playerLockSompi: covenantValueSompi(request),
       scriptPublicKey,
       outputIndex: this.outputIndex,
-      attempts: this.confidenceAttempts,
+      attempts,
       intervalMs: this.confidenceIntervalMs,
     });
     return confirmer.confirmCreation({ transactionId });

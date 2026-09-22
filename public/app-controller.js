@@ -10,7 +10,7 @@ export function createPollController({ onPoll, intervalMs, setIntervalFn = setIn
     try { await onPoll(key, currentGeneration); } finally { running = false; }
   };
   return {
-    start(key) { this.stop(); const currentGeneration = generation; void tick(key, currentGeneration); timer = setIntervalFn(() => void tick(key, currentGeneration), intervalMs); },
+    start(key, { immediate = true } = {}) { this.stop(); const currentGeneration = generation; if (immediate) void tick(key, currentGeneration); timer = setIntervalFn(() => void tick(key, currentGeneration), intervalMs); },
     stop() { generation += 1; if (timer !== undefined) clearIntervalFn(timer); timer = undefined; running = false; },
     get active() { return timer !== undefined; },
     get generation() { return generation; },

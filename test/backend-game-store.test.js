@@ -233,6 +233,26 @@ test('serializes concurrent store mutations and isolates returned clones', async
   assert.equal((await store.listGames())[0].status, 'waiting');
 });
 
+test('updateGame patches the latest record without clobbering concurrent fields', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-update-game-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  const gameId = 'a'.repeat(64);
+  await store.saveGame({ gameId, status: 'broadcast' });
+  // A join saved by another request while this reader is blocked on the chain.
+  await store.saveGame({ gameId, status: 'join_broadcast', join: { joinerAddress: 'kaspatest:joiner' } });
+
+  await store.updateGame(gameId, (current) => {
+    current.status = 'observed';
+    current.confirmation = { status: 'observed' };
+  });
+  const stored = await store.loadGame(gameId);
+  assert.equal(stored.status, 'observed', 'the status write lands on the latest record');
+  assert.equal(stored.join.joinerAddress, 'kaspatest:joiner', 'the concurrently saved join survives');
+
+  assert.equal(await store.updateGame(`0${gameId.slice(1)}`, (current) => { current.status = 'joined'; }), null, 'a missing game reports null');
+});
+
 test('persists and reloads non-secret submission operations', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kasodds-operations-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

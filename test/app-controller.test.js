@@ -32,6 +32,22 @@ test('poll controller cancels the previous generation and prevents overlap', asy
   assert.equal(controller.active, true);
 });
 
+test('poll controller can start without an immediate tick', async () => {
+  const timers = [];
+  let calls = 0;
+  const controller = createPollController({
+    intervalMs: 10,
+    setIntervalFn: (callback) => { timers.push(callback); return timers.length; },
+    clearIntervalFn: () => {},
+    onPoll: async () => { calls += 1; },
+  });
+  controller.start('game', { immediate: false });
+  assert.equal(calls, 0, 'no tick fires before the first interval elapses');
+  timers[0]();
+  await Promise.resolve();
+  assert.equal(calls, 1);
+});
+
 test('terminal statuses are explicit', () => {
   assert.equal(isTerminalGameStatus('settled'), true);
   assert.equal(isTerminalGameStatus('joined'), false);

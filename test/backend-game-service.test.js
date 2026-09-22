@@ -214,6 +214,92 @@ test('application service uses the injected chain gateway instead of raw RPC', a
   assert.equal(preparedRequest.deadlineDaa, 100n + 3_000n);
 });
 
+test('status reads observe creation once instead of waiting the full confirmation window', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-observe-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameId = 'ff'.repeat(32);
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'aa'.repeat(32),
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const serializedRequest = Object.fromEntries(Object.entries(request).map(([key, value]) => [key, typeof value === 'bigint' ? String(value) : value]));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame({
+    gameId,
+    protocolVersion: 'EO/v10',
+    status: 'broadcast',
+    request: serializedRequest,
+    prepared: { network: 'testnet-10', creatorAddress: 'kaspatest:creator', txJson: '{}', preparedHash: '07'.repeat(32), policy: {}, feeSompi: '1000', covenantId: '03'.repeat(32), scriptPublicKey: request.covenantScriptPublicKey },
+    createdAt: new Date().toISOString(),
+  });
+  const confirmCalls = [];
+  const chain = { confirmCreation: async (args) => { confirmCalls.push(args); return { status: 'observed' }; } };
+  const service = new BackendGameService({ chain, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  const game = await service.readGame(gameId);
+  assert.equal(confirmCalls.length, 1);
+  assert.equal(confirmCalls[0].attempts, 1, 'the status endpoint polls once, never the full confirmation wait');
+  assert.equal(game.status, 'observed');
+  const stored = await store.loadGame(gameId);
+  assert.equal(stored.status, 'observed');
+});
+
+test('a status read never downgrades a join saved while the read was on the wire', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-read-race-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameId = 'ff'.repeat(32);
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'aa'.repeat(32),
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const serializedRequest = Object.fromEntries(Object.entries(request).map(([key, value]) => [key, typeof value === 'bigint' ? String(value) : value]));
+  const openRecord = {
+    gameId,
+    protocolVersion: 'EO/v10',
+    status: 'broadcast',
+    request: serializedRequest,
+    prepared: { network: 'testnet-10', creatorAddress: 'kaspatest:creator', txJson: '{}', preparedHash: '07'.repeat(32), policy: {}, feeSompi: '1000', covenantId: '03'.repeat(32), scriptPublicKey: request.covenantScriptPublicKey },
+    createdAt: new Date().toISOString(),
+  };
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame(openRecord);
+
+  let releaseRead;
+  const readBlocked = new Promise((resolve) => { releaseRead = resolve; });
+  const chain = { confirmCreation: async () => { await readBlocked; return { status: 'observed' }; } };
+  const service = new BackendGameService({ chain, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  const reading = service.readGame(gameId);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  // The join lands while the status read is still waiting for its chain round-trip.
+  await store.saveGame({
+    ...openRecord,
+    status: 'join_broadcast',
+    join: { transactionId: 'dd'.repeat(32), preparedHash: '01'.repeat(32), joinerAddress: 'kaspatest:joiner', joinerPublicKey: 'bb'.repeat(32), joinerCommitment: 'ee'.repeat(32) },
+  });
+  releaseRead();
+  const game = await reading;
+
+  assert.equal(game.status, 'observed', 'this read still describes the snapshot it started from');
+  const stored = await store.loadGame(gameId);
+  assert.equal(stored.join.joinerAddress, 'kaspatest:joiner', 'the concurrently saved join survives the status write');
+  assert.equal(stored.status, 'join_broadcast', 'the stale read does not downgrade the newer join status');
+});
+
 test('automatic scheduler targets the open covenant deadline', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -992,3 +1078,19 @@ test('a game without a configured bot reports it as unavailable', async (t) => {
   const waiting = await service.joinMatchmaking({ address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 5 });
   await assert.rejects(service.offerBot(waiting.matchId, { address: 'kaspatest:first' }), { code: 'BOT_UNAVAILABLE' });
 });
+
+function serializedRequestFor(overrides = {}) {
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress: 'kaspatest:creator',
+    creatorPublicKey: 'aa'.repeat(32),
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+    ...overrides,
+  });
+  return Object.fromEntries(Object.entries(request).map(([key, value]) => [key, typeof value === 'bigint' ? String(value) : value]));
+}

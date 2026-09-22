@@ -92,6 +92,20 @@ export class BackendGameStore {
     await this.#update((data) => { data.games[record.gameId] = record; });
   }
 
+  // A targeted, atomic mutation of a stored game. Unlike `saveGame`, which
+  // replaces the whole record, this patches the latest stored record inside the
+  // single write queue: a reader that finished a slow chain round-trip can merge
+  // its status update without clobbering a join, reveal, or safety action that
+  // another request wrote while it was waiting.
+  async updateGame(gameId, change) {
+    return this.#updateWithResult((data) => {
+      const game = data.games[gameId];
+      if (!game) return null;
+      change(game);
+      return game;
+    });
+  }
+
   // Completing a game drops everything that only mattered while it was live, but
   // keeps the terminal record itself (with `completedAt`) so both players can
   // still read the result. `pruneCompletedGames` removes it after the window.

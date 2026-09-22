@@ -362,12 +362,27 @@ function roomInviteUrl(matchId) {
 
 async function renderGame(gameId) {
   if (!isGameId(gameId)) return renderBackendError('That game link doesn\u2019t look right.');
-  scheduleGameRefresh(gameId);
+  renderGameLoading();
   try {
-    await refreshGame(gameId, { reportErrors: true });
+    if (await refreshGame(gameId, { reportErrors: true })) scheduleGameRefresh(gameId);
   } catch (error) {
     renderBackendError(error.message);
   }
+}
+
+// A game that locked a number can take a moment to reach the page: the first
+// status round-trip waits on chain confirmation. Painting a stable shell here
+// keeps the route alive instead of leaving the app root blank until that
+// response lands.
+function renderGameLoading() {
+  app.innerHTML = `
+    <a class="back" href="/" data-action="exit">Exit</a>
+    <section class="panel" aria-label="Game">
+      <div class="panel-head">
+        <div class="header-loading"><span class="spinner large confirm" aria-hidden="true"></span><h2>Checking game status&hellip;</h2></div>
+      </div>
+      <div class="game-body"></div>
+    </section>`;
 }
 
 function paintGameHeader(game, role, progress) {
@@ -930,7 +945,7 @@ function shortAddress(address) {
 function capitalize(word) { return word ? word.charAt(0).toUpperCase() + word.slice(1) : ''; }
 
 function scheduleGameRefresh(gameId) {
-  gamePoller.start(gameId);
+  gamePoller.start(gameId, { immediate: false });
   window.__gameStatus = undefined;
 }
 
@@ -942,35 +957,38 @@ function stopGameRefresh() {
 async function refreshGame(gameId, options = {}) {
   const requestRevision = gameRequestGate.next();
   try {
-    if (!(location.pathname === '/game' || location.pathname === '/join')) return;
-    if ((params.get('id') ?? params.get('game')) !== gameId) return;
+    if (!(location.pathname === '/game' || location.pathname === '/join')) return true;
+    if ((params.get('id') ?? params.get('game')) !== gameId) return true;
     const game = await api(`/api/games/${gameId}`);
-    if (!gameRequestGate.isCurrent(requestRevision)) return;
+    if (!gameRequestGate.isCurrent(requestRevision)) return true;
     // A reveal in flight owns the reveal control; a status flip caused by the
     // other player's reveal must not repaint it away. The reveal resolves itself
     // with its own repaint once it settles or fails.
     if (revealInFlight && !isTerminalGameStatus(game.status)) {
       syncGameClock(game);
-      return;
+      return true;
     }
     const signature = gameSignature(game);
     if (window.__gameStatus === signature) {
       syncGameClock(game);
-      return;
+      return true;
     }
     window.__gameStatus = signature;
     await paintGame(gameId, game);
+    return true;
   } catch (error) {
     // A finished game is readable for a short window, then it is removed. Past
-    // that window the link is a dead end, not a transient error to retry.
+    // that window the link is a dead end, not a transient error to retry. The
+    // caller must not restart polling for a game that no longer exists.
     if (error.code === 'GAME_NOT_FOUND' && gameRequestGate.isCurrent(requestRevision)) {
       stopGameRefresh();
       renderGameEnded();
-      return;
+      return false;
     }
     // A transient refresh may race a broadcast; the next tick retries.
     if (options.reportErrors) throw error;
   }
+  return true;
 }
 
 // Wallet connection with no DOM side effects, for the lobby controller.

@@ -744,9 +744,30 @@ export class BackendGameService {
       ? { status: 'observed' }
       : refreshed.join
       ? await this.#confirmJoin(refreshed, request)
-      : await this.chain.confirmCreation({ transactionId: id, request, prepared });
+      // The status endpoint must be a lightweight observation, not the full
+      // confirmation wait: the browser polls on its own cadence, so one RPC pass
+      // (mined within the current DAA, or merely visible in the mempool) is
+      // enough to reflect progress. Keeping this non-blocking is what stops a
+      // freshly locked number from hanging the page for up to a minute.
+      : await this.chain.confirmCreation({ transactionId: id, request, prepared, attempts: 1 });
     const status = deriveGameStatus({ record: refreshed, confirmation, safetyStatus, automaticBroadcast, confirmedReveals, pendingReveals, pendingSafety });
-    if (status !== refreshed.status) await this.#saveGame({ ...refreshed, status, confirmation, updatedAt: new Date().toISOString() });
+    if (status !== refreshed.status) {
+      // Merge the new status into the latest stored record instead of replacing
+      // the whole snapshot: a join, reveal, or safety action saved while this
+      // read was on the wire must survive the update. If the stored record moved
+      // on while we waited, that newer writer owns the status too; our derived
+      // value described an older snapshot, so it must not overwrite it.
+      if (typeof this.store.updateGame === 'function') {
+        await this.store.updateGame(id, (current) => {
+          if (current.status !== refreshed.status) return;
+          current.status = status;
+          current.confirmation = confirmation;
+          current.updatedAt = new Date().toISOString();
+        });
+      } else {
+        await this.#saveGame({ ...refreshed, status, confirmation, updatedAt: new Date().toISOString() });
+      }
+    }
     const actions = deriveAvailableActions({ status, firstRevealer: confirmedReveals.find((reveal) => !reveal.winner)?.playerAddress });
     const { safetyAction, automaticAction, canCancel } = actions;
     const readiness = await this.#safetyReadiness(refreshed, request, automaticAction ?? safetyAction);
