@@ -132,6 +132,11 @@ test('server serves the browser application and health probe', async (t) => {
   assert.match(browserSource, /function renderLobby/);
   assert.match(browserSource, /function paintLobby/);
   assert.match(browserSource, /Play for \$\{escapeHtml\(match\.stakeKas\)\} KAS/);
+  // A refused bot hand-off must stay visible: the waiting screen renders the
+  // controller's notice, and the button reports that the claim is in flight.
+  assert.match(browserSource, /Calling the bot&hellip;/);
+  assert.match(browserSource, /aria-busy="\$\{busy\}"/);
+  assert.match(browserSource, /botPanel\}[\s\S]*?\$\{notice\}/);
   // The pick and game screens state the player's side, stake, and take in one
   // shared, highlighted summary, not a Stake/Pot ledger table.
   assert.match(browserSource, /function matchSummaryHtml\(side, stakeKas\)/);

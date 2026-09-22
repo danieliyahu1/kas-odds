@@ -435,6 +435,84 @@ test('a busy bot leaves the player waiting for a human', async () => {
   assert.equal(harnessed.last().note.title, 'The bot is busy');
 });
 
+test('every refused bot hand-off names its own reason instead of looking inert', async () => {
+  const cases = [
+    ['BOT_UNAVAILABLE', 'The bot is unavailable'],
+    ['BOT_NOT_READY', 'Give it a moment'],
+    ['BOT_BUSY', 'The bot is busy'],
+  ];
+  for (const [code, title] of cases) {
+    let clock = 0;
+    const harnessed = harness({
+      botAvailable: true,
+      botStakeKas: 1,
+      now: () => clock,
+      api: async (url) => {
+        if (url === '/api/matchmaking/join') return waitingMatch();
+        if (url.startsWith('/api/matchmaking/m1?')) return waitingMatch();
+        if (url === '/api/matchmaking/m1/bot') throw Object.assign(new Error(code), { code });
+        return {};
+      },
+    });
+    harnessed.controller.start();
+    await harnessed.actions.connectLimit('5');
+    clock = 6_000;
+    harnessed.timers[0]();
+    await flush();
+    await flush();
+    assert.equal(harnessed.last().botOffer, true, `${code}: the offer is visible before the click`);
+
+    await harnessed.actions.offerBot();
+
+    assert.equal(harnessed.last().note.title, title, `${code}: the refusal names its reason`);
+    assert.equal(harnessed.last().note.kind, 'info');
+    assert.equal(harnessed.last().botOffer, false);
+  }
+});
+
+test('a poll that resolves after a bot claim cannot repaint the waiting view', async () => {
+  let clock = 0;
+  let claimed = false;
+  let deferNextGet = false;
+  let releaseStale = null;
+  const botMatched = { ...waitingMatch(), status: 'matched', role: 'creator', side: 'even', stakeKas: 1, opponentConnected: true, opponentType: 'bot' };
+  const harnessed = harness({
+    botAvailable: true,
+    botStakeKas: 1,
+    now: () => clock,
+    api: async (url) => {
+      if (url === '/api/matchmaking/join') return waitingMatch();
+      if (url === '/api/matchmaking/m1/bot') { claimed = true; return botMatched; }
+      if (url.startsWith('/api/matchmaking/m1?')) {
+        if (deferNextGet) {
+          deferNextGet = false;
+          return new Promise((resolve) => { releaseStale = () => resolve(waitingMatch()); });
+        }
+        return claimed ? botMatched : waitingMatch();
+      }
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectLimit('5');
+  clock = 6_000;
+  deferNextGet = true;
+  for (let attempt = 0; attempt < 3 && !releaseStale; attempt += 1) {
+    harnessed.timers[0]();
+    await flush();
+  }
+  assert.ok(releaseStale, 'a poll is in flight before the claim');
+
+  await harnessed.actions.offerBot();
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.PICK);
+
+  releaseStale();
+  await flush();
+  await flush();
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.PICK, 'the stale waiting snapshot is ignored');
+  assert.equal(harnessed.last().match.opponentType, 'bot');
+});
+
 test('no bot offer appears when the bot is not configured', async () => {
   let clock = 0;
   const harnessed = harness({

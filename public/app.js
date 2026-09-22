@@ -254,13 +254,14 @@ function paintLobby(snapshot, actions) {
         ? `<div class="bot-offer">
             <p class="lead">No player yet. Play the KasOdds bot?</p>
             <p class="muted-note">It plays for ${escapeHtml(botStakeKas)} KAS, takes the second seat, and reveals automatically.</p>
-            <div class="actions"><button type="button" class="outline" id="lobby-bot"${busy ? ' disabled' : ''}>Play the bot for ${escapeHtml(botStakeKas)} KAS</button></div>
+            <div class="actions"><button type="button" class="outline" id="lobby-bot" aria-busy="${busy}"${busy ? ' disabled' : ''}>${busy ? 'Calling the bot&hellip;' : `Play the bot for ${escapeHtml(botStakeKas)} KAS`}</button></div>
           </div>`
         : '';
       paint('Searching a player', `
         <div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Your limit: up to ${escapeHtml(match.myLimitKas)} KAS.</span></div>
         <p class="muted-note">You'll pick your number when we match.</p>
         ${botPanel}
+        ${notice}
         ${cancelButton}`);
       const botButton = document.querySelector('#lobby-bot');
       if (botButton) botButton.addEventListener('click', () => void actions.offerBot());

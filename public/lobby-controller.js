@@ -28,6 +28,13 @@ const MATCH_POLL_INTERVAL_MS = 1000;
 // How long a public search waits before the fallback bot is offered. A real
 // opponent always gets the first chance at the seat.
 const BOT_OFFER_DELAY_MS = 5_000;
+// Explicit, distinct feedback for every way the bot hand-off can be refused, so
+// a rejected click never looks like nothing happened.
+const BOT_OFFER_FAILURE_COPY = Object.freeze({
+  BOT_BUSY: { kind: 'info', title: 'The bot is busy', message: 'It is already playing a game. We will keep looking for a player.' },
+  BOT_NOT_READY: { kind: 'info', title: 'Give it a moment', message: 'The bot is offered after a short wait. We will keep looking for a player.' },
+  BOT_UNAVAILABLE: { kind: 'info', title: 'The bot is unavailable', message: 'No KasOdds bot is configured right now. We will keep looking for a player.' },
+});
 const MIN_STAKE_KAS = 1;
 const MAX_STAKE_KAS = 1_000_000;
 const KAS_DECIMALS = 8;
@@ -77,6 +84,9 @@ export function createLobbyController({
   let gameCancelled = false;
   let botOffer = false;
   let waitStartedAt = null;
+  // Bumped whenever this controller writes `match` itself. A poll that resolves
+  // after its revision is superseded must not repaint an older snapshot.
+  let matchRevision = 0;
 
   const poller = createPollController({ onPoll: () => refreshMatch(), intervalMs: pollIntervalMs, setIntervalFn, clearIntervalFn });
 
@@ -210,6 +220,9 @@ export function createLobbyController({
     busy = true;
     error = null;
     note = { kind: 'info', title: 'Calling the KasOdds bot', message: 'Taking the second seat.' };
+    // Supersede any matchmaking poll already on the wire, so a stale waiting
+    // snapshot can never repaint over the claim this POST is about to make.
+    matchRevision += 1;
     emit();
     try {
       match = await api(`/api/matchmaking/${match.matchId}/bot`, { method: 'POST', body: { address: account.address } });
@@ -222,10 +235,11 @@ export function createLobbyController({
     } catch (caught) {
       busy = false;
       logError('bot_offer_failed', { code: caught?.code, message: caught?.message });
-      if (['BOT_BUSY', 'BOT_NOT_READY', 'BOT_UNAVAILABLE'].includes(caught?.code)) {
+      const botFailure = BOT_OFFER_FAILURE_COPY[caught?.code];
+      if (botFailure) {
         botOffer = false;
         waitStartedAt = now();
-        note = { kind: 'info', title: 'The bot is busy', message: 'It is already playing a game. We will keep looking for a player.' };
+        note = botFailure;
         return emit();
       }
       handleLobbyError(caught);
@@ -235,13 +249,19 @@ export function createLobbyController({
 
   async function refreshMatch() {
     if (started || !match) return;
+    const revision = matchRevision;
     try {
       const previous = match;
-      match = await api(`/api/matchmaking/${match.matchId}?address=${encodeURIComponent(account.address)}`);
+      const next = await api(`/api/matchmaking/${match.matchId}?address=${encodeURIComponent(account.address)}`);
+      // A bot claim owns `match` from the moment it starts; a poll that began
+      // before it must not overwrite the fresh view with an older snapshot.
+      if (revision !== matchRevision) return;
+      match = next;
       if (shouldRerenderMatch(previous, match, { picking })) transitionForMatch();
       const offer = botOfferReady();
       if (offer !== botOffer) { botOffer = offer; emit(); }
     } catch (caught) {
+      if (revision !== matchRevision) return;
       if (caught?.code !== 'MATCH_NOT_FOUND') return;
       poller.stop();
       // A started match that disappears means its on-chain game is gone; the only
