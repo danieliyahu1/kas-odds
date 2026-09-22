@@ -172,6 +172,11 @@ test('the repaint signature tracks the readiness flip, not the ticking seconds',
   assert.equal(gameSignature({ ...base, automaticRemainingSeconds: 299 }), gameSignature(base));
 });
 
+test('the repaint signature tracks the chain readiness flip so the button appears on advance', () => {
+  const base = { status: 'first_revealed', chainReady: false, firstRevealer: 'kaspatest:creator', winner: undefined };
+  assert.notEqual(gameSignature({ ...base, chainReady: true }), gameSignature(base));
+});
+
 test('the covenant clock names the entry and explains the rule that phase enforces', () => {
   const game = (overrides = {}) => ({ automaticAction: 'refund_all', automaticReady: false, automaticRemainingSeconds: 300, ...overrides });
   assert.equal(covenantClock(game()).label, 'Refund');

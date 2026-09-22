@@ -210,7 +210,7 @@ export function gameStage(game, role) {
 // readiness flip should force a repaint (a repaint would rebuild the reveal
 // control and wipe anything in progress).
 export function gameSignature(game) {
-  return [game.status, game.safetyAction, game.safetyReady, game.automaticAction, game.automaticReady, game.firstRevealer, game.winner,
+  return [game.status, game.chainReady, game.safetyAction, game.safetyReady, game.automaticAction, game.automaticReady, game.firstRevealer, game.winner,
     (game.pendingReveals ?? []).map((item) => `${item.role}:${item.retryable}`).join(','),
     (game.pendingSafety ?? []).map((item) => `${item.action}:${item.role}:${item.retryable}`).join(',')].join('|');
 }

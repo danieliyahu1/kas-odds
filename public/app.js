@@ -478,6 +478,10 @@ function playerSide(game, role) {
 }
 
 function revealSection(game, pending) {
+  // The chain, not the phase, decides whether the button exists: while the
+  // covenant output the reveal must spend is not yet confirmed, show the same
+  // spinner the in-flight control uses instead of a button the node would reject.
+  if (game.chainReady === false) return revealBlockHtml(revealWaitingHtml('Waiting for the chain'));
   const waiting = pending && !pending.retryable;
   const control = waiting
     ? revealWaitingHtml('Revealing...')
@@ -616,7 +620,7 @@ function safetySection(game, pending) {
   // generic recovery control.
   if (game.status === 'waiting_for_player_b') return '';
   if (pending) {
-    const pendingControl = pending.retryable
+    const pendingControl = pending.retryable && game.chainReady !== false
       ? `<div class="actions"><button type="button" class="outline" data-action="safety" data-safety-action="${escapeHtml(pending.action)}">Try again</button></div>`
       : '<div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Waiting for confirmation</span></div>';
     return `<div id="game-safety" class="safety">${pendingControl}</div>`;
@@ -671,7 +675,9 @@ function bindExit(gameId, game, role, pending) {
   if (!exit) return;
   const cancelInFlight = pending?.action === 'creator_refund' && !pending.retryable;
   const cancelsOpenGame = game.status === 'waiting_for_player_b' && game.canCancel && role === 'creator';
-  if (!cancelsOpenGame || cancelInFlight) return;
+  // The refund spends the creation output, so it may only be offered once the
+  // chain has confirmed it. Until then Exit stays a plain navigation link.
+  if (!cancelsOpenGame || cancelInFlight || game.chainReady === false) return;
   exit.addEventListener('click', async (event) => {
     event.preventDefault();
     exit.classList.add('disabled');

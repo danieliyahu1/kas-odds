@@ -771,6 +771,7 @@ export class BackendGameService {
     const actions = deriveAvailableActions({ status, firstRevealer: confirmedReveals.find((reveal) => !reveal.winner)?.playerAddress });
     const { safetyAction, automaticAction, canCancel } = actions;
     const readiness = await this.#safetyReadiness(refreshed, request, automaticAction ?? safetyAction);
+    const chainReady = await this.#chainActionReady(refreshed, request, status, confirmedReveals, confirmation);
     return {
       gameId: id,
       network: this.network.id,
@@ -791,6 +792,11 @@ export class BackendGameService {
       revealedPicks: Object.fromEntries(confirmedReveals.map((reveal) => [reveal.role, reveal.choice])),
       transactions: projectTerminalTransactions({ record: refreshed, confirmedReveals, status }),
        canReveal: actions.canReveal,
+      // The one chain fact the interface reflects: the current covenant output
+      // can be spent now, so a game action button may be shown. It is not a
+      // policy the backend enforces on the player; it is the chain's own
+      // one-DAA confirmation rule, surfaced so the screen matches the chain.
+      chainReady,
       pendingReveals: pendingReveals.map((reveal) => ({ role: reveal.role, stage: reveal.winner ? 'settlement' : 'first', retryable: isPendingRetryable(reveal) })),
       pendingSafety: pendingSafety.map((item) => ({ action: item.action, role: item.role, retryable: isPendingRetryable(item) })),
        safetyAction,
@@ -870,6 +876,28 @@ export class BackendGameService {
       : { transactionId: record.join.transactionId, address: record.join.joinedAddress, scriptPublicKey: record.join.joinedScriptPublicKey, redeemScript: record.join.joinedRedeemScript };
     const { entry, currentDaaScore } = await this.#expectedUtxo(descriptor, resolveEconomics(request).potSompi);
     return { entry, currentDaaScore, joinedDaaScore: BigInt(entry.blockDaaScore), transactionId: descriptor.transactionId, redeemScript: descriptor.redeemScript };
+  }
+
+  // Every player action (join, creator refund, first reveal, settlement reveal)
+  // spends the current covenant output, and the chain only accepts that spend
+  // once the output it consumes is one DAA score old. This is the single fact
+  // the interface mirrors: it is not a rule the backend imposes, only the
+  // chain's own confirmation status reported to the screen. Before a join is
+  // confirmed the joined escrow is the output; after that the first reveal's
+  // continuation is.
+  async #chainActionReady(record, request, status, confirmedReveals, confirmation) {
+    if (['settled', 'fallback_claimed', 'refunded', 'creator_refunded', 'refund_partial'].includes(status)) return true;
+    const first = confirmedReveals.find((reveal) => !reveal.winner) ?? null;
+    if (first) {
+      try {
+        const current = await this.#currentGameUtxo(record, request, first);
+        return isDaaConfirmed(current.entry, current.currentDaaScore);
+      } catch (error) {
+        if (error?.code === 'ACTION_NOT_CONFIRMED') return false;
+        throw error;
+      }
+    }
+    return confirmation.status === 'confirmed';
   }
 
   async #refreshActionState(record) {

@@ -888,6 +888,7 @@ function revealGameRecord(reveals = []) {
     protocolVersion: PROTOCOL_VERSION,
     status: 'joined',
     request: serializedRequest(request),
+    prepared: { feeSompi: '1000', policy: {}, scriptPublicKey: REVEAL_JOINED_SPK, covenantId: '07'.repeat(32) },
     join: {
       transactionId: REVEAL_JOIN_TXID,
       joinerAddress: REVEAL_JOINER_ADDRESS,
@@ -924,14 +925,14 @@ function revealFunding() {
   return { outpoint: { transactionId: '77'.repeat(32), index: 0 }, amount: '2535839900', scriptPublicKey: `000020${'88'.repeat(32)}ac`, blockDaaScore: 100, isCoinbase: false };
 }
 
-function revealRpc({ escrow = true, continuation = null, funding = [] } = {}) {
+function revealRpc({ escrow = true, continuation = null, funding = [], virtualDaaScore = '3000', escrowBlockDaa = 100 } = {}) {
   return {
-    getBlockDagInfo: async () => ({ virtualDaaScore: '3000' }),
+    getBlockDagInfo: async () => ({ virtualDaaScore }),
     getFeeEstimate: async () => ({ estimate: { priorityBucket: [{ feerate: 1 }] } }),
     getUtxosByAddresses: async (addresses) => {
       const [address] = addresses;
       if (address === REVEAL_JOINED_ADDRESS && escrow) {
-        return { entries: [{ outpoint: { transactionId: REVEAL_JOIN_TXID, index: 0 }, amount: REVEAL_GROSS_POT, scriptPublicKey: REVEAL_JOINED_SPK, blockDaaScore: 100, isCoinbase: false }] };
+        return { entries: [{ outpoint: { transactionId: REVEAL_JOIN_TXID, index: 0 }, amount: REVEAL_GROSS_POT, scriptPublicKey: REVEAL_JOINED_SPK, blockDaaScore: escrowBlockDaa, isCoinbase: false }] };
       }
       if (address === REVEAL_CONTINUATION_ADDRESS && continuation) return { entries: [continuation] };
       return { entries: funding };
@@ -984,6 +985,33 @@ test('the second player settles once the lead reveal confirms', async (t) => {
   });
   const prepared = await joinerReveal(service);
   assert.equal(prepared.stage, 'settlement');
+});
+
+// The interface mirrors the chain: an action button is offered only once the
+// covenant output it must spend is DAA-confirmed. The backend reports that as
+// chainReady; it does not decide the game.
+test('the game view reports chainReady only once the joined escrow is confirmed', async (t) => {
+  const confirmed = await revealService(t, { rpcOptions: { escrowBlockDaa: 2999 } });
+  assert.equal((await confirmed.readGame(REVEAL_GAME_ID)).chainReady, true);
+
+  const pending = await revealService(t, { rpcOptions: { escrowBlockDaa: 3000 } });
+  assert.equal((await pending.readGame(REVEAL_GAME_ID)).chainReady, false);
+});
+
+test('the game view waits for the first reveal continuation before offering settlement', async (t) => {
+  const continuationAt = (blockDaaScore) => ({ outpoint: { transactionId: REVEAL_LEAD_TXID, index: 0 }, amount: REVEAL_GROSS_POT, scriptPublicKey: REVEAL_CONTINUATION_SPK, blockDaaScore, isCoinbase: false });
+
+  const ready = await revealService(t, {
+    reveals: [leadReveal({ status: 'confirmed', confirmedDaaScore: '2000' })],
+    rpcOptions: { escrow: false, continuation: continuationAt(2999) },
+  });
+  assert.equal((await ready.readGame(REVEAL_GAME_ID)).chainReady, true);
+
+  const pending = await revealService(t, {
+    reveals: [leadReveal({ status: 'confirmed', confirmedDaaScore: '2000' })],
+    rpcOptions: { escrow: false, continuation: continuationAt(3000) },
+  });
+  assert.equal((await pending.readGame(REVEAL_GAME_ID)).chainReady, false);
 });
 
 test('a reveal settlement logs the winner payout on completion', async (t) => {
