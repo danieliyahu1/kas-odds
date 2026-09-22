@@ -449,6 +449,54 @@ test('creator cancel is available immediately for an unmatched open game', async
   );
 });
 
+test('a creator refund waits quietly while the deposit is still confirming', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-cancel-wait-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const gameId = 'ff'.repeat(32);
+  const creatorAddress = 'kaspatest:creator';
+  const creatorPublicKey = 'aa'.repeat(32);
+  const request = prepareCreateGame({
+    network: 'testnet-10',
+    creatorAddress,
+    creatorPublicKey,
+    creatorCommitment: 'cc'.repeat(32),
+    deadlineDaa: 10_000n,
+    side: 'even',
+    stakeKas: 1,
+    feeSompi: 1_000n,
+    gameFeePublicKey: GAME_FEE_PUBLIC_KEY,
+  });
+  const serialized = Object.fromEntries(Object.entries(request).map(([key, value]) => [key, typeof value === 'bigint' ? String(value) : value]));
+  const covenantUtxo = {
+    outpoint: { transactionId: gameId, index: 0 },
+    amount: '100000000',
+    // Mined in the current DAA score, so the deposit is not spendable yet.
+    scriptPublicKey: request.covenantScriptPublicKey,
+    blockDaaScore: 100,
+    isCoinbase: false,
+  };
+  const rpc = {
+    getBlockDagInfo: async () => ({ virtualDaaScore: '100' }),
+    getFeeEstimate: async () => ({ estimate: { priorityBucket: [{ feerate: 1 }] } }),
+    getUtxosByAddresses: async (addresses) => (addresses[0] === request.covenantAddress ? { entries: [covenantUtxo] } : { entries: [] }),
+  };
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame({
+    gameId,
+    protocolVersion: PROTOCOL_VERSION,
+    status: 'waiting_for_player_b',
+    request: serialized,
+    prepared: { network: 'testnet-10', creatorAddress, txJson: '{}', preparedHash: '07'.repeat(32), policy: {}, feeSompi: '1000', covenantId: '03'.repeat(32), scriptPublicKey: request.covenantScriptPublicKey },
+    createdAt: new Date().toISOString(),
+  });
+  const service = new BackendGameService({ rpc, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  await assert.rejects(
+    service.prepareSafetyAction(gameId, 'creator_refund', { playerAddress: creatorAddress, playerPublicKey: creatorPublicKey }),
+    { code: 'CHAIN_NOT_READY' },
+  );
+});
+
 test('automatic settlement retries a rejected refund instead of abandoning it', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kasodds-retry-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -1073,6 +1121,14 @@ test('a reveal settlement logs the winner payout on completion', async (t) => {
   assert.equal(saved.status, 'settled');
   assert.equal(saved.reveals[1].status, 'confirmed');
   assert.ok(saved.completedAt, 'the game must be completed in the store');
+});
+
+test('a reveal waits quietly, not as an error, while the covenant output is not spendable yet', async (t) => {
+  const unconfirmed = await revealService(t, { rpcOptions: { escrowBlockDaa: 3000, funding: [revealFunding()] } });
+  await assert.rejects(joinerReveal(unconfirmed), { code: 'CHAIN_NOT_READY' });
+
+  const missing = await revealService(t, { rpcOptions: { escrow: false } });
+  await assert.rejects(joinerReveal(missing), { code: 'CHAIN_NOT_READY' });
 });
 
 const BOT = { address: 'kaspatest:bot', publicKey: 'b'.repeat(64) };

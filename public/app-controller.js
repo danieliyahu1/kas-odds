@@ -166,7 +166,7 @@ function hasRevealed(game, role) {
   return game.revealedPicks?.[role] !== undefined || hasRevealPending(game, role);
 }
 
-function isRevealPhase(game) {
+export function isRevealPhase(game) {
   return game.canReveal === true
     || (game.pendingReveals ?? []).length > 0
     || Object.keys(game.revealedPicks ?? {}).length > 0;
@@ -300,6 +300,7 @@ export function actionErrorCopy(error) {
     FEE_REPRICING_FAILED: ['Network fee changed', 'The network fee changed while preparing this action. Please try again.'],
     TRANSACTION_REJECTED: ['Transaction not accepted', 'The network did not accept this action. Wait a few seconds, then try again. Your game funds remain safe.'],
     REVEAL_WAITING: ['Revealing...', 'Still revealing. This can take a moment. Try again if it does not finish.'],
+    CHAIN_NOT_READY: ['Waiting for the chain', 'The next step is still settling on-chain. This can take a moment. Your game funds remain safe.'],
     MATCH_TIMEOUT: ['Still waiting for your opponent', 'They did not create the game in time. Try again in a moment.'],
     CREATION_PENDING: ['Almost there', "Your opponent's game is still reaching the network. Try again in a moment."],
     CREATION_FAILED: ['The game did not start', "Your opponent's game did not reach the network. No KAS was locked."],

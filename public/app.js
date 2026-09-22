@@ -11,7 +11,7 @@ import { loadCovenantTemplate, verifyCreation, verifyPreparedTransaction } from 
 import { logDebug, logInfo, logWarn, logError } from '/log.js';
 import { signWithKasware as kaswareSignPskt } from '/kasware-signing.js';
 import { connectKaswareAccount } from '/kasware-connect.js';
-import { GAME_STAGE, actionErrorCopy, covenantClock, createLatestRequestGate, createPollController, formatWait, gameSignature, gameStage, isTerminalGameStatus, lobbyStage, terminalNotice } from '/app-controller.js';
+import { GAME_STAGE, actionErrorCopy, covenantClock, createLatestRequestGate, createPollController, formatWait, gameSignature, gameStage, isRevealPhase, isTerminalGameStatus, lobbyStage, terminalNotice } from '/app-controller.js';
 import { LOBBY_MODE, LOBBY_PHASE, createLobbyController } from './lobby-controller.js';
 import { loadRuntimeConfig, runtimeConfig } from '/runtime-config.js';
 
@@ -40,27 +40,34 @@ async function timedStep(step, run) {
 const gamePoller = createPollController({ onPoll: (gameId) => refreshGame(gameId), intervalMs: 3500 });
 const gameRequestGate = createLatestRequestGate();
 
-// A reveal preparation can wait on the other player's lead reveal to confirm
-// before it can settle. The client retries quietly for a while; the player only
-// ever sees that their own reveal is in progress.
-const REVEAL_WAITING_RETRY_MS = 1500;
-const REVEAL_WAITING_TIMEOUT_MS = 60_000;
+// A UTXO action can be refused while the chain has not reached the state it
+// needs — the output it must spend is still confirming, or it just moved on to
+// the next phase. That is the chain advancing, not a player mistake, so the
+// client waits and retries quietly instead of showing an error. A genuine
+// refusal (bad reveal, not a player) is not in this set and still surfaces.
+const CHAIN_WAIT_RETRY_MS = 1500;
+const CHAIN_WAIT_TIMEOUT_MS = 60_000;
+const CHAIN_WAIT_CODES = new Set(['CHAIN_NOT_READY', 'REVEAL_WAITING', 'ACTION_NOT_CONFIRMED', 'GAME_NOT_CONFIRMED', 'GAME_NOT_OPEN', 'CREATION_PENDING']);
 let revealInFlight = false;
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function prepareRevealWithRetry(gameId, body) {
-  const deadline = nowMs() + REVEAL_WAITING_TIMEOUT_MS;
+async function withChainRetry(run) {
+  const deadline = nowMs() + CHAIN_WAIT_TIMEOUT_MS;
   for (;;) {
     try {
-      return await api(`/api/games/${gameId}/reveal/prepare`, { method: 'POST', body });
+      return await run();
     } catch (error) {
-      if (error.code !== 'REVEAL_WAITING' || nowMs() >= deadline) throw error;
-      await delay(REVEAL_WAITING_RETRY_MS);
+      if (!CHAIN_WAIT_CODES.has(error.code) || nowMs() >= deadline) throw error;
+      await delay(CHAIN_WAIT_RETRY_MS);
     }
   }
+}
+
+function prepareRevealWithRetry(gameId, body) {
+  return withChainRetry(() => api(`/api/games/${gameId}/reveal/prepare`, { method: 'POST', body }));
 }
 
 export async function boot() {
@@ -516,6 +523,11 @@ function showRevealInFlight() {
 async function renderRevealFailure(gameId, error) {
   window.__gameStatus = undefined;
   await refreshGame(gameId);
+  // If the refreshed screen no longer offers the reveal — the chain moved on to
+  // the next phase — there is nothing to report. The screen now shows the
+  // current chain state, which is the whole point.
+  const game = window.__game;
+  if (!game || !isRevealPhase(game)) return;
   if (error.code === 'KASWARE_UNAVAILABLE') return renderKaswareShortfall('#reveal-notice');
   if (error.code === 'REVEAL_SECRET_MISSING') return showNotice('#reveal-notice', 'Reveal unavailable', 'This browser does not have your unrevealed number for this game. Play the game in the browser you used to start it, and keep this site\'s data.', 'error');
   if (error.code === 'INVALID_REVEAL') return showNotice('#reveal-notice', 'Reveal did not match', 'The saved number no longer matches the locked commitment. You may have started this game in another browser.', 'error');
@@ -637,10 +649,10 @@ function terminalSection(game, role) {
 
 async function runSafetyAction(gameId, action) {
   const { provider, account } = await connectKasware('#game-safety');
-  const prepared = await api(`/api/games/${gameId}/${action}/prepare`, { method: 'POST', body: {
+  const prepared = await withChainRetry(() => api(`/api/games/${gameId}/${action}/prepare`, { method: 'POST', body: {
     playerAddress: account.address,
     playerPublicKey: account.publicKey,
-  } });
+  } }));
   const verified = verifyPreparedTransaction(prepared, 'refund');
   showNotice('#game-safety', 'Confirm in KasWare', `Network fee: ${formatKas(prepared.feeSompi)} KAS.`, '');
   const signedTxJson = await signWithKasware(provider, prepared.txJson, verified.signInputs);
@@ -648,7 +660,16 @@ async function runSafetyAction(gameId, action) {
   await api(`/api/games/${gameId}/${action}/submit`, { method: 'POST', body: { preparedHash: prepared.preparedHash, signedTxJson } });
 }
 
-function renderSafetyFailure(error) {
+async function renderSafetyFailure(gameId, error) {
+  window.__gameStatus = undefined;
+  await refreshGame(gameId);
+  // If the refreshed screen no longer offers this recovery action — the chain
+  // moved on, e.g. the rival joined or the game settled — there is nothing to
+  // report; the screen shows the current chain state.
+  const game = window.__game;
+  const refundOffered = Boolean(game) && game.status === 'waiting_for_player_b' && game.canCancel;
+  const retryOffered = Boolean(document.querySelector('[data-action="safety"]'));
+  if (!refundOffered && !retryOffered) return;
   if (guardKaswareShortfall('#game-safety', error)) return;
   showActionError('#game-safety', error);
 }
@@ -665,7 +686,7 @@ function bindSafety(gameId, game, pending) {
     } catch (error) {
       safetyButton.disabled = false;
       logError('safety_action_failed', { code: error.code, message: error.message });
-      renderSafetyFailure(error);
+      await renderSafetyFailure(gameId, error);
     }
   });
 }
@@ -688,7 +709,7 @@ function bindExit(gameId, game, role, pending) {
     } catch (error) {
       exit.classList.remove('disabled');
       logError('cancel_game_failed', { code: error.code, message: error.message });
-      renderSafetyFailure(error);
+      await renderSafetyFailure(gameId, error);
     }
   });
 }
@@ -967,6 +988,7 @@ async function refreshGame(gameId, options = {}) {
     if ((params.get('id') ?? params.get('game')) !== gameId) return true;
     const game = await api(`/api/games/${gameId}`);
     if (!gameRequestGate.isCurrent(requestRevision)) return true;
+    window.__game = game;
     // A reveal in flight owns the reveal control; a status flip caused by the
     // other player's reveal must not repaint it away. The reveal resolves itself
     // with its own repaint once it settles or fails.

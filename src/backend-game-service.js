@@ -337,7 +337,12 @@ export class BackendGameService {
     if (pendingMine) throw new ProtocolError('ACTION_PENDING', 'The previous reveal is still confirming');
     const first = confirmedReveals[0] ?? null;
     if (!first) this.#assertMayLeadReveal(id, reveals, player);
-    const current = await this.#currentGameUtxo(gameRecord, request, first);
+    let current;
+    try {
+      current = await this.#currentGameUtxo(gameRecord, request, first);
+    } catch (error) {
+      throw asChainWait(error);
+    }
     if (first) logger.info('settlement_reveal_parent', { gameId: id, transactionId: current.transactionId, parentBlockDaaScore: String(current.entry.blockDaaScore ?? 0), currentDaaScore: String(current.currentDaaScore) });
     const state = this.#revealGameState(id, gameRecord, request, current, confirmedReveals);
 
@@ -648,7 +653,12 @@ export class BackendGameService {
       if (gameRecord.join) throw new ProtocolError('ACTION_UNAVAILABLE', 'Player B already joined this game');
       const creation = deserializePrepared(gameRecord.prepared);
       const economics = resolveEconomics(request);
-      const open = await this.#openCreationUtxo(id, request, creation);
+      let open;
+      try {
+        open = await this.#openCreationUtxo(id, request, creation);
+      } catch (error) {
+        throw asChainWait(error);
+      }
       current = { entry: open.entry, currentDaaScore: open.currentDaaScore, transactionId: id, redeemScript: request.covenantRedeemScript, value: economics.lockSompi };
       covenantEntry = 'refund';
     } else {
@@ -1389,6 +1399,19 @@ function publicError(error) {
 function isDaaConfirmed(entry, currentDaaScore) {
   if (!isMinedDaaScore(entry?.blockDaaScore ?? entry?.utxo?.blockDaaScore)) return false;
   return BigInt(currentDaaScore) >= BigInt(entry.blockDaaScore ?? entry.utxo.blockDaaScore) + 1n;
+}
+
+// A covenant action is refused when the output it must spend is not in the
+// state the action needs: still confirming, or already moved on to the next
+// phase. That is the chain progressing under a UTXO model, not a player
+// mistake, so these become one retryable CHAIN_NOT_READY the client can wait
+// out instead of an error it shows to the player.
+const CHAIN_STATE_CODES = new Set(['ACTION_NOT_CONFIRMED', 'GAME_NOT_CONFIRMED', 'GAME_NOT_OPEN']);
+
+function asChainWait(error) {
+  return CHAIN_STATE_CODES.has(error?.code)
+    ? new ProtocolError('CHAIN_NOT_READY', 'The chain has not reached the state this action needs yet')
+    : error;
 }
 
 function isRetryableSubmissionError(error) {

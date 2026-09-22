@@ -82,7 +82,7 @@ export function prepareOpenRefundTransaction({ gameInput, stakeSompi, settleFeeS
 
 export function prepareRevealTransaction({ game, caller, currentDaaScore, secret, gameInput, recipientScriptPublicKey, continuationScriptPublicKey, continuationCovenant, feeInputs = [], feeSompi = 0n, change, publicKey, payoutPublicKey = publicKey, walletPublicKey, feeScriptPublicKey }) {
   const decision = resolveReveal({ game, caller, currentDaaScore, secret });
-  if (!decision.available) throw new ProtocolError('ACTION_UNAVAILABLE', decision.message);
+  if (!decision.available) throw revealDecisionError(decision);
   const economics = resolveEconomics(game);
   const isFirstReveal = !game.firstReveal;
   if (isFirstReveal && (typeof continuationScriptPublicKey !== 'string' || continuationScriptPublicKey.length === 0 || !continuationCovenant)) {
@@ -190,7 +190,7 @@ export function prepareCovenantOnlyTransaction({ action, gameInput, inputSequenc
 
 export function validateRevealTemplate({ game, caller, currentDaaScore, secret, transaction }) {
   const decision = resolveReveal({ game, caller, currentDaaScore, secret });
-  if (!decision.available) throw new ProtocolError('ACTION_UNAVAILABLE', decision.message);
+  if (!decision.available) throw revealDecisionError(decision);
   if (!verifyRevealPreimage({ commitment: game.commitments?.[caller] ?? game.participants?.[caller]?.commitment, choice: decision.choice, nonceHex: decision.nonceHex })) {
     throw new ProtocolError('INVALID_REVEAL', 'Reveal preimage does not match commitment');
   }
@@ -292,6 +292,13 @@ export function verifySignedTerminalTransaction({ prepared, signedTxJson }) {
     throw new ProtocolError('SIGNING_FAILED', `Wallet did not sign every player funding input (unsigned ${unsigned.join(',')})`);
   }
   return signedTxJson;
+}
+
+// A reveal refused because the covenant output it must spend is not spendable
+// yet is the chain not having advanced, not a player mistake, so it carries the
+// retryable CHAIN_NOT_READY code. Every other refusal is a real error.
+function revealDecisionError(decision) {
+  return new ProtocolError(decision.status === 'waiting_for_locks' ? 'CHAIN_NOT_READY' : 'ACTION_UNAVAILABLE', decision.message);
 }
 
 function addArgument(builder, argument) {
