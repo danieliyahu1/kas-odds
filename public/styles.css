@@ -30,6 +30,8 @@ button { cursor: pointer; }
 .topbar-actions { display: flex; align-items: center; gap: 14px; }
 .footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px clamp(18px, 5vw, 64px); border-top: 1px solid var(--line); }
 .footer-network { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.kaspa-link { color: inherit; text-decoration: none; transition: color .15s ease; }
+.kaspa-link:hover, .kaspa-link:focus-visible { color: var(--teal); }
 #network-label:not(:empty)::before { content: '/'; margin-right: 7px; color: var(--line); }
 .footer-actions { display: flex; align-items: center; gap: 12px; }
 .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--teal-bright); box-shadow: 0 0 0 4px rgba(73,234,203,.16); }
