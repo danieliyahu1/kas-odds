@@ -114,6 +114,10 @@ export class FallbackBotService {
     return secret;
   }
 
+  // The bot reveals exactly the way a browser joiner does: it waits for the
+  // game service to report that the joined escrow is spendable, then submits its
+  // stored number once. The game service already owns every chain transition, so
+  // the bot never inspects UTXOs itself and never invents an outcome.
   async #advanceGame(game) {
     if (game.join?.joinerAddress !== this.wallet.address) return;
     if (game.completedAt) {

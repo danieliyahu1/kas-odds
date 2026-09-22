@@ -140,3 +140,46 @@ test('a completed bot game releases the lease without further action', async (t)
   await store.joinMatchmaking({ matchId: 'm2', address: 'kaspatest:other', publicKey: 'c'.repeat(64), limitKas: 5 });
   await store.claimWaitingMatchForBot({ matchId: 'm2', bot: BOT, minWaitMs: 0 });
 });
+
+// Once the bot has revealed, the joined escrow is spent, so looking for it finds
+// nothing. That is a normal, healthy game, not a failed join: the bot must trust
+// the game service's lifecycle and never fabricate a refund from a missing UTXO.
+test('a game the bot already revealed keeps its join and stays live', async (t) => {
+  const { store, calls, reads, service } = await setup(t);
+  await matchedBotGame(store);
+  const join = { joinerAddress: BOT.address, transactionId: 't'.repeat(64) };
+  await store.saveGame({
+    gameId: GAME_ID, matchId: MATCH_ID, status: 'first_revealed', join,
+    reveals: [{ playerAddress: BOT.address, status: 'broadcast' }],
+  });
+  reads[GAME_ID] = { canReveal: false };
+
+  await service.runOnce();
+
+  const game = await store.loadGame(GAME_ID);
+  assert.deepEqual(game.join, join, 'the live join is preserved');
+  assert.equal(game.completedAt, undefined, 'the game is not fabricated as complete');
+  assert.equal(calls.some((entry) => entry.call === 'prepareReveal'), false);
+  await store.joinMatchmaking({ matchId: 'm2', address: 'kaspatest:other', publicKey: 'c'.repeat(64), limitKas: 5 });
+  await assert.rejects(
+    () => store.claimWaitingMatchForBot({ matchId: 'm2', bot: BOT, minWaitMs: 0 }),
+    (error) => error?.code === 'BOT_BUSY',
+    'the lease stays held by the live game',
+  );
+});
+
+// A join that is not spendable yet is left exactly as a browser joiner leaves it:
+// nothing to do, and nothing lost.
+test('a join that is not yet revealable is left intact', async (t) => {
+  const { store, calls, service } = await setup(t);
+  await matchedBotGame(store);
+  const join = { joinerAddress: BOT.address, transactionId: 't'.repeat(64) };
+  await store.saveGame({ gameId: GAME_ID, matchId: MATCH_ID, status: 'join_broadcast', join });
+
+  await service.runOnce();
+
+  const game = await store.loadGame(GAME_ID);
+  assert.deepEqual(game.join, join, 'a pending join is kept');
+  assert.equal(game.completedAt, undefined);
+  assert.equal(calls.some((entry) => entry.call === 'prepareReveal'), false);
+});
