@@ -201,16 +201,21 @@ export class BackendGameStore {
   }
 
   // A private room holds a fixed stake and never enters the public queue: only a
-  // player who has the invite id can take the second seat.
+  // player who has the invite id or the short room code can take the second seat.
+  // The code is an alias for the invite id, so it must be unique among live rooms.
   async createPrivateMatch(player) {
     return this.#updateWithResult((data) => {
       sweepIdleMatches(data, Date.now(), this.logger);
       cancelActiveMatchesFor(data, player.address, this.logger);
+      if (player.code && Object.values(data.matches).some((match) => match?.private && match.code === player.code && isLiveMatch(match))) {
+        throw new ProtocolError('CODE_TAKEN', 'That room code is already in use');
+      }
       const participant = participantRecord(player, player.stakeKas);
       const match = {
         matchId: player.matchId,
         status: 'waiting',
         private: true,
+        code: player.code ?? null,
         stakeKas: player.stakeKas,
         creatorSide: randomInt(2) === 0 ? 'even' : 'odd',
         players: [participant],
@@ -228,15 +233,18 @@ export class BackendGameStore {
       if (!match?.private || !isLiveMatch(match)) {
         throw new ProtocolError('MATCH_NOT_FOUND', 'This friend invite is no longer available');
       }
-      // A reconnect by a player already in the room is idempotent.
-      if (match.players.some((item) => item.address === player.address)) return match;
-      if (match.status !== 'waiting' || match.players.length !== 1) {
-        throw new ProtocolError('MATCH_FULL', 'This friend invite has already been used');
-      }
-      match.players.push(participantRecord(player, match.stakeKas));
-      match.status = 'matched';
-      match.creatorIndex = 0;
-      return match;
+      return joinPrivateRoom(match, player);
+    });
+  }
+
+  // Resolve a friend room by its short code. Lookup and join are one durable
+  // mutation, so a code can never point at a room that changed between the two.
+  async joinPrivateMatchByCode(code, player) {
+    return this.#updateWithResult((data) => {
+      sweepIdleMatches(data, Date.now(), this.logger);
+      const match = Object.values(data.matches).find((item) => item?.private && item.code === code && isLiveMatch(item));
+      if (!match) throw new ProtocolError('MATCH_NOT_FOUND', 'No open friend room matches that code');
+      return joinPrivateRoom(match, player);
     });
   }
 
@@ -509,6 +517,20 @@ function pruneQueue(data) {
 
 function participantRecord(player, limitKas) {
   return { ...player, limitKas, joinedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString() };
+}
+
+// The second-seat rule is identical whether the joiner arrived by invite id or by
+// short code: a reconnect by a seated player is idempotent, a fresh player takes
+// the only open seat, and a used room is full. Shared so the two paths cannot drift.
+function joinPrivateRoom(match, player) {
+  if (match.players.some((item) => item.address === player.address)) return match;
+  if (match.status !== 'waiting' || match.players.length !== 1) {
+    throw new ProtocolError('MATCH_FULL', 'This friend invite has already been used');
+  }
+  match.players.push(participantRecord(player, match.stakeKas));
+  match.status = 'matched';
+  match.creatorIndex = 0;
+  return match;
 }
 
 // Only a terminal record past its retrieval window is eligible for pruning; an

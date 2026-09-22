@@ -79,6 +79,50 @@ test('a private room holds a fixed stake and only the invited wallet may take th
   await assert.rejects(store.joinPrivateMatch('missing', { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_NOT_FOUND' });
 });
 
+test('a friend joins a private room by its short code', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-room-code-'));
+  const filePath = join(directory, 'games.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(filePath);
+
+  const room = await store.createPrivateMatch({ matchId: 'room', address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 4, code: 'K7PQ2M' });
+  assert.equal(room.code, 'K7PQ2M');
+
+  const joined = await store.joinPrivateMatchByCode('K7PQ2M', { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) });
+  assert.equal(joined.matchId, 'room');
+  assert.equal(joined.status, 'matched');
+  assert.deepEqual(joined.players.map((player) => player.address), ['kaspatest:host', 'kaspatest:friend']);
+
+  // A reconnect by the seated player is idempotent; a third wallet and an
+  // unknown code both fail without touching the room.
+  assert.equal((await store.joinPrivateMatchByCode('K7PQ2M', { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) })).players.length, 2);
+  await assert.rejects(store.joinPrivateMatchByCode('K7PQ2M', { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_FULL' });
+  await assert.rejects(store.joinPrivateMatchByCode('ZZZZZZ', { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_NOT_FOUND' });
+});
+
+test('a live private room code is unique and a released code can be reused', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-room-code-unique-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+
+  await store.createPrivateMatch({ matchId: 'first', address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 2, code: 'AAAAAA' });
+  await assert.rejects(store.createPrivateMatch({ matchId: 'second', address: 'kaspatest:other', publicKey: 'b'.repeat(64), stakeKas: 2, code: 'AAAAAA' }), { code: 'CODE_TAKEN' });
+
+  // Once the first room is no longer live its code is free again.
+  await store.updateMatch('first', (match) => { match.status = 'cancelled'; });
+  const reused = await store.createPrivateMatch({ matchId: 'third', address: 'kaspatest:third', publicKey: 'c'.repeat(64), stakeKas: 2, code: 'AAAAAA' });
+  assert.equal(reused.code, 'AAAAAA');
+});
+
+test('a code that never existed cannot open a room', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-room-code-missing-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  // A public match carries no code, so it can never be reached by code.
+  await store.joinMatchmaking({ matchId: 'public', address: 'kaspatest:waiter', publicKey: 'a'.repeat(64), limitKas: 5 });
+  await assert.rejects(store.joinPrivateMatchByCode('K7PQ2M', { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) }), { code: 'MATCH_NOT_FOUND' });
+});
+
 test('a public waiter never fills a private room seat', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kasodds-room-queue-'));
   const filePath = join(directory, 'games.json');

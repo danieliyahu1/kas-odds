@@ -9,10 +9,11 @@ the store file, wRPC node, and fee wallet all follow from it.
 
 Both ways to play begin with an off-chain lobby. "Play someone new" queues the
 wallet for matchmaking; "Play with a friend" opens a private room and the host
-shares a `/join?room=<sessionId>` link. Funds are locked only after the two
-players are matched: the creator signs the creation transaction first, then the
-matched opponent signs the join. The invite carries no secret, commitment
-preimage, wallet key, or transaction template.
+shares either a short six-character room code or a `/join?room=<sessionId>`
+link, so an invite can be passed in places that block links. Funds are locked
+only after the two players are matched: the creator signs the creation
+transaction first, then the matched opponent signs the join. The invite carries
+no secret, commitment preimage, wallet key, or transaction template.
 
 ## Stakes
 
@@ -40,6 +41,10 @@ winner in full. The game fee is never charged without a winner.
   fee separation.
 - `src/invite.js` parses and serializes the game-id invite; a friend room link
   is a `/join?room=<sessionId>` matchmaking session id instead.
+- `src/room-code.js` is the isomorphic friend-room code: it generates a short,
+  unambiguous six-character handle (no `0/O/1/I/L`), normalizes typed input, and
+  is shared by the server and the browser lobby. A code is only a lookup alias
+  for a live private room; it is never a key or a wallet identifier.
 - `src/backend-game-service.js` is the production game use-case boundary. It
   owns creation, joining, reveal, refund, claim, matchmaking (the public queue
   and invite-only friend rooms), persistence, and recovery orchestration behind
@@ -328,8 +333,10 @@ player cannot change its committed number after seeing an opponent's.
 Both paths use the same off-chain lobby. A public game is "play up to": each
 player sets the most they are comfortable playing, the server pairs any two
 waiters, and the stake is the lower of the two limits. A friend game is a
-private room: the host fixes the stake and shares a `/join?room=<sessionId>`
-link, and only the wallet holding that link can take the second seat. In both
+private room: the host fixes the stake and shares a short room code or a
+`/join?room=<sessionId>` link, and only the friend with that code or link can
+take the second seat. A code is valid only while the room is live and is capped
+per client, so it cannot be guessed open. In both
 cases the server assigns each player a side at match time, and no funds move
 until both players pick a number and lock: the assigned creator signs the
 creation transaction to escrow their stake, and the matched opponent signs the

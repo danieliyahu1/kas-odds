@@ -2,11 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { MIN_STAKE_KAS, ProtocolError, validateStakeInput } from './protocol.js';
 import { DEFAULT_NETWORK_PROFILE } from './network.js';
 import { normalizePublicKey } from './create-game.js';
+import { generateRoomCode, normalizeRoomCode } from './room-code.js';
 
 const noopLogger = Object.freeze({ info: () => {} });
+// A code collision is all but impossible (32^6 ≈ 1.07e9), but the uniqueness
+// check lives in the store, so a rare clash is retried rather than surfaced.
+const ROOM_CODE_ATTEMPTS = 5;
 
 export class MatchmakingService {
-  constructor({ store, metrics, logPlayer, logger = noopLogger, addressPrefix = DEFAULT_NETWORK_PROFILE.addressPrefix, bot = null, botOfferMinWaitMs = 5_000 }) {
+  constructor({ store, metrics, logPlayer, logger = noopLogger, addressPrefix = DEFAULT_NETWORK_PROFILE.addressPrefix, bot = null, botOfferMinWaitMs = 5_000, roomCodeGenerator = generateRoomCode }) {
     this.store = store;
     this.metrics = metrics;
     this.logPlayer = logPlayer;
@@ -14,6 +18,7 @@ export class MatchmakingService {
     this.addressPrefix = addressPrefix;
     this.bot = bot;
     this.botOfferMinWaitMs = botOfferMinWaitMs;
+    this.roomCodeGenerator = roomCodeGenerator;
   }
 
   async join(input) {
@@ -56,14 +61,15 @@ export class MatchmakingService {
     return matchResponse(claimed, address, { bot: this.bot });
   }
 
-  // A friend game is a private session: the host fixes the stake and shares the
-  // invite id, and neither player can lock funds until the room is matched.
+  // A friend game is a private session: the host fixes the stake and shares
+  // either the invite id (a link) or a short room code, and neither player can
+  // lock funds until the room is matched.
   async createRoom(input) {
     const address = matchmakingAddress(input.address, this.addressPrefix);
     const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
     const stakeKas = Number(input.stakeKas);
     validateStakeInput(stakeKas);
-    const match = await this.store.createPrivateMatch({ matchId: randomUUID(), address, publicKey, stakeKas });
+    const match = await this.#createMatchWithCode({ address, publicKey, stakeKas });
     this.logPlayer('matchmaking_room_created', address, { matchId: match.matchId, stakeKas });
     this.logger.info('matchmaking_room_waiting', { matchId: match.matchId, stakeKas });
     this.metrics.recordGameEvent('matchmaking_room_created');
@@ -75,11 +81,39 @@ export class MatchmakingService {
     const address = matchmakingAddress(input.address, this.addressPrefix);
     const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
     const match = await this.store.joinPrivateMatch(matchId, { address, publicKey });
-    this.logPlayer('matchmaking_room_joined', address, { matchId: match.matchId, stakeKas: match.stakeKas });
-    this.logger.info('matchmaking_room_paired', { matchId: match.matchId, stakeKas: match.stakeKas });
+    await this.#recordRoomJoined(match, address, 'link');
+    return matchResponse(match, address, { bot: this.bot });
+  }
+
+  // The friend types a short code instead of opening a link, so an invite can be
+  // passed where URLs are filtered. The code is normalized to the same canonical
+  // form the host was shown before it ever reaches the store.
+  async joinRoomByCode(code, input) {
+    const normalized = normalizeRoomCode(code);
+    if (!normalized) throw new ProtocolError('INVALID_ROOM_CODE', 'Enter the six-character room code your friend shared');
+    const address = matchmakingAddress(input.address, this.addressPrefix);
+    const publicKey = normalizePublicKey(input.publicKey, 'matchmaking public key');
+    const match = await this.store.joinPrivateMatchByCode(normalized, { address, publicKey });
+    await this.#recordRoomJoined(match, address, 'code');
+    return matchResponse(match, address, { bot: this.bot });
+  }
+
+  async #recordRoomJoined(match, address, via) {
+    this.logPlayer('matchmaking_room_joined', address, { matchId: match.matchId, stakeKas: match.stakeKas, via });
+    this.logger.info('matchmaking_room_paired', { matchId: match.matchId, stakeKas: match.stakeKas, via });
     this.metrics.recordGameEvent('matchmaking_room_joined');
     await this.recordBacklog();
-    return matchResponse(match, address, { bot: this.bot });
+  }
+
+  async #createMatchWithCode({ address, publicKey, stakeKas }) {
+    for (let attempt = 0; attempt < ROOM_CODE_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.store.createPrivateMatch({ matchId: randomUUID(), address, publicKey, stakeKas, code: this.roomCodeGenerator() });
+      } catch (error) {
+        if (error?.code !== 'CODE_TAKEN') throw error;
+      }
+    }
+    throw new ProtocolError('CODE_UNAVAILABLE', 'Could not allocate a room code; please start a new game');
   }
 
   async status(matchId, address) {
@@ -141,6 +175,7 @@ export function matchResponse(match, address, { bot = null } = {}) {
     matchId: match.matchId, status: match.status,
     role: match.status === 'waiting' ? null : isCreator ? 'creator' : 'joiner',
     side, gameId: match.gameId ?? null, creation: match.creation ?? null,
+    code: match.private ? match.code ?? null : null,
     stakeKas: match.stakeKas ?? null, myLimitKas: mine.limitKas ?? MIN_STAKE_KAS,
     rivalLimitKas: rival ? rival.limitKas ?? MIN_STAKE_KAS : null,
     opponentConnected: match.players.length === 2,

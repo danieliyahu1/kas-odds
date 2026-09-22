@@ -36,9 +36,13 @@ const feedbackDeliverer = new TelegramFeedback({ botToken: process.env.TELEGRAM_
 const feedbackSpill = new FeedbackSpill({ filePath: config.feedbackSpillPath });
 const feedbackService = new FeedbackService({ deliverer: feedbackDeliverer, spill: feedbackSpill, metrics, logger });
 const feedbackLimiter = new RateLimiter({ limit: 5, windowMs: 10 * 60_000 });
+// A friend room code is short and therefore guessable, though it is only valid
+// while the host's room is live and joining still requires a wallet. Cap code
+// attempts per client well below the global mutating limit to make guessing moot.
+const codeJoinLimiter = new RateLimiter({ limit: 10, windowMs: 5 * 60_000 });
 const botService = botWallet ? new FallbackBotService({ gameService, store, wallet: botWallet, metrics, logger }) : null;
 const schedulers = createServerSchedulers({ gameService, feedbackService, feedbackDeliverer, chainClient, logger, botService });
-const application = createHttpApplication({ gameService, store, relay, metrics, feedbackService, mutatingLimiter, feedbackLimiter, paths: config.paths, maxRequestBytes: config.maxRequestBytes, trustedProxy: config.trustedProxy, startedAt, wakeAutomaticSettlementLoop: schedulers.wakeSettlement, logger, network });
+const application = createHttpApplication({ gameService, store, relay, metrics, feedbackService, mutatingLimiter, feedbackLimiter, codeJoinLimiter, paths: config.paths, maxRequestBytes: config.maxRequestBytes, trustedProxy: config.trustedProxy, startedAt, wakeAutomaticSettlementLoop: schedulers.wakeSettlement, logger, network });
 const server = createServer(application.requestHandler);
 const metricsServer = createServer(application.metricsHandler);
 server.requestTimeout = 30_000;

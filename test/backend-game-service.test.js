@@ -128,6 +128,42 @@ test('a friend room pairs the invited wallets at the host stake and assigned sid
   await assert.rejects(service.prepareCreation(base), { code: 'NO_UTXOS' });
 });
 
+test('a friend joins a room by its shared code', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-room-code-service-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  const service = new BackendGameService({ rpc: NO_UTXO_RPC, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+
+  const host = await service.createRoom({ address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 6 });
+  assert.match(host.code, /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/);
+  // A public response never exposes a code.
+  assert.equal((await service.joinMatchmaking({ address: 'kaspatest:waiter', publicKey: 'd'.repeat(64), limitKas: 5 })).code, null);
+
+  // The typed code is normalized before lookup, so case and spacing do not matter.
+  const friend = await service.joinRoomByCode(host.code.toLowerCase().replace(/(.{3})/, '$1 '), { address: 'kaspatest:friend', publicKey: 'b'.repeat(64) });
+  assert.equal(friend.matchId, host.matchId);
+  assert.equal(friend.status, 'matched');
+  assert.equal(friend.role, 'joiner');
+  assert.equal(friend.stakeKas, 6);
+
+  await assert.rejects(service.joinRoomByCode('ZZZZZZ', { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'MATCH_NOT_FOUND' });
+  await assert.rejects(service.joinRoomByCode('short', { address: 'kaspatest:third', publicKey: 'c'.repeat(64) }), { code: 'INVALID_ROOM_CODE' });
+});
+
+test('a room code collision is retried until a free code is allocated', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-room-code-retry-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  const codes = ['AAAAAA', 'AAAAAA', 'BBBBBB'];
+  let index = 0;
+  const service = new BackendGameService({ rpc: NO_UTXO_RPC, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY, roomCodeGenerator: () => codes[index++] });
+
+  const first = await service.createRoom({ address: 'kaspatest:first', publicKey: 'a'.repeat(64), stakeKas: 2 });
+  const second = await service.createRoom({ address: 'kaspatest:second', publicKey: 'b'.repeat(64), stakeKas: 2 });
+  assert.equal(first.code, 'AAAAAA');
+  assert.equal(second.code, 'BBBBBB');
+});
+
 test('preparing a game without a configured fee recipient fails cleanly', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kasodds-service-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

@@ -7,6 +7,7 @@
 // controller imports and runs under Node for tests. The DOM rendering lives in
 // public/app.js.
 import { MATCH_GAME_WAIT, MATCH_VIEW, actionErrorCopy, createPollController, matchGameWaitState, resolveMatchView, shouldRerenderMatch } from './app-controller.js';
+import { normalizeRoomCode } from '../src/room-code.js';
 
 export const LOBBY_MODE = Object.freeze({ PUBLIC: 'public', HOST: 'host', GUEST: 'guest' });
 
@@ -14,6 +15,7 @@ export const LOBBY_PHASE = Object.freeze({
   LIMIT: 'limit',
   HOST_FORM: 'host-form',
   GUEST_ENTRY: 'guest-entry',
+  CODE_ENTRY: 'code-entry',
   RESUME: 'resume',
   WAITING: 'waiting',
   PICK: 'pick',
@@ -42,6 +44,7 @@ const KAS_DECIMALS = 8;
 export function createLobbyController({
   mode,
   roomId = null,
+  code = null,
   api,
   connect,
   sign,
@@ -91,11 +94,14 @@ export function createLobbyController({
   const poller = createPollController({ onPoll: () => refreshMatch(), intervalMs: pollIntervalMs, setIntervalFn, clearIntervalFn });
 
   const actions = Object.freeze({
-    connectLimit, connectHost, connectGuest, resume, selectNumber, play, offerBot, retry, retryStart, leave, stop,
+    connectLimit, connectHost, connectGuest, connectGuestByCode, resume, selectNumber, play, offerBot, retry, retryStart, leave, stop,
   });
 
   function initialPhase() {
-    if (mode === LOBBY_MODE.GUEST) return LOBBY_PHASE.GUEST_ENTRY;
+    // A guest who already has an invite (a room id from a link, or a code from
+    // the home screen) goes straight to connecting the wallet; only a guest with
+    // no invite is asked to type a code.
+    if (mode === LOBBY_MODE.GUEST) return roomId || code ? LOBBY_PHASE.GUEST_ENTRY : LOBBY_PHASE.CODE_ENTRY;
     if (mode === LOBBY_MODE.HOST && roomId) return LOBBY_PHASE.RESUME;
     if (mode === LOBBY_MODE.HOST) return LOBBY_PHASE.HOST_FORM;
     return LOBBY_PHASE.LIMIT;
@@ -112,6 +118,11 @@ export function createLobbyController({
   function start() {
     phase = initialPhase();
     emit();
+    // A guest who already holds an invite should not have to press a button: the
+    // wallet prompt opens on arrival. A cancel or failure falls back to the
+    // manual "Connect wallet" prompt, which is the only time it is shown.
+    if (mode === LOBBY_MODE.GUEST && (roomId || code)) return connectGuest();
+    return undefined;
   }
 
   function stop() {
@@ -132,8 +143,22 @@ export function createLobbyController({
     return begin((player) => api('/api/matchmaking/room', { method: 'POST', body: { address: player.address, publicKey: player.publicKey, stakeKas: amount } }));
   }
 
+  function joinWithCode(player, codeValue) {
+    return api('/api/matchmaking/code', { method: 'POST', body: { address: player.address, publicKey: player.publicKey, code: codeValue } });
+  }
+
+  // A guest arriving from a link or the home-screen code joins with whichever
+  // invite they already hold; only the standalone code box passes a fresh value.
   function connectGuest() {
+    if (code) return begin((player) => joinWithCode(player, code));
     return begin((player) => api(`/api/matchmaking/${roomId}/join`, { method: 'POST', body: { address: player.address, publicKey: player.publicKey } }));
+  }
+
+  function connectGuestByCode(value) {
+    draft = String(value ?? '');
+    const normalized = normalizeRoomCode(value);
+    if (!normalized) return rejectNote('Enter a room code', 'Room codes are six characters, like K7PQ2M.');
+    return begin((player) => joinWithCode(player, normalized));
   }
 
   function resume() {
@@ -352,12 +377,19 @@ export function createLobbyController({
       note = { kind: 'kasware', title: 'Install KasWare to play', message: '' };
       return emit();
     }
+    // A cancelled wallet prompt for an invited guest is not an error page: go
+    // back to the connect prompt so a single tap retries the connection.
+    if (caught?.code === 'WALLET_REJECTED' && mode === LOBBY_MODE.GUEST && (roomId || code)) {
+      phase = LOBBY_PHASE.GUEST_ENTRY;
+      note = { kind: 'error', title: 'Wallet connection cancelled', message: 'Tap Connect wallet to take the second seat.' };
+      return emit();
+    }
     // A missing or used friend invite is not retryable: the link itself is dead.
     if (caught?.code === 'MATCH_NOT_FOUND' || caught?.code === 'MATCH_FULL') {
       const full = caught.code === 'MATCH_FULL';
       return showError(
         full ? 'This invite was already used' : 'This invite has expired',
-        full ? 'Someone else took the second seat.' : 'Ask your friend for a new link.',
+        full ? 'Someone else took the second seat.' : 'Ask your friend for a new code or link.',
         null,
       );
     }

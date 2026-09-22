@@ -49,14 +49,14 @@ const CREATION_STATE = Object.freeze({ BROADCAST: 'broadcast', SUBMITTING: 'subm
 // broadcasts to the node. The service therefore never learns a player's number
 // before both commitments are confirmed on-chain and the number is public.
 export class BackendGameService {
-  constructor({ rpc, chain, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey, network = DEFAULT_NETWORK_PROFILE, submissionRetryBaseMs = SUBMISSION_RETRY_BASE_MS, log = logger, bot = null }) {
+  constructor({ rpc, chain, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey, network = DEFAULT_NETWORK_PROFILE, submissionRetryBaseMs = SUBMISSION_RETRY_BASE_MS, log = logger, bot = null, roomCodeGenerator }) {
     this.chain = chain ?? new KaspaChainAdapter({ rpc });
     this.funding = null;
     this.network = network;
     this.submissionRetryBaseMs = submissionRetryBaseMs;
     this.log = log;
     this.bot = bot;
-    this.matchmaking = new MatchmakingService({ store, metrics, logPlayer: (event, address, fields) => this.#logPlayer(event, address, fields), logger: log, addressPrefix: network.addressPrefix, bot });
+    this.matchmaking = new MatchmakingService({ store, metrics, logPlayer: (event, address, fields) => this.#logPlayer(event, address, fields), logger: log, addressPrefix: network.addressPrefix, bot, roomCodeGenerator });
     this.store = store;
     this.metrics = metrics;
     this.ephemeral = ephemeral;
@@ -94,6 +94,10 @@ export class BackendGameService {
 
   async joinRoom(matchId, input) {
     return this.matchmaking.joinRoom(matchId, input);
+  }
+
+  async joinRoomByCode(code, input) {
+    return this.matchmaking.joinRoomByCode(code, input);
   }
 
   async matchmakingStatus(matchId, address) {

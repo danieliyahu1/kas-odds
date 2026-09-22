@@ -55,6 +55,15 @@ main { width: min(100% - 36px, 460px); margin: 0 auto; padding: 44px 0 72px; fle
 .home-actions .primary:active { transform: none; box-shadow: none; }
 .home-actions .outline:hover { border-color: var(--teal); color: var(--teal); }
 .home-fineprint { margin: 14px 0 0; text-align: center; color: var(--muted); font-size: 13px; }
+.home-code { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.home-code-label { display: block; margin: 0 0 10px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.home-code-row { display: flex; align-items: center; gap: 12px; }
+.home-code-input { flex: 1; min-width: 0; padding: 10px 0 8px; border: 0; border-bottom: 1.5px solid var(--line); border-radius: 0; background: transparent; color: var(--text); font-size: 20px; font-weight: 700; letter-spacing: .22em; text-transform: uppercase; outline: none; }
+.home-code-input::placeholder { color: var(--line); letter-spacing: .22em; }
+.home-code-input:focus { border-bottom-color: var(--teal); }
+.home-code-submit { flex: none; padding: 8px 2px; border: 0; background: transparent; color: var(--teal); font-size: 14px; font-weight: 800; cursor: pointer; }
+.home-code-submit:hover { text-decoration: underline; }
+.home-code .fate { margin: 8px 0 0; }
 .inline-link { color: var(--text); text-decoration: none; font-weight: 600; }
 .inline-link:hover { color: var(--teal); }
 .rules { display: grid; gap: 18px; }
@@ -140,6 +149,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } .choice:hover { transform: none; } .home-actions .primary:hover { transform: none; } }
 .share-button { border: 1px solid var(--teal); background: transparent; color: var(--teal); margin-top: 0; width: 100%; }
 .share-button:hover { background: rgba(112,199,186,.12); }
+.share-label { margin: 0 0 8px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.room-code { margin: 0 0 10px; font-size: 30px; font-weight: 800; letter-spacing: .32em; text-indent: .32em; text-align: center; color: var(--text); }
+.code-input { text-transform: uppercase; letter-spacing: .3em; text-align: center; font-weight: 800; }
 
 .reveal-block { margin-top: 20px; }
 .reveal-block .lead { margin-bottom: 14px; }

@@ -32,9 +32,11 @@ not a gatekeeper.
 | `502` | A node/storage dependency is unavailable; retry |
 
 Common codes: `INVALID_JSON`, `INVALID_STAKE`, `INVALID_SIDE`, `INVALID_ADDRESS`,
-`INVALID_REVEAL`, `WRONG_NETWORK`, `GAME_NOT_FOUND`, `GAME_NOT_JOINED`,
+`INVALID_REVEAL`, `INVALID_ROOM_CODE`, `WRONG_NETWORK`, `GAME_NOT_FOUND`,
+`GAME_NOT_JOINED`,
 `GAME_ALREADY_JOINED`, `GAME_EXPIRED`, `GAME_CANCELLED`, `MATCH_NOT_FOUND`,
-`MATCH_NOT_READY`, `MATCH_FULL`, `NOT_A_PLAYER`, `PREPARATION_NOT_FOUND`,
+`MATCH_NOT_READY`, `MATCH_FULL`, `CODE_TAKEN`, `NOT_A_PLAYER`,
+`PREPARATION_NOT_FOUND`,
 `ALREADY_REVEALED`, `ACTION_PENDING`, `ACTION_UNAVAILABLE`, and `REVEAL_WAITING`
 (retry shortly).
 
@@ -87,18 +89,22 @@ share the same response shape:
   "stakeKas": 2,
   "myLimitKas": 2,
   "rivalLimitKas": 2,
-  "opponentConnected": false
+  "opponentConnected": false,
+  "code": "K7PQ2M"
 }
 ```
 
 `stakeKas` is fixed when matched: the lower of the two players' limits. `role`
-and `side` are assigned when matched, at random.
+and `side` are assigned when matched, at random. `code` is the host's short
+friend-room handle, present only for a private room (null otherwise); the
+matched joiner can also poll by the `matchId` the response returns.
 
 | Method | Path | Body | Notes |
 |--------|------|------|-------|
 | `POST` | `/api/matchmaking/join` | `{ address, publicKey, limitKas }` | Public queue. Matched against the oldest waiting player; `limitKas` is the maximum stake you accept |
-| `POST` | `/api/matchmaking/room` | `{ address, publicKey, stakeKas }` | Create a private room at a fixed stake |
-| `POST` | `/api/matchmaking/:matchId/join` | `{ address, publicKey }` | Take the second seat in a private room |
+| `POST` | `/api/matchmaking/room` | `{ address, publicKey, stakeKas }` | Create a private room at a fixed stake; the response carries its `code` |
+| `POST` | `/api/matchmaking/:matchId/join` | `{ address, publicKey }` | Take the second seat in a private room by its invite id (link) |
+| `POST` | `/api/matchmaking/code` | `{ address, publicKey, code }` | Take the second seat by the host's short room code; the code is case-insensitive and separators are ignored. Limited per client to stop guessing |
 | `GET` | `/api/matchmaking/:matchId?address=…` | — | Poll status; call until `status = matched` |
 | `POST` | `/api/matchmaking/:matchId/leave` | `{ address }` | Returns `{ matchId, status: "left" }` |
 | `POST` | `/api/matchmaking/:matchId/bot` | `{ address }` | Offer the second seat to the fallback bot. Only the waiting creator, only after a five-second grace period, and only while the bot is free |

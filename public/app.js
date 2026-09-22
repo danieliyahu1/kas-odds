@@ -14,6 +14,7 @@ import { connectKaswareAccount } from '/kasware-connect.js';
 import { GAME_STAGE, actionErrorCopy, covenantClock, createLatestRequestGate, createPollController, formatWait, gameSignature, gameStage, isRevealPhase, isTerminalGameStatus, lobbyStage, terminalNotice } from '/app-controller.js';
 import { LOBBY_MODE, LOBBY_PHASE, createLobbyController } from './lobby-controller.js';
 import { loadRuntimeConfig, runtimeConfig } from '/runtime-config.js';
+import { normalizeRoomCode } from '/src/room-code.js';
 
 const app = document.querySelector('#app');
 const params = new URLSearchParams(location.search);
@@ -80,8 +81,18 @@ export async function boot() {
     initFeedback();
     if (location.pathname === '/join') {
       const room = params.get('room');
-      if (isRoomId(room)) return renderLobby({ mode: 'guest', roomId: room });
-      return renderBackendError('That invite link doesn\u2019t look right.');
+      const code = params.get('code');
+      if (room !== null) {
+        if (isRoomId(room)) return renderLobby({ mode: 'guest', roomId: room });
+        return renderBackendError('That invite link doesn\u2019t look right.');
+      }
+      if (code !== null) {
+        const normalized = normalizeRoomCode(code);
+        if (normalized) return renderLobby({ mode: 'guest', code: normalized });
+        return renderBackendError('That room code doesn\u2019t look right.');
+      }
+      // A direct visit with neither a link nor a code offers the code box.
+      return renderLobby({ mode: 'guest' });
     }
     if (location.pathname === '/game') return renderGame(params.get('id') ?? params.get('game'));
     if (location.pathname === '/host') return renderLobby({ mode: 'host', roomId: isRoomId(params.get('room')) ? params.get('room') : null });
@@ -115,8 +126,34 @@ function renderHome() {
         <a class="primary home-button" href="/rival">Play someone new</a>
         <a class="outline home-button" href="/host">Play with a friend</a>
       </div>
+      <form class="home-code" id="home-code" novalidate>
+        <label class="home-code-label" for="home-code-input">Have a code?</label>
+        <div class="home-code-row">
+          <input id="home-code-input" type="text" inputmode="latin" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="7" placeholder="K7PQ2M" class="home-code-input" aria-label="Room code">
+          <button type="submit" class="home-code-submit">Join</button>
+        </div>
+        <p class="fate" id="home-code-fate"></p>
+      </form>
       <p class="home-fineprint"><a class="inline-link" href="/protected">How your stake is protected</a></p>
     </section>`;
+  bindHomeCode();
+}
+
+// The friend's code is entered right on the home screen; submitting it hands
+// off to the join flow, which connects the wallet and takes the second seat.
+function bindHomeCode() {
+  const form = document.querySelector('#home-code');
+  if (!form) return;
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const code = normalizeRoomCode(document.querySelector('#home-code-input').value);
+    const fate = document.querySelector('#home-code-fate');
+    if (!code) {
+      fate.textContent = 'Room codes are six characters, like K7PQ2M.';
+      return;
+    }
+    location.href = `/join?code=${code}`;
+  });
 }
 
 // The plain-language safety page. It answers the one financial question a
@@ -158,10 +195,11 @@ function renderProtected() {
     </section>`;
 }
 
-function renderLobby({ mode, roomId = null }) {
+function renderLobby({ mode, roomId = null, code = null }) {
   const controller = createLobbyController({
     mode,
     roomId,
+    code,
     api,
     connect: connectWallet,
     sign: signWithKasware,
@@ -224,14 +262,15 @@ function paintLobby(snapshot, actions) {
 
   if (phase === LOBBY_PHASE.HOST_FORM) {
     paint('Play with a friend', `
-      <p class="lead">Set the stake, then share the link. You'll both pick a number once your friend joins.</p>
+      <p class="lead">Set the stake, then share the code or link. You'll both pick a number once your friend joins.</p>
       <div class="stake-block">
         <div class="stake-label-row"><label for="host-stake">Stake (KAS)</label></div>
         <input id="host-stake" type="number" min="1" max="1000000" step="any" inputmode="decimal" value="${escapeHtml(draft ?? '1')}" class="stake-input" aria-label="Stake in KAS">
         <p class="fate" id="host-fate"></p>
       </div>
       ${notice}
-      ${startButton}Create invite</button></div>`);
+      ${startButton}Create invite</button></div>
+      <p class="home-fineprint">Have a code instead? <a class="inline-link" href="/join">Join a friend's game</a></p>`);
     wireStakeFate({ inputId: 'host-stake', fateId: 'host-fate', mode: 'host' });
     bindStart(() => void actions.connectHost(document.querySelector('#host-stake').value));
     return;
@@ -239,10 +278,24 @@ function paintLobby(snapshot, actions) {
 
   if (phase === LOBBY_PHASE.GUEST_ENTRY) {
     paint('Joining your friend', `
-      <p class="lead">Connect your wallet to take the second seat.</p>
+      <p class="lead">${busy ? 'Opening KasWare&hellip;' : 'Connect your wallet to take the second seat.'}</p>
       ${notice}
-      ${startButton}Connect wallet</button></div>`);
+      ${startButton}${busy ? 'Opening KasWare&hellip;' : 'Connect wallet'}</button></div>`);
     bindStart(() => void actions.connectGuest());
+    return;
+  }
+
+  if (phase === LOBBY_PHASE.CODE_ENTRY) {
+    paint('Join with a code', `
+      <p class="lead">Type the code your friend shared, then connect your wallet.</p>
+      <div class="stake-block">
+        <div class="stake-label-row"><label for="room-code">Room code</label></div>
+        <input id="room-code" type="text" inputmode="latin" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="7" value="${escapeHtml(draft ?? '')}" class="stake-input code-input" aria-label="Room code">
+        <p class="fate" id="room-code-fate">Six characters, like K7PQ2M.</p>
+      </div>
+      ${notice}
+      ${startButton}Join room</button></div>`);
+    bindStart(() => void actions.connectGuestByCode(document.querySelector('#room-code').value));
     return;
   }
 
@@ -274,15 +327,22 @@ function paintLobby(snapshot, actions) {
       if (botButton) botButton.addEventListener('click', () => void actions.offerBot());
     } else {
       const link = roomInviteUrl(match.matchId);
+      const code = match.code;
       paint('Waiting for your friend', `
-        <p class="lead">Share this link. You'll both pick a number once they join.</p>
-        <div class="invite-box" id="invite-box">
+        <p class="lead">Share the code or the link. You'll both pick a number once they join.</p>
+        ${code ? `<div class="invite-box" id="invite-box">
+          <p class="share-label">Room code</p>
+          <p class="room-code" id="room-code-value">${escapeHtml(code)}</p>
+          <button class="share-button" data-action="copy-code">Copy code</button>
+        </div>` : ''}
+        <div class="invite-box">
+          <p class="share-label">Invite link</p>
           <p class="muted-note">${escapeHtml(link)}</p>
           <button class="share-button" data-action="copy-link">Copy link</button>
         </div>
         <p class="fate">Stake: ${escapeHtml(match.stakeKas)} KAS each &mdash; winner takes the ${escapeHtml(match.stakeKas * 2)} KAS pot.</p>
         ${cancelButton}`);
-      bindShare(link);
+      bindShare(link, code);
     }
     document.querySelector('#lobby-leave').addEventListener('click', () => void actions.leave());
     return;
@@ -583,16 +643,20 @@ function bindReveal(gameId) {
   });
 }
 
-function bindShare(url = location.href) {
-  const copy = document.querySelector('[data-action="copy-link"]');
-  if (copy) {
-    copy.addEventListener('click', async () => {
-      try {
-        await copyLink(url);
-        flashCopy(copy);
-      } catch { /* ignore */ }
-    });
-  }
+function bindShare(url = location.href, code = null) {
+  bindCopy('[data-action="copy-link"]', url);
+  if (code) bindCopy('[data-action="copy-code"]', code);
+}
+
+function bindCopy(selector, text) {
+  const button = document.querySelector(selector);
+  if (!button) return;
+  button.addEventListener('click', async () => {
+    try {
+      await copyLink(text);
+      flashCopy(button);
+    } catch { /* ignore */ }
+  });
 }
 
 async function copyLink(url) {

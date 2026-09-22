@@ -302,6 +302,7 @@ export function actionErrorCopy(error) {
     REVEAL_WAITING: ['Revealing...', 'Still revealing. This can take a moment. Try again if it does not finish.'],
     CHAIN_NOT_READY: ['Waiting for the chain', 'The next step is still settling on-chain. This can take a moment. Your game funds remain safe.'],
     MATCH_TIMEOUT: ['Still waiting for your opponent', 'They did not create the game in time. Try again in a moment.'],
+    INVALID_ROOM_CODE: ['That code does not look right', 'Room codes are six characters, like K7PQ2M.'],
     CREATION_PENDING: ['Almost there', "Your opponent's game is still reaching the network. Try again in a moment."],
     CREATION_FAILED: ['The game did not start', "Your opponent's game did not reach the network. No KAS was locked."],
     GAME_EXPIRED: ['This game expired', 'The joining window closed. No KAS was locked.'],

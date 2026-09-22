@@ -25,6 +25,7 @@ function harness(options = {}) {
   const controller = createLobbyController({
     mode: options.mode ?? LOBBY_MODE.PUBLIC,
     roomId: options.roomId ?? null,
+    code: options.code ?? null,
     api: async (url, request) => { apiCalls.push({ url, request }); return api(url, request); },
     connect,
     sign: options.sign ?? (async () => 'signed-tx'),
@@ -70,11 +71,83 @@ function startWith(mode, roomId) {
   return harnessed;
 }
 
-test('the lobby opens on the phase that matches how the player arrived', () => {
+
+
+test('the lobby opens on the phase that matches how the player arrived', async () => {
   assert.equal(startWith(LOBBY_MODE.PUBLIC).last().phase, LOBBY_PHASE.LIMIT);
   assert.equal(startWith(LOBBY_MODE.HOST).last().phase, LOBBY_PHASE.HOST_FORM);
   assert.equal(startWith(LOBBY_MODE.HOST, 'r1').last().phase, LOBBY_PHASE.RESUME);
-  assert.equal(startWith(LOBBY_MODE.GUEST, 'r1').last().phase, LOBBY_PHASE.GUEST_ENTRY);
+
+  // A guest who arrived with a link or a code connects immediately: the connect
+  // prompt is painted, then the wallet opens without a button press.
+  const matched = async () => ({ ...joinerMatch(), matchId: 'r9' });
+  const linked = harness({ mode: LOBBY_MODE.GUEST, roomId: 'r1', api: matched });
+  const linkedStart = linked.controller.start();
+  assert.equal(linked.last().phase, LOBBY_PHASE.GUEST_ENTRY);
+  await linkedStart;
+
+  const coded = harness({ mode: LOBBY_MODE.GUEST, code: 'K7PQ2M', api: matched });
+  const codedStart = coded.controller.start();
+  assert.equal(coded.last().phase, LOBBY_PHASE.GUEST_ENTRY);
+  await codedStart;
+
+  // A guest who arrived without a link or a code is here to type one.
+  assert.equal(startWith(LOBBY_MODE.GUEST).last().phase, LOBBY_PHASE.CODE_ENTRY);
+});
+
+test('a guest handed a code joins directly without retyping it', async () => {
+  let joinedBody = null;
+  const joined = harness({
+    mode: LOBBY_MODE.GUEST,
+    code: 'K7PQ2M',
+    api: async (url, request) => {
+      if (url === '/api/matchmaking/code') { joinedBody = request.body; return { ...joinerMatch(), matchId: 'r9' }; }
+      if (url.startsWith('/api/matchmaking/r9?')) return { ...joinerMatch(), matchId: 'r9' };
+      return {};
+    },
+  });
+  await joined.controller.start();
+  assert.deepEqual(joinedBody, { address: ACCOUNT.address, publicKey: ACCOUNT.publicKey, code: 'K7PQ2M' });
+  assert.equal(joined.last().phase, LOBBY_PHASE.PICK);
+});
+
+test('a cancelled wallet prompt returns the invited guest to the manual connect button', async () => {
+  const rejected = harness({
+    mode: LOBBY_MODE.GUEST,
+    code: 'K7PQ2M',
+    connect: async () => { const error = new Error('not approved'); error.code = 'WALLET_REJECTED'; throw error; },
+  });
+  await rejected.controller.start();
+  assert.equal(rejected.last().phase, LOBBY_PHASE.GUEST_ENTRY);
+  assert.equal(rejected.last().busy, false);
+  assert.equal(rejected.last().note.kind, 'error');
+});
+
+test('a malformed room code is rejected before the wallet is touched', () => {
+  const harnessed = startWith(LOBBY_MODE.GUEST);
+  harnessed.actions.connectGuestByCode('short');
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.CODE_ENTRY);
+  assert.equal(harnessed.last().note.kind, 'error');
+  assert.equal(harnessed.last().draft, 'short');
+  assert.equal(harnessed.connectedCount(), 0);
+  assert.deepEqual(harnessed.urls(), []);
+});
+
+test('a guest joins a friend room by typing its code', async () => {
+  let joinedBody = null;
+  const joined = harness({
+    mode: LOBBY_MODE.GUEST,
+    api: async (url, request) => {
+      if (url === '/api/matchmaking/code') { joinedBody = request.body; return { ...joinerMatch(), matchId: 'r9', code: null }; }
+      if (url.startsWith('/api/matchmaking/r9?')) return { ...joinerMatch(), matchId: 'r9' };
+      return {};
+    },
+  });
+  joined.controller.start();
+  await joined.actions.connectGuestByCode('k7pq-2m');
+  // The code reaches the API normalized, not as typed.
+  assert.deepEqual(joinedBody, { address: ACCOUNT.address, publicKey: ACCOUNT.publicKey, code: 'K7PQ2M' });
+  assert.equal(joined.last().phase, LOBBY_PHASE.PICK);
 });
 
 test('an invalid stake is rejected before the wallet is touched, keeping the typed value', () => {
@@ -158,15 +231,13 @@ test('a friend room publishes its invite url and waits for the second seat', asy
 
 test('a dead friend invite is a terminal, non-retryable error', async () => {
   const expired = harness({ mode: LOBBY_MODE.GUEST, roomId: 'r1', api: async () => { throw Object.assign(new Error('gone'), { code: 'MATCH_NOT_FOUND' }); } });
-  expired.controller.start();
-  await expired.actions.connectGuest();
+  await expired.controller.start();
   assert.equal(expired.last().phase, LOBBY_PHASE.ERROR);
   assert.equal(expired.last().error.action, null);
   assert.equal(expired.last().error.title, 'This invite has expired');
 
   const used = harness({ mode: LOBBY_MODE.GUEST, roomId: 'r1', api: async () => { throw Object.assign(new Error('full'), { code: 'MATCH_FULL' }); } });
-  used.controller.start();
-  await used.actions.connectGuest();
+  await used.controller.start();
   assert.equal(used.last().error.title, 'This invite was already used');
 });
 
@@ -229,8 +300,7 @@ test('the joiner waits for the game id before preparing the join', async () => {
       return {};
     },
   });
-  harnessed.controller.start();
-  await harnessed.actions.connectGuest();
+  await harnessed.controller.start();
   harnessed.actions.selectNumber(0);
   await harnessed.actions.play();
 
@@ -248,8 +318,7 @@ test('an opponent who leaves before the game is created cancels the start', asyn
       return {};
     },
   });
-  harnessed.controller.start();
-  await harnessed.actions.connectGuest();
+  await harnessed.controller.start();
   harnessed.actions.selectNumber(0);
   await harnessed.actions.play();
 
@@ -270,8 +339,7 @@ test('a started game that disappears abandons the joiner while picking', async (
       return {};
     },
   });
-  harnessed.controller.start();
-  await harnessed.actions.connectGuest();
+  await harnessed.controller.start();
   await flush();
   await flush();
   assert.equal(harnessed.last().phase, LOBBY_PHASE.PICK);
@@ -295,8 +363,7 @@ test('a join refused as cancelled abandons the lobby', async () => {
       return {};
     },
   });
-  harnessed.controller.start();
-  await harnessed.actions.connectGuest();
+  await harnessed.controller.start();
   harnessed.actions.selectNumber(0);
   await harnessed.actions.play();
 
@@ -314,8 +381,7 @@ test('an opponent who leaves before a game exists is not a cancelled game', asyn
       return {};
     },
   });
-  harnessed.controller.start();
-  await harnessed.actions.connectGuest();
+  await harnessed.controller.start();
   harnessed.actions.selectNumber(0);
   await harnessed.actions.play();
 
