@@ -70,6 +70,22 @@ test('changing only KASPA_NETWORK switches prefix, store file, and fee wallet', 
   assert.equal(mainnet.gameFeePublicKey, mainnetKey);
 });
 
+test('the fallback bot key is network-qualified and never crosses networks', () => {
+  assert.equal(readServerConfig(env).bot, null);
+  assert.throws(() => readServerConfig({ ...env, BOT_PRIVATE_KEY_TESTNET_10: 'nope' }), /32 bytes/);
+  assert.throws(() => readServerConfig({ ...env, KASPA_NETWORK: 'mainnet', BOT_PRIVATE_KEY_MAINNET: 'nope' }), /32 bytes/);
+  // A key for the other network is ignored, not validated, and keeps the bot off.
+  assert.equal(readServerConfig({ ...env, BOT_PRIVATE_KEY_MAINNET: 'nope' }).bot, null);
+  assert.equal(readServerConfig({ ...env, KASPA_NETWORK: 'mainnet', BOT_PRIVATE_KEY_TESTNET_10: 'nope' }).bot, null);
+
+  const testnetKey = '11'.repeat(32);
+  const mainnetKey = '22'.repeat(32);
+  const testnet = readServerConfig({ ...env, BOT_PRIVATE_KEY_TESTNET_10: testnetKey, BOT_PRIVATE_KEY_MAINNET: mainnetKey });
+  assert.deepEqual(testnet.bot, { privateKeyHex: testnetKey });
+  const mainnet = readServerConfig({ ...env, KASPA_NETWORK: 'mainnet', BOT_PRIVATE_KEY_TESTNET_10: testnetKey, BOT_PRIVATE_KEY_MAINNET: mainnetKey });
+  assert.deepEqual(mainnet.bot, { privateKeyHex: mainnetKey });
+});
+
 test('server configuration rejects invalid ports', () => {
   assert.throws(() => readServerConfig({ ...env, PORT: '0' }), /PORT must be/);
   assert.throws(() => readServerConfig({ ...env, PORT: '3000', METRICS_PORT: '3000' }), /METRICS_PORT must be/);

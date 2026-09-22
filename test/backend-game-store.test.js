@@ -243,6 +243,101 @@ test('persists and reloads non-secret submission operations', async (t) => {
   assert.deepEqual(await store.listOperations(), [operation]);
 });
 
+const BOT = { address: 'kaspatest:bot', publicKey: 'b'.repeat(64) };
+
+test('the fallback bot takes the second seat only after the grace period', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-bot-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.joinMatchmaking({ matchId: 'm1', address: 'kaspatest:human', publicKey: 'a'.repeat(64), limitKas: 5 });
+
+  await assert.rejects(store.claimWaitingMatchForBot({ matchId: 'm1', bot: BOT, minWaitMs: 5_000 }), { code: 'BOT_NOT_READY' });
+  const claimed = await store.claimWaitingMatchForBot({ matchId: 'm1', bot: BOT, minWaitMs: 0 });
+
+  assert.equal(claimed.status, 'matched');
+  assert.equal(claimed.creatorIndex, 0, 'the waiting human stays the creator');
+  assert.equal(claimed.stakeKas, 1, 'the bot always plays for the 1 KAS minimum');
+  assert.equal(claimed.botAddress, BOT.address);
+  assert.deepEqual(claimed.players.map((player) => player.address), ['kaspatest:human', 'kaspatest:bot']);
+  assert.equal(await store.countWaitingMatches(), 0);
+});
+
+test('a busy bot refuses a second waiting player and a private room never gets the bot', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-bot-busy-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.createPrivateMatch({ matchId: 'room', address: 'kaspatest:host', publicKey: 'a'.repeat(64), stakeKas: 5 });
+  await assert.rejects(store.claimWaitingMatchForBot({ matchId: 'room', bot: BOT, minWaitMs: 0 }), { code: 'MATCH_NOT_READY' });
+
+  await store.joinMatchmaking({ matchId: 'm1', address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 5 });
+  await store.claimWaitingMatchForBot({ matchId: 'm1', bot: BOT, minWaitMs: 0 });
+  await store.joinMatchmaking({ matchId: 'm2', address: 'kaspatest:second', publicKey: 'c'.repeat(64), limitKas: 5 });
+  await assert.rejects(store.claimWaitingMatchForBot({ matchId: 'm2', bot: BOT, minWaitMs: 0 }), { code: 'BOT_BUSY' });
+});
+
+test('completing or leaving a bot match releases the single lease', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-bot-release-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame({ gameId: 'g'.repeat(64), matchId: 'm1', status: 'settled' });
+  await store.joinMatchmaking({ matchId: 'm1', address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 5 });
+  await store.claimWaitingMatchForBot({ matchId: 'm1', bot: BOT, minWaitMs: 0 });
+  await store.completeGame({ gameId: 'g'.repeat(64), matchId: 'm1', status: 'settled' });
+
+  await store.joinMatchmaking({ matchId: 'm2', address: 'kaspatest:second', publicKey: 'c'.repeat(64), limitKas: 5 });
+  await store.claimWaitingMatchForBot({ matchId: 'm2', bot: BOT, minWaitMs: 0 });
+
+  await store.leaveMatch('m2', 'kaspatest:second');
+  assert.equal((await store.loadMatch('m2')).status, 'cancelled');
+  await store.joinMatchmaking({ matchId: 'm3', address: 'kaspatest:third', publicKey: 'd'.repeat(64), limitKas: 5 });
+  await store.claimWaitingMatchForBot({ matchId: 'm3', bot: BOT, minWaitMs: 0 });
+});
+
+test('the bot keeps its lease while a game it joined is still live', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-bot-live-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.joinMatchmaking({ matchId: 'm1', address: 'kaspatest:human', publicKey: 'a'.repeat(64), limitKas: 5 });
+  await store.claimWaitingMatchForBot({ matchId: 'm1', bot: BOT, minWaitMs: 0 });
+  await store.saveGame({ gameId: 'g'.repeat(64), matchId: 'm1', status: 'joined', join: { joinerAddress: BOT.address, transactionId: 't'.repeat(64) } });
+
+  // The human abandons the match; the bot must still finish the live game.
+  await store.joinMatchmaking({ matchId: 'm2', address: 'kaspatest:human', publicKey: 'a'.repeat(64), limitKas: 5 });
+  assert.equal((await store.loadMatch('m1')).status, 'cancelled');
+
+  await assert.rejects(store.claimWaitingMatchForBot({ matchId: 'm2', bot: BOT, minWaitMs: 0 }), { code: 'BOT_BUSY' });
+
+  await store.completeGame({ gameId: 'g'.repeat(64), matchId: 'm1', status: 'settled' });
+  await store.claimWaitingMatchForBot({ matchId: 'm2', bot: BOT, minWaitMs: 0 });
+});
+
+test('the bot secret is stored until the game ends', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-bot-secret-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame({ gameId: 'g'.repeat(64), matchId: 'm1', status: 'joined', join: { joinerAddress: BOT.address, transactionId: 't'.repeat(64) } });
+  await store.saveBotSecret('g'.repeat(64), { choice: 1, nonceHex: 'f'.repeat(64), commitment: 'e'.repeat(64) });
+
+  assert.deepEqual(await store.loadBotSecret('g'.repeat(64)), { gameId: 'g'.repeat(64), choice: 1, nonceHex: 'f'.repeat(64), commitment: 'e'.repeat(64) });
+
+  await store.completeGame({ gameId: 'g'.repeat(64), matchId: 'm1', status: 'settled' });
+  assert.equal(await store.loadBotSecret('g'.repeat(64)), null);
+});
+
+test('a bot match survives the idle sweep while the human is present', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-bot-sweep-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.joinMatchmaking({ matchId: 'm1', address: 'kaspatest:human', publicKey: 'a'.repeat(64), limitKas: 5 });
+  await store.claimWaitingMatchForBot({ matchId: 'm1', bot: BOT, minWaitMs: 0 });
+  // The bot never polls, so its own stale timestamp must not expire the match.
+  await store.updateMatch('m1', (match) => { match.players[1].lastSeenAt = new Date(Date.now() - 60_000).toISOString(); });
+  await store.updateMatch('m1', (match) => { match.players[0].lastSeenAt = new Date().toISOString(); });
+
+  await store.joinMatchmaking({ matchId: 'm2', address: 'kaspatest:other', publicKey: 'e'.repeat(64), limitKas: 5 });
+  assert.equal((await store.loadMatch('m1')).status, 'matched');
+});
+
 test('cancelling a live session logs an address-free reason', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'kasodds-match-log-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

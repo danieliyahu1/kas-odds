@@ -39,6 +39,9 @@ function harness(options = {}) {
     render: (snapshot) => renders.push(snapshot),
     waitTimeoutMs: options.waitTimeoutMs ?? 60_000,
     pollIntervalMs: options.pollIntervalMs ?? 5,
+    botAvailable: options.botAvailable ?? false,
+    botStakeKas: options.botStakeKas ?? null,
+    botOfferDelayMs: options.botOfferDelayMs ?? 5_000,
     now: options.now ?? (() => Date.now()),
     sleep: options.sleep ?? (async () => {}),
     setIntervalFn: (callback) => { timers.push(callback); return timers.length; },
@@ -373,6 +376,79 @@ test('a poll that arrives after the pick cannot repaint the screen', async () =>
   await flush();
   await flush();
   assert.equal(harnessed.renders.length, settled);
+});
+
+test('the bot is offered only after the grace period while still waiting', async () => {
+  let clock = 0;
+  const harnessed = harness({
+    botAvailable: true,
+    botStakeKas: 1,
+    now: () => clock,
+    api: async (url) => {
+      if (url === '/api/matchmaking/join') return waitingMatch();
+      if (url.startsWith('/api/matchmaking/m1?')) return waitingMatch();
+      if (url === '/api/matchmaking/m1/bot') return { ...waitingMatch(), status: 'matched', role: 'creator', side: 'even', stakeKas: 1, opponentConnected: true, opponentType: 'bot' };
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectLimit('5');
+  assert.equal(harnessed.last().botOffer, false, 'no bot offer before the grace period');
+
+  clock = 6_000;
+  harnessed.timers[0]();
+  await flush();
+  await flush();
+  assert.equal(harnessed.last().botOffer, true, 'the bot offer appears once the wait has elapsed');
+  assert.equal(harnessed.last().botStakeKas, 1);
+
+  await harnessed.actions.offerBot();
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.PICK);
+  assert.equal(harnessed.last().match.opponentType, 'bot');
+  assert.equal(harnessed.urls().includes('/api/matchmaking/m1/bot'), true);
+});
+
+test('a busy bot leaves the player waiting for a human', async () => {
+  let clock = 0;
+  const harnessed = harness({
+    botAvailable: true,
+    botStakeKas: 1,
+    now: () => clock,
+    api: async (url) => {
+      if (url === '/api/matchmaking/join') return waitingMatch();
+      if (url.startsWith('/api/matchmaking/m1?')) return waitingMatch();
+      if (url === '/api/matchmaking/m1/bot') throw Object.assign(new Error('busy'), { code: 'BOT_BUSY' });
+      return {};
+    },
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectLimit('5');
+  clock = 6_000;
+  harnessed.timers[0]();
+  await flush();
+  await flush();
+  assert.equal(harnessed.last().botOffer, true);
+
+  await harnessed.actions.offerBot();
+  assert.equal(harnessed.last().phase, LOBBY_PHASE.WAITING);
+  assert.equal(harnessed.last().botOffer, false);
+  assert.equal(harnessed.last().note.title, 'The bot is busy');
+});
+
+test('no bot offer appears when the bot is not configured', async () => {
+  let clock = 0;
+  const harnessed = harness({
+    botAvailable: false,
+    now: () => clock,
+    api: async () => waitingMatch(),
+  });
+  harnessed.controller.start();
+  await harnessed.actions.connectLimit('5');
+  clock = 60_000;
+  harnessed.timers[0]();
+  await flush();
+  await flush();
+  assert.equal(harnessed.last().botOffer, false);
 });
 
 test('matchWaitError carries the protocol code it was raised with', () => {

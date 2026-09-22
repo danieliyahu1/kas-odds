@@ -7,6 +7,9 @@ import { noopMetrics } from './metrics.js';
 
 const MATCH_WAIT_TIMEOUT_MS = 30_000;
 const DEFAULT_LIMIT_KAS = 1;
+// A waiting player is offered the fallback bot only after a short grace period,
+// so a real opponent always has the first chance to take the seat.
+const BOT_OFFER_MIN_WAIT_MS = 5_000;
 const PREPARATION_RETENTION_MS = 900_000;
 const noopLogger = Object.freeze({ info: () => {} });
 // Windows can briefly lock a file being replaced by an atomic rename (antivirus,
@@ -18,8 +21,10 @@ const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 // Durable persistence for the backend game engine. Matchmaking sessions, game
 // records, and non-secret transaction preparations are written atomically to a
-// single JSON file. Reveal preimages are intentionally never stored here; they
-// live only in the ephemeral in-memory store.
+// single JSON file. Player reveal preimages are intentionally never stored here;
+// they live only in the browser. The one exception is the fallback bot's own
+// preimage, which the server generates at join time and keeps under `botSecrets`
+// until that game ends, because the bot has no browser to remember it.
 export class BackendGameStore {
   constructor(filePath, { metrics = noopMetrics, logger = noopLogger } = {}) {
     if (!filePath) throw new ProtocolError('STORAGE_UNAVAILABLE', 'Backend game store path is required');
@@ -103,6 +108,7 @@ export class BackendGameStore {
       if (record.matchId) {
         delete data.matches[record.matchId];
         data.queue = data.queue.filter((matchId) => matchId !== record.matchId);
+        releaseBotLeaseFor(data, record.matchId, this.logger, 'game_complete');
         this.logger.info('matchmaking_closed', { matchId: record.matchId, reason: 'game_complete' });
       }
       for (const [preparedHash, prepared] of Object.entries(data.prepared)) {
@@ -119,6 +125,8 @@ export class BackendGameStore {
       for (const [operationId, operation] of Object.entries(data.operations)) {
         if (operation.gameId === record.gameId) delete data.operations[operationId];
       }
+      // The bot's commit-reveal secret is only needed until the game ends.
+      delete data.botSecrets[record.gameId];
       return true;
     });
   }
@@ -218,6 +226,73 @@ export class BackendGameStore {
     });
   }
 
+  // A waiting player may hand the second seat to the fallback bot once the grace
+  // period has passed. The check, the pairing, and the single bot lease are one
+  // durable mutation so a human join and a bot claim can never both win the seat.
+  async claimWaitingMatchForBot({ matchId, bot, minWaitMs = BOT_OFFER_MIN_WAIT_MS, now = Date.now() }) {
+    if (!bot?.address || !bot?.publicKey) throw new ProtocolError('BOT_UNAVAILABLE', 'The KasOdds bot is not configured');
+    return this.#updateWithResult((data) => {
+      sweepIdleMatches(data, now, this.logger);
+      const match = data.matches[matchId];
+      if (!match || match.private || match.status !== 'waiting' || match.players.length !== 1) {
+        throw new ProtocolError('MATCH_NOT_READY', 'This search is no longer waiting for a rival');
+      }
+      if (data.botLease) throw new ProtocolError('BOT_BUSY', 'The KasOdds bot is already playing another game');
+      const waited = now - Date.parse(match.createdAt ?? match.players[0].joinedAt ?? '');
+      if (!Number.isFinite(waited) || waited < minWaitMs) {
+        throw new ProtocolError('BOT_NOT_READY', 'The bot is offered after a short wait for a real player');
+      }
+      // The fallback bot only ever plays for the 1 KAS minimum, whatever the
+      // waiting player's own limit is.
+      const stakeKas = MIN_STAKE_KAS;
+      match.players.push(participantRecord({ address: bot.address, publicKey: bot.publicKey }, stakeKas));
+      match.stakeKas = stakeKas;
+      match.status = 'matched';
+      // The waiting human is always the creator, so the bot never funds a game
+      // before the human has chosen to play.
+      match.creatorIndex = 0;
+      match.creatorSide = randomInt(2) === 0 ? 'even' : 'odd';
+      match.botAddress = bot.address;
+      // The unfunded timeout is measured from the claim, not from the human's
+      // original queue time, so a long human search never expires the bot game.
+      match.botClaimedAt = new Date(now).toISOString();
+      data.queue = data.queue.filter((id) => id !== matchId);
+      data.botLease = { matchId, botAddress: bot.address, acquiredAt: new Date(now).toISOString() };
+      this.logger.info('bot_match_claimed', { matchId, stakeKas });
+      return match;
+    });
+  }
+
+  // The lease is held until the match is cancelled or the funded game completes,
+  // so the same bot wallet is never committed to two live games at once.
+  async releaseBotLease(matchId) {
+    await this.#update((data) => {
+      if (!data.botLease) return;
+      if (matchId !== undefined && data.botLease.matchId !== matchId) return;
+      if (botHasLiveGame(data, data.botLease.botAddress)) {
+        this.logger.info('bot_lease_held', { matchId: data.botLease.matchId, reason: 'active_game' });
+        return;
+      }
+      const released = data.botLease.matchId;
+      data.botLease = null;
+      this.logger.info('bot_lease_released', { matchId: released, reason: 'release' });
+    });
+  }
+
+  // The bot has no browser to remember its commit-reveal secret, so the server
+  // generates it at join time and keeps it here until the game ends.
+  async saveBotSecret(gameId, secret) {
+    await this.#update((data) => { data.botSecrets[gameId] = { ...secret, gameId }; });
+  }
+
+  async loadBotSecret(gameId) {
+    return clone((await this.#read()).botSecrets[gameId] ?? null);
+  }
+
+  async listMatches() {
+    return clone(Object.values((await this.#read()).matches));
+  }
+
   async loadMatch(matchId) {
     return clone((await this.#read()).matches[matchId] ?? null);
   }
@@ -251,6 +326,7 @@ export class BackendGameStore {
       if (['waiting', 'matched'].includes(match.status)) {
         match.status = 'cancelled';
         data.queue = data.queue.filter((id) => id !== matchId);
+        releaseBotLeaseFor(data, matchId, this.logger, 'leave');
         this.logger.info('matchmaking_cancelled', { matchId, reason: 'leave' });
       }
     });
@@ -332,7 +408,7 @@ async function renameWithRetry(from, to) {
 
 function normalizeData(value) {
   if (!isRecord(value)) throw new ProtocolError('STORAGE_CORRUPT', 'Backend game store root must be an object');
-  for (const name of ['prepared', 'games', 'joinPrepared', 'actionPrepared', 'operations', 'matches']) {
+  for (const name of ['prepared', 'games', 'joinPrepared', 'actionPrepared', 'operations', 'matches', 'botSecrets']) {
     if (value[name] !== undefined && !isRecord(value[name])) {
       throw new ProtocolError('STORAGE_CORRUPT', `Backend game store field ${name} must be an object`);
     }
@@ -348,6 +424,8 @@ function normalizeData(value) {
     operations: value.operations ?? {},
     queue: value.queue ?? [],
     matches: value.matches ?? {},
+    botSecrets: value.botSecrets ?? {},
+    botLease: value.botLease ?? null,
   };
 }
 
@@ -361,9 +439,13 @@ function isRecord(value) {
 function sweepIdleMatches(data, now, logger) {
   for (const match of Object.values(data.matches)) {
     if (!isLiveMatch(match)) continue;
-    const lastSeen = Math.min(...match.players.map((player) => Date.parse(player.lastSeenAt ?? player.joinedAt ?? '')));
+    // The bot never polls, so only human presence keeps a bot match alive.
+    const humans = match.players.filter((player) => player.address !== match.botAddress);
+    const seen = (humans.length > 0 ? humans : match.players).map((player) => Date.parse(player.lastSeenAt ?? player.joinedAt ?? ''));
+    const lastSeen = Math.min(...seen);
     if (!Number.isFinite(lastSeen) || now - lastSeen > MATCH_WAIT_TIMEOUT_MS) {
       match.status = 'cancelled';
+      releaseBotLeaseFor(data, match.matchId, logger, 'idle');
       logger.info('matchmaking_swept', { matchId: match.matchId, reason: 'idle' });
     }
   }
@@ -376,10 +458,30 @@ function cancelActiveMatchesFor(data, address, logger) {
     if (!isLiveMatch(match)) continue;
     if (match.players.some((item) => item.address === address)) {
       match.status = 'cancelled';
+      releaseBotLeaseFor(data, match.matchId, logger, 'rejoin');
       logger.info('matchmaking_replaced', { matchId: match.matchId, reason: 'rejoin' });
     }
   }
   pruneQueue(data);
+}
+
+function releaseBotLeaseFor(data, matchId, logger, reason) {
+  if (data.botLease?.matchId !== matchId) return;
+  // The bot always finishes a game it joined: while one of its games is still
+  // live the lease stays held, so cancelling an abandoned match can never free
+  // the bot into a second game before the first has settled.
+  if (botHasLiveGame(data, data.botLease.botAddress)) {
+    logger.info('bot_lease_held', { matchId, reason });
+    return;
+  }
+  data.botLease = null;
+  logger.info('bot_lease_released', { matchId, reason });
+}
+
+// True while the bot is a joiner in a game that has not reached a terminal state.
+function botHasLiveGame(data, botAddress) {
+  if (!botAddress) return false;
+  return Object.values(data.games).some((record) => record.join?.joinerAddress === botAddress && !record.completedAt);
 }
 
 function isLiveMatch(match) {

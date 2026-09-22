@@ -6,12 +6,14 @@ import { normalizePublicKey } from './create-game.js';
 const noopLogger = Object.freeze({ info: () => {} });
 
 export class MatchmakingService {
-  constructor({ store, metrics, logPlayer, logger = noopLogger, addressPrefix = DEFAULT_NETWORK_PROFILE.addressPrefix }) {
+  constructor({ store, metrics, logPlayer, logger = noopLogger, addressPrefix = DEFAULT_NETWORK_PROFILE.addressPrefix, bot = null, botOfferMinWaitMs = 5_000 }) {
     this.store = store;
     this.metrics = metrics;
     this.logPlayer = logPlayer;
     this.logger = logger;
     this.addressPrefix = addressPrefix;
+    this.bot = bot;
+    this.botOfferMinWaitMs = botOfferMinWaitMs;
   }
 
   async join(input) {
@@ -33,7 +35,25 @@ export class MatchmakingService {
     }
     this.metrics.recordGameEvent('matchmaking_join');
     await this.recordBacklog();
-    return matchResponse(match, address);
+    return matchResponse(match, address, { bot: this.bot });
+  }
+
+  // A waiting player may hand the second seat to the fallback bot once the grace
+  // period has passed. The waiting human is always the creator, so the bot only
+  // funds a game after the human has chosen to play it.
+  async offerBot(matchId, input) {
+    if (!this.bot) throw new ProtocolError('BOT_UNAVAILABLE', 'The KasOdds bot is not available right now');
+    const address = matchmakingAddress(input.address, this.addressPrefix);
+    const match = await this.store.loadMatch(matchId);
+    const player = findMatchPlayer(match, address);
+    if (match.private || match.status !== 'waiting' || match.players.indexOf(player) !== 0) {
+      throw new ProtocolError('MATCH_NOT_READY', 'This search is no longer waiting for a rival');
+    }
+    const claimed = await this.store.claimWaitingMatchForBot({ matchId, bot: this.bot, minWaitMs: this.botOfferMinWaitMs });
+    this.logger.info('matchmaking_bot_offered', { matchId: claimed.matchId, stakeKas: claimed.stakeKas });
+    this.metrics.recordGameEvent('matchmaking_bot_offered');
+    await this.recordBacklog();
+    return matchResponse(claimed, address, { bot: this.bot });
   }
 
   // A friend game is a private session: the host fixes the stake and shares the
@@ -48,7 +68,7 @@ export class MatchmakingService {
     this.logger.info('matchmaking_room_waiting', { matchId: match.matchId, stakeKas });
     this.metrics.recordGameEvent('matchmaking_room_created');
     await this.recordBacklog();
-    return matchResponse(match, address);
+    return matchResponse(match, address, { bot: this.bot });
   }
 
   async joinRoom(matchId, input) {
@@ -59,7 +79,7 @@ export class MatchmakingService {
     this.logger.info('matchmaking_room_paired', { matchId: match.matchId, stakeKas: match.stakeKas });
     this.metrics.recordGameEvent('matchmaking_room_joined');
     await this.recordBacklog();
-    return matchResponse(match, address);
+    return matchResponse(match, address, { bot: this.bot });
   }
 
   async status(matchId, address) {
@@ -74,7 +94,7 @@ export class MatchmakingService {
       throw error;
     }
     await this.store.touchMatch(matchId, playerAddress);
-    return matchResponse(await this.store.loadMatch(matchId), playerAddress);
+    return matchResponse(await this.store.loadMatch(matchId), playerAddress, { bot: this.bot });
   }
 
   async leave(matchId, address) {
@@ -108,7 +128,7 @@ export function findMatchPlayer(match, address) {
   return match.players[index];
 }
 
-export function matchResponse(match, address) {
+export function matchResponse(match, address, { bot = null } = {}) {
   if (!match) throw new ProtocolError('MATCH_NOT_FOUND', 'Matchmaking session was not found');
   const index = match.players.findIndex((player) => player.address === address);
   if (index < 0) throw new ProtocolError('NOT_A_PLAYER', 'This wallet is not part of the matchmaking session');
@@ -116,6 +136,7 @@ export function matchResponse(match, address) {
   const side = match.status === 'waiting' ? null : assignedSide(match, index);
   const mine = match.players[index];
   const rival = match.players.length === 2 ? match.players[1 - index] : null;
+  const opponentType = rival && bot?.address && rival.address === bot.address ? 'bot' : 'player';
   return {
     matchId: match.matchId, status: match.status,
     role: match.status === 'waiting' ? null : isCreator ? 'creator' : 'joiner',
@@ -123,6 +144,7 @@ export function matchResponse(match, address) {
     stakeKas: match.stakeKas ?? null, myLimitKas: mine.limitKas ?? MIN_STAKE_KAS,
     rivalLimitKas: rival ? rival.limitKas ?? MIN_STAKE_KAS : null,
     opponentConnected: match.players.length === 2,
+    opponentType,
   };
 }
 

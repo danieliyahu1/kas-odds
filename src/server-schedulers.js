@@ -1,9 +1,10 @@
-export function createServerSchedulers({ gameService, feedbackService, feedbackDeliverer, chainClient, logger }) {
+export function createServerSchedulers({ gameService, feedbackService, feedbackDeliverer, chainClient, logger, botService = null }) {
   let settlementTimer;
   let telemetryTimer;
   let feedbackTimer;
   let reconcileTimer;
   let pruneTimer;
+  let botTimer;
   let settlementRunning = false;
 
   async function runSettlement() {
@@ -51,7 +52,15 @@ export function createServerSchedulers({ gameService, feedbackService, feedbackD
         reconcileTimer = setInterval(reconcile, 60_000);
         reconcileTimer.unref();
       }
+      // The fallback bot drives itself: it joins and reveals only for the one
+      // match it currently holds, so a short cadence is enough and cheap.
+      if (botService) {
+        const advanceBot = () => void botService.runOnce().catch((error) => logger.debug('bot_scan_failed', { message: error?.message }));
+        advanceBot();
+        botTimer = setInterval(advanceBot, botService.intervalMs ?? 2_000);
+        botTimer.unref();
+      }
     },
-    stop() { if (settlementTimer) clearTimeout(settlementTimer); if (telemetryTimer) clearInterval(telemetryTimer); if (feedbackTimer) clearInterval(feedbackTimer); if (reconcileTimer) clearInterval(reconcileTimer); if (pruneTimer) clearInterval(pruneTimer); },
+    stop() { if (settlementTimer) clearTimeout(settlementTimer); if (telemetryTimer) clearInterval(telemetryTimer); if (feedbackTimer) clearInterval(feedbackTimer); if (reconcileTimer) clearInterval(reconcileTimer); if (pruneTimer) clearInterval(pruneTimer); if (botTimer) clearInterval(botTimer); },
   };
 }

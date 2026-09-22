@@ -899,3 +899,35 @@ test('the second player settles once the lead reveal confirms', async (t) => {
   const prepared = await joinerReveal(service);
   assert.equal(prepared.stage, 'settlement');
 });
+
+const BOT = { address: 'kaspatest:bot', publicKey: 'b'.repeat(64) };
+
+test('the fallback bot is offered only to the waiting creator and labels the rival as a bot', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-bot-offer-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  const service = new BackendGameService({ rpc: NO_UTXO_RPC, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY, bot: BOT });
+
+  const waiting = await service.joinMatchmaking({ address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 5 });
+  assert.equal((await service.networkStatus()).botAvailable, true);
+  await assert.rejects(service.offerBot(waiting.matchId, { address: 'kaspatest:other' }), { code: 'NOT_A_PLAYER' });
+  // The grace period has not elapsed yet.
+  await assert.rejects(service.offerBot(waiting.matchId, { address: 'kaspatest:first' }), { code: 'BOT_NOT_READY' });
+
+  await store.updateMatch(waiting.matchId, (match) => { match.createdAt = new Date(Date.now() - 10_000).toISOString(); });
+  const matched = await service.offerBot(waiting.matchId, { address: 'kaspatest:first' });
+  assert.equal(matched.status, 'matched');
+  assert.equal(matched.role, 'creator', 'the human keeps the creator role');
+  assert.equal(matched.opponentType, 'bot');
+  assert.equal(matched.stakeKas, 1);
+  assert.equal(matched.opponentConnected, true);
+});
+
+test('a game without a configured bot reports it as unavailable', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-bot-off-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const service = new BackendGameService({ rpc: NO_UTXO_RPC, store: new BackendGameStore(join(directory, 'games.json')), gameFeePublicKey: GAME_FEE_PUBLIC_KEY });
+  assert.deepEqual((await service.networkStatus()).botAvailable, false);
+  const waiting = await service.joinMatchmaking({ address: 'kaspatest:first', publicKey: 'a'.repeat(64), limitKas: 5 });
+  await assert.rejects(service.offerBot(waiting.matchId, { address: 'kaspatest:first' }), { code: 'BOT_UNAVAILABLE' });
+});

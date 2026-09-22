@@ -29,3 +29,21 @@ test('the scheduler reconciles pending submissions on start', async () => {
   assert.ok(telemetry >= 1);
   assert.ok(pruned >= 1, 'finished games must be pruned on startup and on the timer');
 });
+
+test('the scheduler drives the fallback bot on its own cadence', async () => {
+  let advanced = 0;
+  const schedulers = createServerSchedulers({
+    gameService: { settleAutomaticGames: async () => 0, automaticSettlementDelayMs: async () => null, refreshTelemetry: async () => {} },
+    feedbackService: { drainPending: async () => {} },
+    feedbackDeliverer: { enabled: false },
+    chainClient: { connect: async () => {} },
+    logger: { debug() {}, warn() {}, info() {}, error() {} },
+    botService: { runOnce: async () => { advanced += 1; }, intervalMs: 5 },
+  });
+
+  await schedulers.start();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  schedulers.stop();
+
+  assert.ok(advanced >= 1, 'the bot must be advanced on startup and on the timer');
+});

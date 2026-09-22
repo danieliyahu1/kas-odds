@@ -25,6 +25,9 @@ export const LOBBY_PHASE = Object.freeze({
 
 const MATCH_WAIT_TIMEOUT_MS = 60_000;
 const MATCH_POLL_INTERVAL_MS = 1000;
+// How long a public search waits before the fallback bot is offered. A real
+// opponent always gets the first chance at the seat.
+const BOT_OFFER_DELAY_MS = 5_000;
 const MIN_STAKE_KAS = 1;
 const MAX_STAKE_KAS = 1_000_000;
 const KAS_DECIMALS = 8;
@@ -53,6 +56,9 @@ export function createLobbyController({
   clearIntervalFn,
   waitTimeoutMs = MATCH_WAIT_TIMEOUT_MS,
   pollIntervalMs = MATCH_POLL_INTERVAL_MS,
+  botAvailable = false,
+  botStakeKas = null,
+  botOfferDelayMs = BOT_OFFER_DELAY_MS,
 }) {
   const { info = () => {}, warn = () => {}, error: logError = () => {} } = logger;
 
@@ -69,11 +75,13 @@ export function createLobbyController({
   let started = false;
   let picking = false;
   let gameCancelled = false;
+  let botOffer = false;
+  let waitStartedAt = null;
 
   const poller = createPollController({ onPoll: () => refreshMatch(), intervalMs: pollIntervalMs, setIntervalFn, clearIntervalFn });
 
   const actions = Object.freeze({
-    connectLimit, connectHost, connectGuest, resume, selectNumber, play, retry, retryStart, leave, stop,
+    connectLimit, connectHost, connectGuest, resume, selectNumber, play, offerBot, retry, retryStart, leave, stop,
   });
 
   function initialPhase() {
@@ -84,7 +92,7 @@ export function createLobbyController({
   }
 
   function snapshot() {
-    return { mode, phase, match, number: selected, draft, busy, note, error, gameCancelled };
+    return { mode, phase, match, number: selected, draft, busy, note, error, gameCancelled, botOffer, botStakeKas };
   }
 
   function emit() {
@@ -160,11 +168,25 @@ export function createLobbyController({
       // game is dead, not that the opponent merely walked away.
       if (match?.gameId) gameCancelled = true;
     }
+    if (view === MATCH_VIEW.FINDING) {
+      if (waitStartedAt === null) waitStartedAt = now();
+    } else {
+      botOffer = false;
+      waitStartedAt = null;
+    }
     picking = view === MATCH_VIEW.PLAY;
     phase = view === MATCH_VIEW.FINDING ? LOBBY_PHASE.WAITING
       : view === MATCH_VIEW.ABANDONED ? LOBBY_PHASE.ABANDONED
         : LOBBY_PHASE.PICK;
     emit();
+  }
+
+  // The bot is offered only while a public search is still waiting, once the
+  // grace period has passed. It never appears for a friend room or a matched game.
+  function botOfferReady() {
+    if (!botAvailable || mode !== LOBBY_MODE.PUBLIC || phase !== LOBBY_PHASE.WAITING) return false;
+    if (waitStartedAt === null) return false;
+    return now() - waitStartedAt >= botOfferDelayMs;
   }
 
   function selectNumber(value) {
@@ -181,12 +203,44 @@ export function createLobbyController({
     return match.role === 'creator' ? startCreation() : startJoin();
   }
 
+  // The player explicitly accepts the fallback bot. The server keeps the single
+  // lease atomic, so a busy bot just leaves the player waiting for a human.
+  async function offerBot() {
+    if (busy || !match || !account) return undefined;
+    busy = true;
+    error = null;
+    note = { kind: 'info', title: 'Calling the KasOdds bot', message: 'Taking the second seat.' };
+    emit();
+    try {
+      match = await api(`/api/matchmaking/${match.matchId}/bot`, { method: 'POST', body: { address: account.address } });
+      busy = false;
+      botOffer = false;
+      waitStartedAt = null;
+      transitionForMatch();
+      poller.start();
+      void refreshMatch();
+    } catch (caught) {
+      busy = false;
+      logError('bot_offer_failed', { code: caught?.code, message: caught?.message });
+      if (['BOT_BUSY', 'BOT_NOT_READY', 'BOT_UNAVAILABLE'].includes(caught?.code)) {
+        botOffer = false;
+        waitStartedAt = now();
+        note = { kind: 'info', title: 'The bot is busy', message: 'It is already playing a game. We will keep looking for a player.' };
+        return emit();
+      }
+      handleLobbyError(caught);
+    }
+    return undefined;
+  }
+
   async function refreshMatch() {
     if (started || !match) return;
     try {
       const previous = match;
       match = await api(`/api/matchmaking/${match.matchId}?address=${encodeURIComponent(account.address)}`);
       if (shouldRerenderMatch(previous, match, { picking })) transitionForMatch();
+      const offer = botOfferReady();
+      if (offer !== botOffer) { botOffer = offer; emit(); }
     } catch (caught) {
       if (caught?.code !== 'MATCH_NOT_FOUND') return;
       poller.stop();
@@ -320,6 +374,8 @@ export function createLobbyController({
     draft = null;
     picking = false;
     gameCancelled = false;
+    botOffer = false;
+    waitStartedAt = null;
     phase = initialPhase();
     emit();
   }

@@ -82,6 +82,17 @@ spec:
                   name: kasodds-telegram
                   key: chat-id
                   optional: true
+            # The fallback bot is optional: when the Secret is absent the key is
+            # unset and the bot stays off. It holds a funded server-side key, so
+            # the value is only ever in the Vault, never in Git. Only the
+            # mainnet entry is mapped here — on testnet-10 the variable stays
+            # unset and the bot is not offered.
+            - name: BOT_PRIVATE_KEY_MAINNET
+              valueFrom:
+                secretKeyRef:
+                  name: kasodds-bot
+                  key: mainnet
+                  optional: true
           volumeMounts:
             - name: game-state
               mountPath: /var/lib/kasodds

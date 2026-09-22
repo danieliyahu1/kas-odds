@@ -46,6 +46,6 @@ test('the game service reports the injected network profile', () => {
   const gameFeePublicKey = '11'.repeat(32);
   const testnet = new BackendGameService({ rpc: {}, store: {}, gameFeePublicKey, network: resolveNetworkProfile('testnet-10') });
   const mainnet = new BackendGameService({ rpc: {}, store: {}, gameFeePublicKey, network: resolveNetworkProfile('mainnet') });
-  assert.deepEqual(testnet.networkStatus(), { network: 'testnet-10', addressPrefix: 'kaspatest', kaswareNetwork: 'kaspa_testnet_10', protocolVersion: 'EO/v10', gameFeePublicKey, explorerUrl: 'https://tn10.kaspa.stream/transactions' });
-  assert.deepEqual(mainnet.networkStatus(), { network: 'mainnet', addressPrefix: 'kaspa', kaswareNetwork: 'kaspa_mainnet', protocolVersion: 'EO/v10', gameFeePublicKey, explorerUrl: 'https://kaspa.stream/transactions' });
+  assert.deepEqual(testnet.networkStatus(), { network: 'testnet-10', addressPrefix: 'kaspatest', kaswareNetwork: 'kaspa_testnet_10', protocolVersion: 'EO/v10', gameFeePublicKey, explorerUrl: 'https://tn10.kaspa.stream/transactions', botAvailable: false, botStakeKas: null });
+  assert.deepEqual(mainnet.networkStatus(), { network: 'mainnet', addressPrefix: 'kaspa', kaswareNetwork: 'kaspa_mainnet', protocolVersion: 'EO/v10', gameFeePublicKey, explorerUrl: 'https://kaspa.stream/transactions', botAvailable: false, botStakeKas: null });
 });

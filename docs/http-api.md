@@ -101,9 +101,18 @@ and `side` are assigned when matched, at random.
 | `POST` | `/api/matchmaking/:matchId/join` | `{ address, publicKey }` | Take the second seat in a private room |
 | `GET` | `/api/matchmaking/:matchId?address=…` | — | Poll status; call until `status = matched` |
 | `POST` | `/api/matchmaking/:matchId/leave` | `{ address }` | Returns `{ matchId, status: "left" }` |
+| `POST` | `/api/matchmaking/:matchId/bot` | `{ address }` | Offer the second seat to the fallback bot. Only the waiting creator, only after a five-second grace period, and only while the bot is free |
 
 `address` is a wallet address on the configured network (`kaspatest:…`).
 `publicKey` is the 32-byte x-only public key, hex.
+
+When the fallback bot is configured (see the trust model), `/api/config` reports
+`botAvailable: true` and `botStakeKas` (always the 1 KAS minimum). The bot only
+ever takes the joiner seat in a public match, so the waiting human stays the
+creator and the bot never funds a game before the human chooses to play. A
+matched response whose rival is the bot carries `opponentType: "bot"`. A busy bot
+answers `BOT_BUSY`; an early offer answers `BOT_NOT_READY`; a bot with no
+configured key answers `BOT_UNAVAILABLE` and is never offered.
 
 ## Game lifecycle
 

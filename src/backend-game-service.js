@@ -8,7 +8,7 @@ import { parityOutcome, verifyRevealPreimage } from './reveal.js';
 import { createTransactionIntent } from './transaction-intent.js';
 import { blake2b256 } from './hashes/blake2b.mjs';
 import { FALLBACK_CLAIM_DAA_OFFSET, FIVE_MINUTE_DAA_OFFSET, NO_REVEAL_REFUND_DAA_OFFSET, DAA_PER_SECOND, safetyReadiness } from './terminal-actions.js';
-import { resolveEconomics, AUTOMATION_FEE_SOMPI, PROTOCOL_VERSION, ProtocolError, UNCONFIRMED_INPUT_DAA_SCORE, validateGameFeePublicKey, validateGameId } from './protocol.js';
+import { resolveEconomics, AUTOMATION_FEE_SOMPI, MIN_STAKE_KAS, PROTOCOL_VERSION, ProtocolError, UNCONFIRMED_INPUT_DAA_SCORE, validateGameFeePublicKey, validateGameId } from './protocol.js';
 import { DEFAULT_NETWORK_PROFILE } from './network.js';
 import { noopMetrics } from './metrics.js';
 import { EphemeralPreparations } from './ephemeral-preparations.js';
@@ -49,13 +49,14 @@ const CREATION_STATE = Object.freeze({ BROADCAST: 'broadcast', SUBMITTING: 'subm
 // broadcasts to the node. The service therefore never learns a player's number
 // before both commitments are confirmed on-chain and the number is public.
 export class BackendGameService {
-  constructor({ rpc, chain, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey, network = DEFAULT_NETWORK_PROFILE, submissionRetryBaseMs = SUBMISSION_RETRY_BASE_MS, log = logger }) {
+  constructor({ rpc, chain, store, metrics = noopMetrics, ephemeral = new EphemeralPreparations(), gameFeePublicKey, network = DEFAULT_NETWORK_PROFILE, submissionRetryBaseMs = SUBMISSION_RETRY_BASE_MS, log = logger, bot = null }) {
     this.chain = chain ?? new KaspaChainAdapter({ rpc });
     this.funding = null;
     this.network = network;
     this.submissionRetryBaseMs = submissionRetryBaseMs;
     this.log = log;
-    this.matchmaking = new MatchmakingService({ store, metrics, logPlayer: (event, address, fields) => this.#logPlayer(event, address, fields), logger: log, addressPrefix: network.addressPrefix });
+    this.bot = bot;
+    this.matchmaking = new MatchmakingService({ store, metrics, logPlayer: (event, address, fields) => this.#logPlayer(event, address, fields), logger: log, addressPrefix: network.addressPrefix, bot });
     this.store = store;
     this.metrics = metrics;
     this.ephemeral = ephemeral;
@@ -70,13 +71,21 @@ export class BackendGameService {
   // Static config only: deliberately does not touch the node, so booting the
   // client never blocks on a wRPC round-trip.
   networkStatus() {
-    return { network: this.network.id, addressPrefix: this.network.addressPrefix, kaswareNetwork: this.network.kaswareNetwork, protocolVersion: PROTOCOL_VERSION, gameFeePublicKey: this.gameFeePublicKey, explorerUrl: this.network.explorerUrl };
+    return {
+      network: this.network.id, addressPrefix: this.network.addressPrefix, kaswareNetwork: this.network.kaswareNetwork,
+      protocolVersion: PROTOCOL_VERSION, gameFeePublicKey: this.gameFeePublicKey, explorerUrl: this.network.explorerUrl,
+      botAvailable: Boolean(this.bot), botStakeKas: this.bot ? MIN_STAKE_KAS : null,
+    };
   }
 
   // --- Matchmaking ---------------------------------------------------------
 
   async joinMatchmaking(input) {
     return this.matchmaking.join(input);
+  }
+
+  async offerBot(matchId, input) {
+    return this.matchmaking.offerBot(matchId, input);
   }
 
   async createRoom(input) {

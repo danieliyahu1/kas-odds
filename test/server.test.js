@@ -74,6 +74,8 @@ test('server serves the browser application and health probe', async (t) => {
     protocolVersion: 'EO/v10',
     gameFeePublicKey: feePublicKey,
     explorerUrl: 'https://tn10.kaspa.stream/transactions',
+    botAvailable: false,
+    botStakeKas: null,
   });
   assert.equal(missing.status, 404);
   assert.equal(demoApi.status, 404);
@@ -437,6 +439,8 @@ test('starts without a fee recipient configured and reports the game fee as not 
     protocolVersion: 'EO/v10',
     gameFeePublicKey: null,
     explorerUrl: 'https://tn10.kaspa.stream/transactions',
+    botAvailable: false,
+    botStakeKas: null,
   });
 });
 

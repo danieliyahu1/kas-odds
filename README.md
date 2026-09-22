@@ -77,9 +77,10 @@ winner in full. The game fee is never charged without a winner.
   IndexedDB remain behind `public/secrets.js`.
 - `src/backend-game-store.js` persists game records, matchmaking sessions
   (including invite-only friend rooms), and non-secret transaction preparations
-  atomically on disk. Reveal preimages are
+  atomically on disk. Player reveal preimages are
   never stored here; they live only in the short-lived in-memory
-  `src/ephemeral-preparations.js`.
+  `src/ephemeral-preparations.js`. The one exception is the fallback bot's own
+  preimage, which the server keeps under `botSecrets` until that game ends.
 - `src/wasm-transaction.js` loads the pinned WASM SDK (`Transaction`,
   `GenesisCovenantGroup`, `populateGenesisCovenants`, `serializeToSafeJSON`)
   and rejects any wallet mutation of sighash-relevant fields.
@@ -185,14 +186,28 @@ Runtime details:
 - Readiness endpoint: `/readyz` (returns 503 unless the state volume is both
   readable and writable and the store parses as valid JSON)
 - Liveness endpoint: `/healthz` (process liveness only)
-- Required runtime secrets: none beyond the fee wallet identity. The app holds
-  no private key — the fee wallet is a public address — so it is never a literal
-  in this repository. In the cluster the Deployment reads it from the
-  `kasodds-game-fee-address` Secret (keys `mainnet` and `testnet-10`,
-  filled from the OCI Vault entries `kasodds-game-fee-address-mainnet`
-  and `kasodds-game-fee-address-testnet-10`) via `valueFrom.secretKeyRef`;
-  locally the same values are set with `--env-file=.env` (the `.env` file is
-  gitignored). Wallet private keys never leave the browser.
+- Required runtime secrets: none beyond the fee wallet identity. The fee wallet
+  is a public address — never a literal in this repository. In the cluster the
+  Deployment reads it from the `kasodds-game-fee-address` Secret (keys `mainnet`
+  and `testnet-10`, filled from the OCI Vault entries
+  `kasodds-game-fee-address-mainnet` and `kasodds-game-fee-address-testnet-10`)
+  via `valueFrom.secretKeyRef`; locally the same values are set with
+  `--env-file=.env` (the `.env` file is gitignored). Player wallet private keys
+  never leave the browser.
+- Optional fallback bot: when `BOT_PRIVATE_KEY_MAINNET` (a 32-byte hex key) is
+  set, a public searcher who finds no human is offered a bot after a five-second
+  grace period. The bot holds the single server-side key, takes the joiner seat
+  in one game at a time, and always plays for the 1 KAS minimum. It picks a
+  random number and nonce when it joins and stores them in the game store until
+  that game ends, so it can always reveal and always finishes a game it started.
+  The key name is network-qualified and scoped to the network it funds
+  (`BOT_PRIVATE_KEY_TESTNET_10` on testnet), so a mainnet key can never be used
+  on testnet and vice versa. When the key for the active network is unset the
+  bot is off and is never offered. In the cluster the mainnet key comes from the
+  `kasodds-bot` Secret (key `mainnet`, from the OCI Vault entry
+  `kasodds-bot-private-key-mainnet`) via `valueFrom.secretKeyRef` with
+  `optional: true`; testnet is not mapped in the Deployment, so the bot is
+  mainnet-only there.
 - Required network: `KASPA_NETWORK` is the single switch and must be `mainnet`
   or `testnet-10` — the process fails closed when it is unset or unknown. Each
   profile fixes the address prefix (`kaspa` / `kaspatest`) and the KasWare
@@ -318,7 +333,10 @@ link, and only the wallet holding that link can take the second seat. In both
 cases the server assigns each player a side at match time, and no funds move
 until both players pick a number and lock: the assigned creator signs the
 creation transaction to escrow their stake, and the matched opponent signs the
-join to take the other side. Until a join confirms,
+join to take the other side. The optional fallback bot is the one exception to
+"no server-side signing": it holds its own funded key to take the joiner seat in
+a single public game at a time, is always labelled as the bot, and never enters a
+friend room. Until a join confirms,
   the creator can reclaim their full stake at any time by signing the `refund`
   spend (the server builds and relays it), and after the deadline the
   permissionless `refund_open` entry can reclaim the creator's stake with no
@@ -330,9 +348,10 @@ join to take the other side. Until a join confirms,
 ## Non-browser clients
 
 Every client is a wallet that submits covenant-valid transactions, and confirmed
-KasOdds covenant state is authoritative. There is no bot flag, no separate queue,
-no account, and no server-side signing — the browser is only one client. A script,
-bot, or agent can drive the same HTTP API.
+KasOdds covenant state is authoritative. There is no account and no separate
+queue; the browser is one client, and a script, bot, or agent can drive the same
+HTTP API. The optional fallback bot is the only server-held key, and it plays
+through the same matchmaking and covenant path as any other wallet.
 
 See [`docs/http-api.md`](docs/http-api.md) for the endpoints, the commit-reveal
 encoding, signing requirements, error codes, timeouts, and idempotency.

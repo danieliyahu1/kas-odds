@@ -123,6 +123,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 
 .invite-box { margin-bottom: 4px; }
 .invite-box:not(:only-child) { margin-bottom: 20px; }
+.bot-offer { margin-top: 18px; padding: 14px; border: 1px solid rgba(112,199,186,.35); border-radius: 8px; background: rgba(112,199,186,.08); }
+.bot-offer .lead { margin: 0 0 4px; }
+.bot-offer .actions { margin-top: 12px; }
 .waiting-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .waiting-text { color: var(--muted); font-size: 14px; }
 .spinner { width: 16px; height: 16px; flex: none; border: 2px solid var(--line); border-top-color: var(--teal); border-radius: 50%; animation: spin .8s linear infinite; }

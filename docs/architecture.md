@@ -49,8 +49,10 @@ create, join, reveal, and terminal action follows the same safety shape:
 6. Reconcile pending submissions and confirmation state after restart.
 
 The browser stores reveal choices and nonces in IndexedDB. The server never
-stores reveal preimages. `public/app-controller.js` serializes polling,
-cancels it during navigation or terminal states, and rejects stale responses.
+stores a player's reveal preimage; the only exception is the fallback bot's own
+preimage, kept server-side until its game ends. `public/app-controller.js`
+serializes polling, cancels it during navigation or terminal states, and rejects
+stale responses.
 
 ## Persistence And Recovery
 
@@ -62,6 +64,23 @@ spill file means an empty queue; malformed or unreadable state is an error.
 The deployment uses `/var/lib/kasodds/games-mainnet-v10.json` and
 `/var/lib/kasodds/feedback-spill.json` on the persistent volume; the game
 store path is network-scoped so two profiles never share a record set.
+
+## Fallback Bot
+
+The optional fallback opponent is the one server-held key. `src/bot-wallet.js`
+derives the bot's x-only public key and per-network address from the
+network-qualified `BOT_PRIVATE_KEY_MAINNET` / `BOT_PRIVATE_KEY_TESTNET_10` env
+variable and signs prepared SafeJSON locally, signing only the inputs
+the preparation left unsigned. `src/fallback-bot-service.js` is a small
+scheduler-driven coordinator: at join time it draws a random number and nonce
+and stores them in the game store until the game ends, then reveals from that
+stored secret, so a restart resumes without stranding a funded game. The bot
+always plays for the 1 KAS minimum and takes the joiner seat in a public match
+only, so the waiting human is always the creator and the bot never funds a game
+first. The durable `botLease` in `src/backend-game-store.js` is the single-writer
+guard: while any game the bot joined is still live the lease stays held, so the
+bot always finishes a game it started before taking another. The existing
+permissionless settlement keeper covers every timeout.
 
 ## Verification And Delivery
 

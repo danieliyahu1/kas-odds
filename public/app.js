@@ -164,6 +164,8 @@ function renderLobby({ mode, roomId = null }) {
     bindSecret: bindSecretToGame,
     gameFeePublicKey,
     addressPrefix: () => runtimeConfig().addressPrefix,
+    botAvailable: Boolean(cachedConfig?.botAvailable),
+    botStakeKas: cachedConfig?.botStakeKas ?? null,
     remember: rememberAddress,
     navigate: (path) => { location.href = path; },
     replaceUrl: (path) => history.replaceState(null, '', path),
@@ -180,7 +182,7 @@ function renderLobby({ mode, roomId = null }) {
 // the step the player is actually on. Every action is delegated back to the
 // controller.
 function paintLobby(snapshot, actions) {
-  const { mode, phase, match, number, draft, busy, note, error, gameCancelled } = snapshot;
+  const { mode, phase, match, number, draft, busy, note, error, gameCancelled, botOffer, botStakeKas } = snapshot;
   const label = mode === LOBBY_MODE.PUBLIC ? 'Play someone new' : 'Play with a friend';
   const progress = lobbyStage({ phase, mode, match });
   const stageTitle = progress ? progress.title : '';
@@ -248,10 +250,20 @@ function paintLobby(snapshot, actions) {
 
   if (phase === LOBBY_PHASE.WAITING) {
     if (mode === LOBBY_MODE.PUBLIC) {
+      const botPanel = botOffer
+        ? `<div class="bot-offer">
+            <p class="lead">No player yet. Play the KasOdds bot?</p>
+            <p class="muted-note">It plays for ${escapeHtml(botStakeKas)} KAS, takes the second seat, and reveals automatically.</p>
+            <div class="actions"><button type="button" class="outline" id="lobby-bot"${busy ? ' disabled' : ''}>Play the bot for ${escapeHtml(botStakeKas)} KAS</button></div>
+          </div>`
+        : '';
       paint('Searching a player', `
         <div class="waiting-row"><span class="spinner friend" aria-hidden="true"></span><span class="waiting-text">Your limit: up to ${escapeHtml(match.myLimitKas)} KAS.</span></div>
         <p class="muted-note">You'll pick your number when we match.</p>
+        ${botPanel}
         ${cancelButton}`);
+      const botButton = document.querySelector('#lobby-bot');
+      if (botButton) botButton.addEventListener('click', () => void actions.offerBot());
     } else {
       const link = roomInviteUrl(match.matchId);
       paint('Waiting for your friend', `
@@ -270,8 +282,10 @@ function paintLobby(snapshot, actions) {
 
   if (phase === LOBBY_PHASE.PICK) {
     const selected = (value) => number === value;
+    const botNote = match.opponentType === 'bot' ? '<p class="muted-note">You are playing the KasOdds bot.</p>' : '';
     paint(stageTitle, `
       ${matchSummaryHtml(match.side, match.stakeKas)}
+      ${botNote}
       <fieldset class="choice-group">
         <legend>Pick your number</legend>
         <div class="choice-row">

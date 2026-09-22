@@ -59,6 +59,28 @@ test('HTTP failures expose a request id and log the safe failure details', async
   assert.equal(errorLog[2].message, 'backend dependency failed');
 });
 
+test('the bot offer route forwards the waiting player to the game service', async (t) => {
+  const calls = [];
+  const application = createHttpApplication({
+    gameService: { offerBot: async (matchId, body) => { calls.push({ matchId, body }); return { status: 'matched', opponentType: 'bot' }; } },
+    store: { health: async () => {} }, relay: { size: () => 0 },
+    metrics: { recordHttp: () => {}, recordPageVisit: () => {}, setRelayEntries: () => {}, render: () => '' },
+    feedbackService: {}, mutatingLimiter: { check: () => ({ allowed: true }) }, feedbackLimiter: { check: () => ({ allowed: true }) },
+    paths: {}, maxRequestBytes: 1000,
+    logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+  });
+  const server = createServer(application.requestHandler);
+  t.after(() => server.close());
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const matchId = '11111111-1111-1111-1111-111111111111';
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/matchmaking/${matchId}/bot`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ address: 'kaspatest:me' }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { status: 'matched', opponentType: 'bot' });
+  assert.deepEqual(calls, [{ matchId, body: { address: 'kaspatest:me' } }]);
+});
+
 test('oversized requests return a traceable 413 instead of dropping the connection', async (t) => {
   const logs = [];
   const application = createHttpApplication({

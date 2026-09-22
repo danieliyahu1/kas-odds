@@ -96,6 +96,10 @@ export class Metrics {
     this.set('kasodds_matchmaking_waiting', 'Number of matchmaking sessions waiting for a rival.', {}, value);
   }
 
+  recordBotEvent(event) {
+    this.increment('kasodds_bot_events_total', 'Fallback bot lifecycle events.', { event });
+  }
+
   setRelayEntries(value) {
     this.set('kasodds_relay_entries', 'Number of live relay entries held in memory.', {}, value);
   }
@@ -189,6 +193,7 @@ export const noopMetrics = {
   recordGameEvent() {},
   recordPageVisit() {},
   setMatchmakingWaiting() {},
+  recordBotEvent() {},
   setRelayEntries() {},
   recordFeedback() {},
   setProductInfo() {},

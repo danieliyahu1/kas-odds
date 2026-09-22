@@ -14,7 +14,7 @@ export function readServerConfig(env = process.env) {
   if (!Number.isInteger(maxRequestBytes) || maxRequestBytes < 1) throw new Error('MAX_REQUEST_BYTES must be a positive integer');
   if (!Number.isInteger(rateLimitPerMinute) || rateLimitPerMinute < 1) throw new Error('RATE_LIMIT_PER_MINUTE must be a positive integer');
   return {
-    port, metricsPort, network: profile,
+    port, metricsPort, network: profile, bot: resolveBotConfig(env, profile.id),
     gameFeePublicKey: resolveGameFeePublicKey(env, profile.id), maxRequestBytes, rateLimitPerMinute,
     trustedProxy: env.TRUST_PROXY === 'true', storePath: resolveStorePath(env, profile),
     feedbackSpillPath: env.FEEDBACK_SPILL_PATH ?? join('.data', 'feedback-spill.json'),
@@ -23,6 +23,20 @@ export function readServerConfig(env = process.env) {
 }
 
 function isPort(value) { return Number.isInteger(value); }
+
+// The fallback bot is optional and off unless its funded private key is set.
+// The key name is network-qualified (`BOT_PRIVATE_KEY_MAINNET` or
+// `BOT_PRIVATE_KEY_TESTNET_10`, matching how the fee wallet is named) so a key
+// can never be applied on the wrong network. It is the only server secret: it
+// signs the bot's real transactions. When it is absent the bot is unavailable
+// and is never offered to a waiting player.
+function resolveBotConfig(env, networkId) {
+  const envName = `BOT_PRIVATE_KEY_${networkId.toUpperCase().replaceAll('-', '_')}`;
+  const privateKeyHex = String(env[envName] ?? '').trim();
+  if (!privateKeyHex) return null;
+  if (!/^[0-9a-f]{64}$/i.test(privateKeyHex)) throw new Error(`${envName} must be 32 bytes of hexadecimal`);
+  return { privateKeyHex };
+}
 
 // The store is one JSON file on a mounted volume. In the cluster only the
 // directory is configured and the file name is derived from the network, so a
