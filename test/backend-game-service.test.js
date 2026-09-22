@@ -900,6 +900,67 @@ test('the second player settles once the lead reveal confirms', async (t) => {
   assert.equal(prepared.stage, 'settlement');
 });
 
+test('a reveal settlement logs the winner payout on completion', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'kasodds-settlement-log-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const events = [];
+  const log = { info: (event, fields) => events.push({ event, fields }), warn: () => {}, error: () => {}, debug: () => {} };
+  const settlement = {
+    transactionId: '12'.repeat(32),
+    preparedHash: '13'.repeat(32),
+    playerAddress: REVEAL_JOINER_ADDRESS,
+    role: 'joiner',
+    choice: joinerRevealSecret.choice,
+    status: 'broadcast',
+    winner: 'joiner',
+    payoutAddress: REVEAL_JOINER_ADDRESS,
+    continuationAddress: REVEAL_CONTINUATION_ADDRESS,
+    continuationScriptPublicKey: REVEAL_CONTINUATION_SPK,
+    continuationRedeemScript: '06'.repeat(32),
+    submittedAt: new Date().toISOString(),
+  };
+  const store = new BackendGameStore(join(directory, 'games.json'));
+  await store.saveGame({
+    ...revealGameRecord([
+      leadReveal({ status: 'confirmed', confirmedDaaScore: '2000' }),
+      settlement,
+    ]),
+    status: 'settlement_broadcast',
+  });
+  let inspected = null;
+  const chain = {
+    findExpectedUtxo: async (descriptor, valueSompi) => {
+      inspected = { descriptor, valueSompi };
+      return { entry: { blockDaaScore: 3000 }, currentDaaScore: 3005n };
+    },
+  };
+  const service = new BackendGameService({ chain, store, gameFeePublicKey: GAME_FEE_PUBLIC_KEY, log });
+
+  await service.settleAutomaticGames();
+
+  const completed = events.find((entry) => entry.event === 'game_completed');
+  assert.ok(completed, 'a confirmed reveal settlement must emit game_completed');
+  assert.equal(completed.fields.status, 'settled');
+  assert.equal(completed.fields.winner, 'joiner');
+  assert.deepEqual(completed.fields.payouts, [{
+    outputIndex: 0,
+    value: '200000000',
+    scriptPublicKey: `000020${REVEAL_JOINER_PUBLIC_KEY}ac`,
+    address: REVEAL_JOINER_ADDRESS,
+  }]);
+  assert.deepEqual(inspected.descriptor, {
+    transactionId: settlement.transactionId,
+    address: REVEAL_JOINER_ADDRESS,
+    scriptPublicKey: `000020${REVEAL_JOINER_PUBLIC_KEY}ac`,
+    outputIndex: 0,
+  });
+  assert.equal(inspected.valueSompi, 200000000n);
+  const saved = await store.loadGame(REVEAL_GAME_ID);
+  assert.equal(saved.status, 'settled');
+  assert.equal(saved.reveals[1].status, 'confirmed');
+  assert.ok(saved.completedAt, 'the game must be completed in the store');
+});
+
 const BOT = { address: 'kaspatest:bot', publicKey: 'b'.repeat(64) };
 
 test('the fallback bot is offered only to the waiting creator and labels the rival as a bot', async (t) => {

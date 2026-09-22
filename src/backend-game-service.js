@@ -1160,18 +1160,36 @@ export class BackendGameService {
     await this.store.saveGame(record);
   }
 
+  // Payouts logged on completion. Automatic settlements record theirs at
+  // broadcast; a normal reveal settlement derives the single winner payout from
+  // the winning reveal so both paths report who received what.
+  #settlementPayouts(record) {
+    const automatic = record.automaticSettlement?.payouts ?? [];
+    if (automatic.length > 0) return automatic;
+    const reveal = record.reveals?.find((item) => item.winner);
+    if (!reveal?.payoutAddress || !record.join) return [];
+    const request = deserializeRequest(record.request);
+    const winnerKey = reveal.payoutAddress === request.creatorAddress ? request.creatorPublicKey : record.join.joinerPublicKey;
+    return [{
+      outputIndex: 0,
+      value: String(resolveEconomics(request).settlementPayoutSompi),
+      scriptPublicKey: playerScriptPublicKey(winnerKey),
+      address: reveal.payoutAddress,
+    }];
+  }
+
   async #completeGame(record, status) {
     if (record.completedAt) return;
     const retained = await this.store.completeGame(record);
     if (!retained) return;
-    logger.info('game_completed', {
+    this.log.info('game_completed', {
       gameId: record.gameId,
       status,
       winner: record.winner ?? null,
       revealTransactionId: record.reveals?.find((reveal) => reveal.winner)?.transactionId ?? null,
       automaticTransactionId: record.automaticSettlement?.transactionId ?? null,
       safetyTransactionIds: (record.safetyActions ?? []).map((action) => action.transactionId).filter(Boolean),
-      payouts: record.automaticSettlement?.payouts ?? [],
+      payouts: this.#settlementPayouts(record),
     });
     this.ephemeral.deleteForGame(record.gameId);
     this.revealClaims.delete(record.gameId);
