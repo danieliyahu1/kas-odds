@@ -135,7 +135,7 @@ function renderProtected() {
       <div class="rules">
         <div class="rule">
           <p class="rule-title">Both players reveal</p>
-          <p class="rule-body">The two numbers add up. An <strong>even</strong> total wins for the Even player; an <strong>odd</strong> total wins for the Odd player. The winner takes the pot minus a 1% game fee, charged only when that fee is at least 1 KAS. Smaller pots pay the winner in full.</p>
+          <p class="rule-body">The two numbers add up. An <strong>even</strong> total wins for the Even player; an <strong>odd</strong> total wins for the Odd player. The winner takes the pot minus a 1% game fee. Games below 50 KAS pay the winner in full.</p>
         </div>
         <div class="rule">
           <p class="rule-title">Nobody joins</p>
