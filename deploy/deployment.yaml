@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: kasodds
   annotations:
-    kasodds/source-revision: sha-8b5c4e90a3e2d1251d74dee3e3aa07f22d2fb50d
+    kasodds/source-revision: sha-3721fee86dcc01fb6bd448283e345b7c852c6939
 spec:
   replicas: 1
   # The game store is a single JSON file with process-local write locking, so two
@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: kasodds
-          image: ghcr.io/danieliyahu1/kas-odds/kasodds@sha256:4244e02db2e1920944e6ac5e75f8d33f4498e7762d30d4d737d6bffe2b7a8a81
+          image: ghcr.io/danieliyahu1/kas-odds/kasodds@sha256:f79a766d14aa15dba66e43398958348c657ded6024d9b59b5de685d9b8fbf16d
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
