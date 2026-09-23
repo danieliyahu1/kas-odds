@@ -13,6 +13,11 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
     const trace = { requestId, requestBytesRead: 0, contentLength: req.headers['content-length'] ?? undefined };
     res.setHeader('x-request-id', requestId);
     const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+    // A homepage visit is the intent to load `/`, recorded at request entry like
+    // any other cross-cutting request fact. It does not depend on which branch
+    // serves the page or whether that branch succeeds, so the count cannot be
+    // lost by routing changes.
+    if (req.method === 'GET' && pathname === '/') metrics.recordPageVisit();
     const route = routeLabel(pathname);
     const startedAtMs = performance.now();
     let recorded = false;
@@ -98,7 +103,7 @@ export function createHttpApplication({ gameService, store, relay, metrics, feed
       if (req.method === 'POST') { relay.set(relayId, await readJson(req, maxRequestBytes, trace)); metrics.setRelayEntries(relay.size()); return sendJson(res, 200, { ok: true }); }
       if (req.method === 'GET') { const payload = relay.get(relayId); metrics.setRelayEntries(relay.size()); return payload ? sendJson(res, 200, payload) : sendJson(res, 404, { error: 'not_found' }); }
     }
-    if (req.method === 'GET' && ['/', '/host', '/rival', '/join', '/game', '/protected'].includes(pathname)) { if (pathname === '/') metrics.recordPageVisit(); return serveFile(paths.publicRoot, 'index.html', res); }
+    if (req.method === 'GET' && ['/', '/host', '/rival', '/join', '/game', '/protected'].includes(pathname)) return serveFile(paths.publicRoot, 'index.html', res);
     if (req.method === 'GET' && /^\/(app|styles)\.\w+$/.test(pathname)) return serveFile(paths.publicRoot, pathname.slice(1), res);
     if (req.method === 'GET' && (pathname === '/icon.svg' || pathname === '/favicon.ico')) return serveFile(paths.publicRoot, 'icon.svg', res);
     const publicModule = pathname.match(/^\/([A-Za-z0-9_-]+\.(?:js|mjs))$/);

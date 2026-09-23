@@ -124,6 +124,31 @@ test('code guessing is capped below the global mutating limit', async (t) => {
   assert.equal(response.headers.get('retry-after'), '42');
 });
 
+test('a homepage visit is counted once, and only for the homepage', async (t) => {
+  const visits = [];
+  const application = createHttpApplication({
+    gameService: { networkStatus: async () => ({ network: 'testnet-10' }) },
+    store: { health: async () => {} }, relay: { size: () => 0 },
+    metrics: { recordHttp: () => {}, recordPageVisit: () => visits.push(1), setRelayEntries: () => {}, render: () => '' },
+    feedbackService: {}, mutatingLimiter: { check: () => ({ allowed: true }) }, feedbackLimiter: { check: () => ({ allowed: true }) },
+    paths: {}, maxRequestBytes: 1000,
+    logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+  });
+  const server = createServer(application.requestHandler);
+  t.after(() => server.close());
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  // The count is the visit, not the response: a homepage that cannot be served
+  // still counts, and no other route does.
+  await fetch(`${base}/`);
+  await fetch(`${base}/healthz`);
+  await fetch(`${base}/api/config`);
+  await fetch(`${base}/host`);
+
+  assert.equal(visits.length, 1);
+});
+
 test('oversized requests return a traceable 413 instead of dropping the connection', async (t) => {
   const logs = [];
   const application = createHttpApplication({
