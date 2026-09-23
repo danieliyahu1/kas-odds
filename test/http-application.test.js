@@ -124,7 +124,7 @@ test('code guessing is capped below the global mutating limit', async (t) => {
   assert.equal(response.headers.get('retry-after'), '42');
 });
 
-test('a homepage visit is counted once, and only for the homepage', async (t) => {
+test('a homepage visit is counted when the app reports one, not on the raw request', async (t) => {
   const visits = [];
   const application = createHttpApplication({
     gameService: { networkStatus: async () => ({ network: 'testnet-10' }) },
@@ -139,13 +139,16 @@ test('a homepage visit is counted once, and only for the homepage', async (t) =>
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
 
-  // The count is the visit, not the response: a homepage that cannot be served
-  // still counts, and no other route does.
+  // Fetching the page itself, or any other route, is not a visit: a crawler or
+  // scanner does this without ever running the app.
   await fetch(`${base}/`);
   await fetch(`${base}/healthz`);
-  await fetch(`${base}/api/config`);
   await fetch(`${base}/host`);
+  assert.equal(visits.length, 0);
 
+  // The app's own report is the visit.
+  const reported = await fetch(`${base}/api/visit`, { method: 'POST' });
+  assert.equal(reported.status, 202);
   assert.equal(visits.length, 1);
 });
 

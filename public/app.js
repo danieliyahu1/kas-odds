@@ -71,6 +71,14 @@ function prepareRevealWithRetry(gameId, body) {
   return withChainRetry(() => api(`/api/games/${gameId}/reveal/prepare`, { method: 'POST', body }));
 }
 
+// A homepage visit is counted only when the app actually loads the homepage.
+// Crawlers, scanners, and link unfurlers fetch `/` without running this code, so
+// counting the raw request overstated visits roughly fivefold. Fire-and-forget:
+// telemetry must never affect the page.
+function recordHomepageVisit() {
+  void fetch('/api/visit', { method: 'POST', keepalive: true }).catch(() => {});
+}
+
 export async function boot() {
   try {
     // Warm the covenant artifact now so the first lock never waits on it.
@@ -98,6 +106,7 @@ export async function boot() {
     if (location.pathname === '/host') return renderLobby({ mode: 'host', roomId: isRoomId(params.get('room')) ? params.get('room') : null });
     if (location.pathname === '/rival') return renderLobby({ mode: 'public' });
     if (location.pathname === '/protected') return renderProtected();
+    recordHomepageVisit();
     renderHome();
   } catch (error) {
     logError('boot_failed', { code: error.code, message: error.message });
